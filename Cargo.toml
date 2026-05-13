@@ -1,6 +1,5 @@
 [workspace]
-members = []
-exclude = ["packages"]
+members = ["packages/xiv-launcher-auth"]
 
 [package]
 name = "xiv-launcher-rs"
@@ -21,4 +20,14 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+xiv-launcher-auth = { path = "packages/xiv-launcher-auth" }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+dirs = "5"
+
+[[example]]
+name = "sdo_launch"
+path = "examples/sdo_launch.rs"
+required-features = ["xiv-launcher-auth/sdo"]
 

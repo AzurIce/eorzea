@@ -1,0 +1,42 @@
+[package]
+name = "xiv-launcher-auth"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["sdo"]
+sdo = []
+se = ["regex"]
+
+[dependencies]
+reqwest = { version = "0.12", features = ["cookies", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+sha1 = "0.10"
+md-5 = "0.10"
+hex = "0.4"
+regex = { version = "1", optional = true }
+tokio = { version = "1", features = ["full"] }
+base64 = "0.22"
+byteorder = "1"
+urlencoding = "2"
+anyhow = "1"
+env_logger = "0.11"
+log = "0.4"
+
+[dev-dependencies]
+rpassword = "7"
+sys-info = "0.9"
+whoami = "1"
+num_cpus = "1"
+
+[[example]]
+name = "sdo_login"
+path = "examples/sdo_login.rs"
+required-features = ["sdo"]
+
+[[example]]
+name = "se_login"
+path = "examples/se_login.rs"
+required-features = ["se"]
