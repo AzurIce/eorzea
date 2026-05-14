@@ -67,7 +67,7 @@
 - [x] **`areasInfo` 计算**：`build_lobby_hosts()` 将所有大区 `lobby:54994` 用 `|` 分隔
 - [x] **`XL.DcTraveler` 参数**：当 `dc_travel_port > 0` 时添加
 - [x] **端到端验证**：`sdo_login` 示例完成 QR 扫码 → `sso_login` → ticket 获取 → 启动参数构造
-- [ ] **`sdologinentry64.dll` 替换**：`EnsureLoginEntry()` — 将修改后的 dll 复制到 `{gamePath}/sdo/sdologinentry64.dll`
+- [x] **`sdologinentry64.dll` 替换**：`EnsureLoginEntry()` — 自动从 ottercorp GitHub 下载修改版 DLL，缓存到 `~/.xiv-launcher-rs/tools/`，复制到 `{gamePath}/sdo/sdologinentry64.dll`
 
 ### P2-2 参数加密 (`ArgumentBuilder.cs` → `BuildEncrypted`)
 
