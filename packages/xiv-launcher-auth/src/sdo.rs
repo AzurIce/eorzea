@@ -136,6 +136,7 @@ use crate::error::AuthError;
 use crate::model::*;
 use reqwest::Client;
 use serde::Deserialize;
+use tracing::{debug, error, info, instrument, warn};
 
 /// SDO (盛趣) 认证 API 基地址。
 const SDO_BASE_URL: &str = "https://cas.sdo.com/authen";
@@ -189,6 +190,7 @@ impl SdoAuth {
     /// 默认连接主域名 `cas.sdo.com`，若不可达可在创建后通过
     /// [`SdoAuth::with_fallback_url`] 设置备用域名。
     pub fn new() -> Result<Self, AuthError> {
+        info!("Creating SdoAuth client");
         Ok(Self {
             client: Client::builder().cookie_store(true).build()?,
             base_url: SDO_BASE_URL.to_string(),
@@ -202,6 +204,7 @@ impl SdoAuth {
     /// 上游 C# 在 `GetJsonAsSdoClient` 中对每个请求先尝试主域名，
     /// 失败后自动回退到备用域名 `n1.cas.sdo.com`。
     pub fn with_fallback_url(mut self, url: &str) -> Self {
+        info!(fallback_url = url, "Setting fallback URL");
         self.base_url = url.to_string();
         self
     }
@@ -216,15 +219,19 @@ impl SdoAuth {
     ///   每部分大写 hex。原版读取真实硬件，测试可用固定值如
     ///   `"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"`。
     /// - `mac_id`: MAC 地址的 MD5（大写 hex），如 `"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"`。
+    #[instrument(skip(self), fields(base_url = %self.base_url), err)]
     pub async fn get_context(&self) -> Result<SdoContext, AuthError> {
         let url = format!(
             "{}/getGuid.json?generateDynamicKey=1&{}",
             self.base_url,
             self.common_query(),
         );
+        debug!(url = %url, "Requesting login context (getGuid)");
 
         let resp: SdoResponse<SdoGuidData> = self.get_json_with_cookies(&url).await?;
+        debug!(return_code = resp.return_code, "getGuid response");
         if resp.return_code != 0 {
+            error!(return_code = resp.return_code, "getGuid failed");
             return Err(AuthError::SdoError {
                 code: resp.return_code,
                 message: "getGuid failed".to_string(),
@@ -232,6 +239,7 @@ impl SdoAuth {
             });
         }
 
+        info!("Login context obtained successfully");
         Ok(SdoContext {
             guid: resp.data.guid,
             dynamic_key: resp.data.dynamic_key,
@@ -245,12 +253,23 @@ impl SdoAuth {
     /// 可能返回的错误：
     /// - [`AuthError::CaptchaRequired`]: 触发风控，需要验证码
     /// - [`AuthError::FirstLoginOnDevice`]: 首次在该设备登录，需用扫码或推送方式
+    #[instrument(skip(self, ctx, password), fields(account = %account), err)]
     pub async fn static_login(
         &self,
         ctx: &SdoContext,
         account: &str,
         password: &str,
     ) -> Result<SdoLoginResult, AuthError> {
+        let masked_url = format!(
+            "{}/staticLogin.json?checkCodeFlag=1&encryptFlag=0&inputUserId={}&password=***&mac={}&guid={}&inputUserType=0&accountDomain=1&autoLoginFlag=0&autoLoginKeepTime=0&supportPic=2&{}",
+            self.base_url,
+            urlencoding::encode(account),
+            urlencoding::encode(&ctx.mac_id),
+            urlencoding::encode(&ctx.guid),
+            self.common_query(),
+        );
+        debug!(url = %masked_url, "Password login request (staticLogin)");
+
         let url = format!(
             "{}/staticLogin.json?checkCodeFlag=1&encryptFlag=0&inputUserId={}&password={}&mac={}&guid={}&inputUserType=0&accountDomain=1&autoLoginFlag=0&autoLoginKeepTime=0&supportPic=2&{}",
             self.base_url,
@@ -262,8 +281,10 @@ impl SdoAuth {
         );
 
         let result: SdoLoginResult = self.get_json_raw(&url).await?;
+        debug!(return_code = result.return_code, "staticLogin response");
         self.check_sdo_error(&result)?;
 
+        info!("Password login successful");
         Ok(result)
     }
 
@@ -271,19 +292,21 @@ impl SdoAuth {
     ///
     /// 先调用此方法发起推送，再轮询 [`SdoAuth::slide_login_poll`] 等待确认。
     /// 返回的 `push_msg_session_key` 用于后续轮询。
+    #[instrument(skip(self, ctx), fields(account = %account), err)]
     pub async fn slide_login_request(
         &self,
         ctx: &SdoContext,
         account: &str,
     ) -> Result<SdoLoginData, AuthError> {
-        let url = format!(
+        let cancel_url = format!(
             "{}/cancelPushMessageLogin.json?pushMsgSessionKey=&guid={}&{}",
             self.base_url,
             urlencoding::encode(&ctx.guid),
             self.common_query(),
         );
+        debug!(url = %cancel_url, "Cancelling previous push login");
         let _ = self
-            .get_json_raw::<SdoResponse<serde_json::Value>>(&url)
+            .get_json_raw::<SdoResponse<serde_json::Value>>(&cancel_url)
             .await;
 
         let url = format!(
@@ -292,9 +315,12 @@ impl SdoAuth {
             urlencoding::encode(account),
             self.common_query(),
         );
+        debug!(url = %url, "Requesting push login (sendPushMessage)");
 
         let resp: SdoResponse<SdoLoginData> = self.get_json_with_cookies(&url).await?;
+        debug!(return_code = resp.return_code, "sendPushMessage response");
         if resp.return_code != 0 {
+            error!(return_code = resp.return_code, "sendPushMessage failed");
             return Err(AuthError::SdoError {
                 code: resp.return_code,
                 message: "sendPushMessage failed".to_string(),
@@ -302,6 +328,7 @@ impl SdoAuth {
             });
         }
 
+        info!("Push login request sent successfully");
         Ok(resp.data)
     }
 
@@ -310,12 +337,21 @@ impl SdoAuth {
     /// 应以约 1 秒间隔反复调用，直到返回 [`PollResult::Success`]。
     /// - [`PollResult::Success`]: 用户已确认，登录成功
     /// - [`PollResult::Pending`]: 用户尚未确认，继续等待
+    #[instrument(skip(self, ctx, push_msg_session_key), err)]
     pub async fn slide_login_poll(
         &self,
         ctx: &SdoContext,
         push_msg_session_key: &str,
     ) -> Result<PollResult, AuthError> {
         let url = format!(
+            "{}/pushMessageLogin.json?pushMsgSessionKey=***&guid={}&autoLoginFlag=1&autoLoginKeepTime=30&{}",
+            self.base_url,
+            urlencoding::encode(&ctx.guid),
+            self.common_query(),
+        );
+        debug!(url = %url, "Polling push login status");
+
+        let full_url = format!(
             "{}/pushMessageLogin.json?pushMsgSessionKey={}&guid={}&autoLoginFlag=1&autoLoginKeepTime=30&{}",
             self.base_url,
             urlencoding::encode(push_msg_session_key),
@@ -323,21 +359,34 @@ impl SdoAuth {
             self.common_query(),
         );
 
-        let result: SdoLoginResult = self.get_json_raw(&url).await?;
+        let result: SdoLoginResult = self.get_json_raw(&full_url).await?;
+        debug!(return_code = result.return_code, "pushMessageLogin response");
         match result.return_code {
             0 => {
                 if result.data.next_action == Some(0) {
+                    info!("Push login confirmed by user");
                     Ok(PollResult::Success(result.data))
                 } else {
+                    debug!("Push login pending");
                     Ok(PollResult::Pending)
                 }
             }
-            -10516808 => Ok(PollResult::Pending),
-            _ => Err(AuthError::SdoError {
-                code: result.return_code,
-                message: format!("pushMessageLogin: {:?}", result.data.fail_reason),
-                remove_auto_login: false,
-            }),
+            -10516808 => {
+                debug!("Push login pending (user not yet confirmed)");
+                Ok(PollResult::Pending)
+            }
+            _ => {
+                error!(
+                    return_code = result.return_code,
+                    fail_reason = ?result.data.fail_reason,
+                    "Push login failed"
+                );
+                Err(AuthError::SdoError {
+                    code: result.return_code,
+                    message: format!("pushMessageLogin: {:?}", result.data.fail_reason),
+                    remove_auto_login: false,
+                })
+            }
         }
     }
 
@@ -345,12 +394,14 @@ impl SdoAuth {
     ///
     /// 返回二维码图片数据和对应的 `code_key`，后者用于轮询扫码状态。
     /// 图片为 PNG 格式，可直接保存到文件展示给用户。
+    #[instrument(skip(self, _ctx), err)]
     pub async fn qr_code_request(&self, _ctx: &SdoContext) -> Result<QrCodeResult, AuthError> {
         let url = format!(
             "{}/getCodeKey.json?maxsize=89&{}",
             self.base_url,
             self.common_query(),
         );
+        debug!(url = %url, "Requesting QR code (getCodeKey)");
 
         let response = self
             .client
@@ -367,9 +418,13 @@ impl SdoAuth {
             .and_then(|s| s.split("CODEKEY=").nth(1))
             .and_then(|s| s.split(';').next())
             .map(|s| s.to_string())
-            .ok_or_else(|| AuthError::InvalidResponse("No CODEKEY cookie in QR response".into()))?;
+            .ok_or_else(|| {
+                error!("No CODEKEY cookie in QR response");
+                AuthError::InvalidResponse("No CODEKEY cookie in QR response".into())
+            })?;
 
         let image_data = response.bytes().await?;
+        info!(code_key = %code_key, "QR code obtained successfully");
 
         Ok(QrCodeResult {
             code_key,
@@ -382,6 +437,7 @@ impl SdoAuth {
     /// 应以约 2-3 秒间隔反复调用，直到返回 [`PollResult::Success`]。
     /// - [`PollResult::Success`]: 扫码确认成功
     /// - [`PollResult::Pending`]: 尚未扫描，继续等待
+    #[instrument(skip(self, ctx), fields(auto_login_days, code_key = %code_key), err)]
     pub async fn qr_code_poll(
         &self,
         ctx: &SdoContext,
@@ -396,16 +452,31 @@ impl SdoAuth {
             auto_login_days,
             self.common_query(),
         );
+        debug!(url = %url, "Polling QR code login status");
 
         let result: SdoLoginResult = self.get_json_raw(&url).await?;
+        debug!(return_code = result.return_code, "codeKeyLogin response");
         match result.return_code {
-            0 => Ok(PollResult::Success(result.data)),
-            -10515805 => Ok(PollResult::Pending),
-            _ => Err(AuthError::SdoError {
-                code: result.return_code,
-                message: format!("codeKeyLogin: {:?}", result.data.fail_reason),
-                remove_auto_login: false,
-            }),
+            0 => {
+                info!("QR code login successful");
+                Ok(PollResult::Success(result.data))
+            }
+            -10515805 => {
+                debug!("QR code not yet scanned");
+                Ok(PollResult::Pending)
+            }
+            _ => {
+                error!(
+                    return_code = result.return_code,
+                    fail_reason = ?result.data.fail_reason,
+                    "QR code login failed"
+                );
+                Err(AuthError::SdoError {
+                    code: result.return_code,
+                    message: format!("codeKeyLogin: {:?}", result.data.fail_reason),
+                    remove_auto_login: false,
+                })
+            }
         }
     }
 
@@ -413,11 +484,20 @@ impl SdoAuth {
     ///
     /// 快速登录方式，无需再次输入密码或扫码。
     /// 如果 session key 已过期则返回 [`AuthError::AutoLoginExpired`]，需重新登录。
+    #[instrument(skip(self, ctx, session_key), err)]
     pub async fn auto_login(
         &self,
         ctx: &SdoContext,
         session_key: &str,
     ) -> Result<SdoLoginResult, AuthError> {
+        let masked_url = format!(
+            "{}/autoLogin.json?autoLoginSessionKey=***&guid={}&{}",
+            self.base_url,
+            urlencoding::encode(&ctx.guid),
+            self.common_query(),
+        );
+        debug!(url = %masked_url, "Auto login request");
+
         let url = format!(
             "{}/autoLogin.json?autoLoginSessionKey={}&guid={}&{}",
             self.base_url,
@@ -427,10 +507,13 @@ impl SdoAuth {
         );
 
         let result: SdoLoginResult = self.get_json_raw(&url).await?;
+        debug!(return_code = result.return_code, "autoLogin response");
         if result.return_code == -10515005 {
+            warn!("Auto login session expired");
             return Err(AuthError::AutoLoginExpired);
         }
 
+        info!("Auto login successful");
         Ok(result)
     }
 
@@ -438,7 +521,16 @@ impl SdoAuth {
     ///
     /// 完整登录流程的最后一步：先通过某种方式获取 `tgt`，再调用此方法换取 `ticket`，
     /// `ticket` 即为游戏的 session ID（`DEV.TestSID` 参数）。
+    #[instrument(skip(self, ctx, tgt), err)]
     pub async fn sso_login(&self, ctx: &SdoContext, tgt: &str) -> Result<String, AuthError> {
+        let masked_url = format!(
+            "{}/ssoLogin.json?tgt=***&guid={}&{}",
+            self.base_url,
+            urlencoding::encode(&ctx.guid),
+            self.common_query(),
+        );
+        debug!(url = %masked_url, "SSO login request (ssoLogin)");
+
         let url = format!(
             "{}/ssoLogin.json?tgt={}&guid={}&{}",
             self.base_url,
@@ -448,7 +540,9 @@ impl SdoAuth {
         );
 
         let resp: SdoResponse<serde_json::Value> = self.get_json_with_cookies(&url).await?;
+        debug!(return_code = resp.return_code, "ssoLogin response");
         if resp.return_code != 0 {
+            error!(return_code = resp.return_code, "ssoLogin failed");
             return Err(AuthError::SdoError {
                 code: resp.return_code,
                 message: "ssoLogin failed".to_string(),
@@ -456,18 +550,32 @@ impl SdoAuth {
             });
         }
 
-        resp.data
+        let ticket = resp
+            .data
             .get("ticket")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .ok_or_else(|| AuthError::InvalidResponse("No ticket in ssoLogin response".into()))
+            .ok_or_else(|| {
+                error!("No ticket in ssoLogin response");
+                AuthError::InvalidResponse("No ticket in ssoLogin response".into())
+            })?;
+
+        info!(ticket = %ticket, "SSO login successful, ticket obtained");
+        Ok(ticket)
     }
 
     /// 激活 ticket 权限（调用 `getPromotionInfo.json`）。
     ///
     /// 在 SSO 登录之前调用，用于激活 TGT 对应的登录权限。
     /// 此步骤为 SDO 协议要求，调用即可，无需处理返回值。
+    #[instrument(skip(self, tgt), err)]
     pub async fn get_promotion_info(&self, tgt: &str) -> Result<(), AuthError> {
+        let masked_url = format!(
+            "{}/getPromotionInfo.json?tgt=***&serviceUrl=http%3A%2F%2Fwww.sdo.com",
+            self.base_url,
+        );
+        debug!(url = %masked_url, "Getting promotion info");
+
         let url = format!(
             "{}/getPromotionInfo.json?tgt={}&serviceUrl=http%3A%2F%2Fwww.sdo.com",
             self.base_url,
@@ -483,6 +591,7 @@ impl SdoAuth {
             .header("Cookie", format!("CASTGC={}; CAS_LOGIN_STATE=1", tgt))
             .send()
             .await?;
+        info!("Promotion info activated");
         Ok(())
     }
 
@@ -490,8 +599,10 @@ impl SdoAuth {
     ///
     /// 返回所有大区的信息，包括区名、lobby 服务器、GM 服务器、
     /// 补丁服务器等地址，用于后续游戏连接参数。
+    #[instrument(err)]
     pub async fn fetch_server_list() -> Result<Vec<SdoArea>, AuthError> {
         let client = Client::new();
+        debug!(url = %SERVER_LIST_URL, "Fetching server list");
         let response = client
             .get(SERVER_LIST_URL)
             .header("Accept", "*/*")
@@ -504,13 +615,18 @@ impl SdoAuth {
             .trim()
             .strip_prefix("var servers=")
             .and_then(|s| s.strip_suffix(';'))
-            .ok_or_else(|| AuthError::InvalidResponse("Invalid server list format".into()))?;
+            .ok_or_else(|| {
+                error!("Invalid server list format");
+                AuthError::InvalidResponse("Invalid server list format".into())
+            })?;
 
         let areas: Vec<SdoArea> = serde_json::from_str(json_str)?;
+        info!(count = areas.len(), "Server list fetched successfully");
         Ok(areas)
     }
 
-fn common_query(&self) -> String {
+    #[instrument(skip(self))]
+    fn common_query(&self) -> String {
         format!(
             "authenSource=1&appId={}&areaId=1&appIdSite={}&locale=zh_CN&productId=4&frameType=1&endpointOS=1&version=21&customSecurityLevel=2&deviceId={}&thirdLoginExtern=0&macId={}&productVersion=1.9.7.10&tag=0",
             SDO_APP_ID, SDO_APP_ID,
@@ -531,10 +647,12 @@ fn common_query(&self) -> String {
     /// 发送带 Cookie 和 Host 头的 GET 请求，解析为 `SdoResponse<T>`。
     ///
     /// 所有 SDO API 调用都应使用此方法，确保 Cookie 和 Host 头一致。
+    #[instrument(skip(self, url), fields(url = %url))]
     async fn get_json_with_cookies<T: serde::de::DeserializeOwned>(
         &self,
         url: &str,
     ) -> Result<SdoResponse<T>, AuthError> {
+        debug!("Sending GET request with cookies");
         let resp = self
             .client
             .get(url)
@@ -552,10 +670,12 @@ fn common_query(&self) -> String {
     ///
     /// 仅用于不涉及登录会话的请求（如服务器列表）。
     #[allow(dead_code)]
+    #[instrument(skip(self, url), fields(url = %url))]
     async fn get_json<T: serde::de::DeserializeOwned>(
         &self,
         url: &str,
     ) -> Result<SdoResponse<T>, AuthError> {
+        debug!("Sending GET request without cookies");
         let resp = self
             .client
             .get(url)
@@ -568,10 +688,12 @@ fn common_query(&self) -> String {
     }
 
     /// 发送带 Cookie 和 Host 头的 GET 请求，解析为原始 `T`（不包装 `SdoResponse`）。
+    #[instrument(skip(self, url), fields(url = %url))]
     async fn get_json_raw<T: serde::de::DeserializeOwned>(
         &self,
         url: &str,
     ) -> Result<T, AuthError> {
+        debug!("Sending GET request (raw response)");
         let resp = self
             .client
             .get(url)
@@ -585,15 +707,31 @@ fn common_query(&self) -> String {
         resp.json::<T>().await.map_err(Into::into)
     }
 
+    #[instrument(skip(self, result), fields(return_code = result.return_code))]
     fn check_sdo_error(&self, result: &SdoLoginResult) -> Result<(), AuthError> {
         // C#: if (result.ReturnCode != 0 || result.ErrorType != 0) throw
         if result.return_code != 0 || result.error_type.unwrap_or(0) != 0 {
             match result.return_code {
-                -10386188 => return Err(AuthError::CaptchaRequired),
-                -10242296 => return Err(AuthError::FirstLoginOnDevice),
-                -10515005 => return Err(AuthError::AutoLoginExpired),
+                -10386188 => {
+                    warn!("Captcha required");
+                    return Err(AuthError::CaptchaRequired);
+                }
+                -10242296 => {
+                    warn!("First login on device");
+                    return Err(AuthError::FirstLoginOnDevice);
+                }
+                -10515005 => {
+                    warn!("Auto login expired");
+                    return Err(AuthError::AutoLoginExpired);
+                }
                 code => {
                     let remove_auto = matches!(result.data.auto_login_session_key.as_deref(), Some("0"));
+                    error!(
+                        code = code,
+                        fail_reason = ?result.data.fail_reason,
+                        remove_auto_login = remove_auto,
+                        "SDO login error"
+                    );
                     return Err(AuthError::SdoError {
                         code,
                         message: result.data.fail_reason.as_deref().unwrap_or("unknown").to_string(),
@@ -605,13 +743,14 @@ fn common_query(&self) -> String {
 
         // return_code == 0 && error_type == 0, but Tgt is empty → need captcha (risk control)
         if result.data.tgt.is_none() || result.data.tgt.as_ref().unwrap().is_empty() {
+            warn!("TGT is empty, captcha required (risk control)");
             return Err(AuthError::CaptchaRequired);
         }
 
+        debug!("SDO login result valid");
         Ok(())
     }
-
-    }
+}
 
 const SDO_USER_AGENT: &str = "Mozilla/4.0 (compatible; MSIE 8.0; Windows NT 5.1; Trident/4.0; .NET CLR 2.0.50727; .NET4.0C; .NET4.0E)";
 

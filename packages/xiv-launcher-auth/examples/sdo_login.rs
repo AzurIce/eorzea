@@ -39,7 +39,7 @@ async fn do_sso_flow(auth: &SdoAuth, ctx: &xiv_launcher_auth::sdo::SdoContext, t
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    tracing_subscriber::fmt::init();
 
     println!("=== SDO Auth Test ===\n");
     println!("Choose login method:");

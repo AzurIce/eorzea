@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use tracing::{debug, error, info, warn};
 
 /// Wine 管理工具。
 pub struct WineTool {
@@ -23,18 +24,22 @@ impl WineTool {
     /// 1. 用户自定义路径（通过 `custom_path` 参数）
     /// 2. XIVLauncher 已下载的 wine（`~/.xlcore/beta/wine/bin/wine64`）
     /// 3. 系统 wine64（`PATH` 中的 `wine64`）
+    #[tracing::instrument]
     pub fn detect(custom_path: Option<&Path>) -> Option<Self> {
         // 1. 自定义路径
         if let Some(path) = custom_path {
             if path.exists() {
+                info!(?path, "Found wine at custom path");
                 return Some(Self::from_wine64_path(path));
             }
+            warn!(?path, "Custom wine path does not exist");
         }
 
         // 2. XIVLauncher 已下载的 wine
         if let Some(home) = dirs::home_dir() {
             let xlcore_wine = home.join(".xlcore/beta/wine/bin/wine64");
             if xlcore_wine.exists() {
+                info!(?xlcore_wine, "Found wine at XIVLauncher managed path");
                 return Some(Self::from_xlcore_path(&xlcore_wine));
             }
         }
@@ -45,6 +50,7 @@ impl WineTool {
                 let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !path_str.is_empty() {
                     let path = PathBuf::from(path_str);
+                    info!(?path, "Found system wine64");
                     return Some(Self {
                         wine64_path: path,
                         prefix_path: Self::default_prefix_path(),
@@ -54,12 +60,14 @@ impl WineTool {
             }
         }
 
+        info!("Wine not found");
         None
     }
 
     /// 确保 wine 可用。如果没有检测到，自动下载。
     ///
     /// 返回检测/下载后的 WineTool。
+    #[tracing::instrument]
     pub async fn ensure(custom_path: Option<&Path>) -> Result<Self, WineError> {
         if let Some(tool) = Self::detect(custom_path) {
             return Ok(tool);
@@ -73,6 +81,7 @@ impl WineTool {
     ///
     /// `exe_path`: Windows 可执行文件路径（会被 wine 转换）
     /// `args`: 启动参数列表（每个参数独立传递）
+    #[tracing::instrument(skip(self, args, env))]
     pub fn run(
         &self,
         exe_path: &std::path::Path,
@@ -80,6 +89,7 @@ impl WineTool {
         working_dir: &Path,
         env: &[(String, String)],
     ) -> Result<std::process::Child, std::io::Error> {
+        info!(wine64_path = ?self.wine64_path, ?exe_path, "Starting game with wine");
         let mut cmd = Command::new(&self.wine64_path);
         cmd.arg(exe_path)
             .args(args)
@@ -110,7 +120,7 @@ impl WineTool {
             });
         }
 
-        println!("Wine not found, downloading...");
+        info!("Wine not found, downloading...");
 
         // macOS 专用 wine 下载地址
         #[cfg(target_os = "macos")]
@@ -121,15 +131,22 @@ impl WineTool {
             "https://s3.ffxiv.wang/xlcore/deps/wine/ubuntu/wine-xiv-staging-fsync-git-ubuntu-8.5.r4.g4211bac7.tar.xz";
 
         let client = reqwest::Client::new();
-        let response = client.get(WINE_URL).send().await.map_err(|e| WineError::Download(e.to_string()))?;
+        let response = client.get(WINE_URL).send().await.map_err(|e| {
+            error!(error = %e, "Failed to download wine");
+            WineError::Download(e.to_string())
+        })?;
 
         if !response.status().is_success() {
+            error!(status = %response.status(), "Wine download returned non-success status");
             return Err(WineError::Download(format!("HTTP {}", response.status())));
         }
 
-        let bytes = response.bytes().await.map_err(|e| WineError::Download(e.to_string()))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            error!(error = %e, "Failed to read wine download response");
+            WineError::Download(e.to_string())
+        })?;
 
-        println!("Downloaded {} bytes, extracting...", bytes.len());
+        info!(bytes = bytes.len(), "Downloaded wine archive, extracting...");
 
         // 创建目录
         std::fs::create_dir_all(&bin_dir).map_err(WineError::Io)?;
@@ -147,6 +164,7 @@ impl WineTool {
             .map_err(WineError::Io)?;
 
         if !status.success() {
+            error!("Wine extraction failed: tar command returned non-zero exit code");
             return Err(WineError::Extract("tar command failed".to_string()));
         }
 
@@ -154,12 +172,13 @@ impl WineTool {
         let _ = std::fs::remove_file(&tar_path);
 
         if !wine64_path.exists() {
+            error!(?wine64_path, "wine64 not found after extraction");
             return Err(WineError::Extract(
                 format!("wine64 not found after extraction at {:?}", wine64_path)
             ));
         }
 
-        println!("Wine setup complete at {:?}", wine64_path);
+        info!(?wine64_path, "Wine setup complete");
 
         Ok(Self {
             wine64_path,
@@ -169,6 +188,7 @@ impl WineTool {
     }
 
     /// 确保 DXVK 已安装到 wine prefix。
+    #[tracing::instrument(skip(self))]
     pub async fn ensure_dxvk(&self) -> Result<(), WineError> {
         let prefix = &self.prefix_path;
         let system32 = prefix.join("drive_c/windows/system32");
@@ -176,10 +196,11 @@ impl WineTool {
 
         // 检查是否已安装
         if system32.join("d3d11.dll").exists() {
+            info!("DXVK already installed in prefix");
             return Ok(());
         }
 
-        println!("DXVK not found, downloading...");
+        info!("DXVK not found, downloading...");
 
         #[cfg(target_os = "macos")]
         const DXVK_URL: &str = "https://s3.ffxiv.wang/xlcore/deps/dxvk/osx/dxvk-macOS-async-v1.10.3-20230507-repack.tar.gz";
@@ -187,14 +208,21 @@ impl WineTool {
         const DXVK_URL: &str = "https://s3.ffxiv.wang/xlcore/deps/dxvk/linux/dxvk-async-1.10.1.tar.gz";
 
         let client = reqwest::Client::new();
-        let response = client.get(DXVK_URL).send().await.map_err(|e| WineError::Download(e.to_string()))?;
+        let response = client.get(DXVK_URL).send().await.map_err(|e| {
+            error!(error = %e, "Failed to download DXVK");
+            WineError::Download(e.to_string())
+        })?;
 
         if !response.status().is_success() {
+            error!(status = %response.status(), "DXVK download returned non-success status");
             return Err(WineError::Download(format!("HTTP {}", response.status())));
         }
 
-        let bytes = response.bytes().await.map_err(|e| WineError::Download(e.to_string()))?;
-        println!("Downloaded DXVK {} bytes, extracting...", bytes.len());
+        let bytes = response.bytes().await.map_err(|e| {
+            error!(error = %e, "Failed to read DXVK download response");
+            WineError::Download(e.to_string())
+        })?;
+        info!(bytes = bytes.len(), "Downloaded DXVK archive, extracting...");
 
         let tools_dir = Self::tools_dir()?;
         let dxvk_tar = tools_dir.join("dxvk_download.tar.gz");
@@ -211,19 +239,21 @@ impl WineTool {
             .map_err(WineError::Io)?;
 
         if !status.success() {
+            error!("DXVK extraction failed: tar command returned non-zero exit code");
             return Err(WineError::Extract("tar dxvk failed".to_string()));
         }
 
         let _ = std::fs::remove_file(&dxvk_tar);
 
         // 安装 dxvk dll 到 prefix
-        println!("Installing DXVK to wine prefix...");
+        info!("Installing DXVK to wine prefix...");
         Self::install_dxvk_dlls(&dxvk_dir, &system32, &syswow64)?;
 
-        println!("DXVK installed successfully");
+        info!("DXVK installed successfully");
         Ok(())
     }
 
+    #[tracing::instrument]
     fn install_dxvk_dlls(dxvk_dir: &Path, system32: &Path, syswow64: &Path) -> Result<(), WineError> {
         // DXVK 目录结构可能是 dxvk/x64 和 dxvk/x32
         // 或者解压后多了一层子目录
@@ -241,6 +271,8 @@ impl WineTool {
         };
         let x32_dir = x64_dir.parent().unwrap_or(dxvk_dir).join("x32");
 
+        debug!(?x64_dir, ?x32_dir, "Installing DXVK DLLs");
+
         std::fs::create_dir_all(system32).map_err(WineError::Io)?;
         std::fs::create_dir_all(syswow64).map_err(WineError::Io)?;
 
@@ -251,6 +283,7 @@ impl WineTool {
                 let path = entry.path();
                 if path.extension().map_or(false, |e| e == "dll") {
                     let dest = system32.join(path.file_name().unwrap());
+                    debug!(?path, ?dest, "Copying 64-bit DXVK DLL");
                     std::fs::copy(&path, &dest).map_err(WineError::Io)?;
                 }
             }
@@ -263,6 +296,7 @@ impl WineTool {
                 let path = entry.path();
                 if path.extension().map_or(false, |e| e == "dll") {
                     let dest = syswow64.join(path.file_name().unwrap());
+                    debug!(?path, ?dest, "Copying 32-bit DXVK DLL");
                     std::fs::copy(&path, &dest).map_err(WineError::Io)?;
                 }
             }

@@ -13,6 +13,8 @@ fn prompt(label: &str) -> String {
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt::init();
+
     let areas = SdoAuth::fetch_server_list().await.expect("Failed to fetch server list");
     println!("Available areas:");
     for (i, a) in areas.iter().enumerate() {

@@ -1,7 +1,15 @@
 use std::path::PathBuf;
-use std::process::Command;
+use tracing::{debug, error, info, instrument, warn};
 use xiv_launcher_auth::SdoArea;
 use crate::wine::WineTool;
+
+fn mask_sensitive(value: &str) -> String {
+    if value.len() <= 8 {
+        "***".to_string()
+    } else {
+        format!("{}***{}", &value[..4], &value[value.len() - 4..])
+    }
+}
 
 /// 游戏启动配置。
 #[derive(Debug, Clone)]
@@ -38,6 +46,7 @@ pub struct GameLaunchResult {
 /// 构建国服启动参数字符串。
 ///
 /// 参考 C# `SdoLauncher.LaunchGameSdo()` 的参数构造方式。
+#[instrument(skip(config))]
 pub fn build_sdo_launch_args(config: &GameLaunchConfig) -> String {
     let areas_info = build_lobby_hosts(&config.areas);
 
@@ -63,7 +72,13 @@ pub fn build_sdo_launch_args(config: &GameLaunchConfig) -> String {
         args.push(config.additional_args.clone());
     }
 
-    args.join(" ")
+    let result = args.join(" ");
+    let masked = result
+        .replace(&config.session_id, &mask_sensitive(&config.session_id))
+        .replace(&config.snda_id, &mask_sensitive(&config.snda_id));
+    debug!("constructed launch args: {}", masked);
+
+    result
 }
 
 fn build_lobby_hosts(areas: &[SdoArea]) -> String {
@@ -78,6 +93,7 @@ fn build_lobby_hosts(areas: &[SdoArea]) -> String {
 ///
 /// 对应 C# `SdoLauncher.EnsureLoginEntry()`。原版 `sdologinentry64.dll` 有认证保护，
 /// 必须使用修改版才能通过第三方启动器登录。
+#[instrument]
 pub async fn ensure_login_entry(game_path: &std::path::Path) -> Result<(), GameLaunchError> {
     let game_root = game_path
         .parent()
@@ -86,77 +102,110 @@ pub async fn ensure_login_entry(game_path: &std::path::Path) -> Result<(), GameL
     let boot_path = game_root.join("sdo/sdologin");
     let entry_dll = boot_path.join("sdologinentry64.dll");
 
+    info!(game_root = %game_root.display(), "ensuring login entry DLL");
+
     std::fs::create_dir_all(&boot_path).map_err(GameLaunchError::Io)?;
+    debug!(boot_path = %boot_path.display(), "created boot directory");
 
     if !entry_dll.exists() {
+        info!(path = %entry_dll.display(), "DLL not found, downloading ottercorp version");
         let src = download_ottercorp_dll().await?;
         std::fs::copy(&src, &entry_dll).map_err(GameLaunchError::Io)?;
-        println!("Copied ottercorp sdologinentry64.dll to {:?}", entry_dll);
+        info!(src = %src.display(), dst = %entry_dll.display(), "copied ottercorp sdologinentry64.dll");
     } else if !is_ottercorp_dll(&entry_dll) {
+        info!(path = %entry_dll.display(), "existing DLL is not ottercorp version, replacing");
         let backup = boot_path.join("sdologinentry64.sdo.dll");
         std::fs::copy(&entry_dll, &backup).map_err(GameLaunchError::Io)?;
+        info!(backup = %backup.display(), "backed up original DLL");
         let src = download_ottercorp_dll().await?;
         std::fs::copy(&src, &entry_dll).map_err(GameLaunchError::Io)?;
-        println!("Replaced sdologinentry64.dll with ottercorp version");
+        info!("replaced sdologinentry64.dll with ottercorp version");
+    } else {
+        debug!(path = %entry_dll.display(), "existing DLL is already ottercorp version");
     }
 
     Ok(())
 }
 
+#[instrument]
 async fn download_ottercorp_dll() -> Result<std::path::PathBuf, GameLaunchError> {
     const DLL_URL: &str = "https://raw.githubusercontent.com/ottercorp/XIVLauncher.Core/cn/src/XIVLauncher.Core/Resources/binaries/sdologinentry64.dll";
-    
+
     let tools_dir = dirs::home_dir()
         .map(|h| h.join(".xiv-launcher-rs/tools"))
         .unwrap_or_else(|| std::path::PathBuf::from("./tools"));
     std::fs::create_dir_all(&tools_dir).map_err(GameLaunchError::Io)?;
-    
+
     let dll_path = tools_dir.join("sdologinentry64.dll");
-    
+
     if dll_path.exists() {
+        debug!(path = %dll_path.display(), "DLL already cached locally");
         return Ok(dll_path);
     }
-    
-    println!("Downloading sdologinentry64.dll from ottercorp...");
+
+    info!(url = DLL_URL, "downloading sdologinentry64.dll from ottercorp");
     let client = reqwest::Client::new();
     let response = client
         .get(DLL_URL)
         .send()
         .await
-        .map_err(|e| GameLaunchError::Wine(format!("Download failed: {e}")))?;
-    
-    if !response.status().is_success() {
-        return Err(GameLaunchError::Wine(format!("HTTP {}", response.status())));
+        .map_err(|e| {
+            error!(error = %e, "download request failed");
+            GameLaunchError::Wine(format!("Download failed: {e}"))
+        })?;
+
+    let status = response.status();
+    if !status.is_success() {
+        error!(status = %status, "download returned non-success status");
+        return Err(GameLaunchError::Wine(format!("HTTP {}", status)));
     }
-    
+    info!(status = %status, "download request successful");
+
     let bytes = response
         .bytes()
         .await
-        .map_err(|e| GameLaunchError::Wine(format!("Read failed: {e}")))?;
-    
+        .map_err(|e| {
+            error!(error = %e, "reading response bytes failed");
+            GameLaunchError::Wine(format!("Read failed: {e}"))
+        })?;
+
+    let len = bytes.len();
+    info!(bytes = len, "downloaded DLL");
+
     std::fs::write(&dll_path, &bytes).map_err(GameLaunchError::Io)?;
-    println!("Downloaded {} bytes to {:?}", bytes.len(), dll_path);
-    
+    info!(path = %dll_path.display(), bytes = len, "saved DLL to disk");
+
     Ok(dll_path)
 }
 
 /// 检查 DLL 是否为 ottercorp 修改版（通过 PE 文件 version info 中的 CompanyName）。
+#[instrument]
 fn is_ottercorp_dll(path: &std::path::Path) -> bool {
     // 简单检查：读取文件前 2KB，搜索 "ottercorp" 字符串
+    debug!(path = %path.display(), "checking if DLL is ottercorp version");
     if let Ok(data) = std::fs::read(path) {
         let text = String::from_utf8_lossy(&data);
-        return text.contains("ottercorp");
+        let result = text.contains("ottercorp");
+        debug!(is_ottercorp = result, "DLL check complete");
+        return result;
     }
+    warn!(path = %path.display(), "failed to read DLL for ottercorp check");
     false
 }
 
 /// 启动游戏进程。
 ///
 /// macOS/Linux 通过 Wine 运行，Windows 直接运行。
+#[instrument(skip(config))]
 pub async fn launch_game(
     config: &GameLaunchConfig,
     custom_wine_path: Option<&std::path::Path>,
 ) -> Result<GameLaunchResult, GameLaunchError> {
+    info!(
+        game_path = %config.game_path.display(),
+        "launching game"
+    );
+
     // 确保登录 DLL 是修改版
     ensure_login_entry(&config.game_path).await?;
 
@@ -166,13 +215,25 @@ pub async fn launch_game(
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
 
+    info!(working_dir = %working_dir.display(), "determined working directory");
+
+    let masked_args = args
+        .replace(&config.session_id, &mask_sensitive(&config.session_id))
+        .replace(&config.snda_id, &mask_sensitive(&config.snda_id));
+    info!(command = %format!("{} {}", game_path.display(), masked_args), "full launch command");
+
     #[cfg(target_os = "windows")]
     {
         let child = Command::new(game_path)
             .args(args.split_whitespace())
             .current_dir(working_dir)
             .spawn()
-            .map_err(GameLaunchError::Io)?;
+            .map_err(|e| {
+                error!(error = %e, "failed to spawn game process");
+                GameLaunchError::Io(e)
+            })?;
+
+        info!(pid = child.id(), "game process spawned");
 
         Ok(GameLaunchResult {
             child,
@@ -184,11 +245,18 @@ pub async fn launch_game(
     {
         let wine = WineTool::ensure(custom_wine_path)
             .await
-            .map_err(|e| GameLaunchError::Wine(format!("{e}")))?;
+            .map_err(|e| {
+                error!(error = %e, "failed to ensure Wine installation");
+                GameLaunchError::Wine(format!("{e}"))
+            })?;
 
         // 确保 DXVK 已安装
         wine.ensure_dxvk().await
-            .map_err(|e| GameLaunchError::Wine(format!("DXVK setup failed: {e}")))?;
+            .map_err(|e| {
+                error!(error = %e, "DXVK setup failed");
+                GameLaunchError::Wine(format!("DXVK setup failed: {e}"))
+            })?;
+        info!("DXVK setup complete");
 
         let arg_list: Vec<String> = args.split_whitespace().map(|s| s.to_string()).collect();
 
@@ -204,7 +272,12 @@ pub async fn launch_game(
 
         let child = wine
             .run(game_path, &arg_list, working_dir, &env)
-            .map_err(GameLaunchError::Io)?;
+            .map_err(|e| {
+                error!(error = %e, "failed to run game through Wine");
+                GameLaunchError::Io(e)
+            })?;
+
+        info!(pid = child.id(), "game process spawned through Wine");
 
         Ok(GameLaunchResult {
             child,
