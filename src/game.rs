@@ -74,6 +74,82 @@ fn build_lobby_hosts(areas: &[SdoArea]) -> String {
         .join("|")
 }
 
+/// 确保登录入口 DLL 是 ottercorp 修改版。
+///
+/// 对应 C# `SdoLauncher.EnsureLoginEntry()`。原版 `sdologinentry64.dll` 有认证保护，
+/// 必须使用修改版才能通过第三方启动器登录。
+pub async fn ensure_login_entry(game_path: &std::path::Path) -> Result<(), GameLaunchError> {
+    let game_root = game_path
+        .parent()
+        .and_then(|p| p.parent())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let boot_path = game_root.join("sdo/sdologin");
+    let entry_dll = boot_path.join("sdologinentry64.dll");
+
+    std::fs::create_dir_all(&boot_path).map_err(GameLaunchError::Io)?;
+
+    if !entry_dll.exists() {
+        let src = download_ottercorp_dll().await?;
+        std::fs::copy(&src, &entry_dll).map_err(GameLaunchError::Io)?;
+        println!("Copied ottercorp sdologinentry64.dll to {:?}", entry_dll);
+    } else if !is_ottercorp_dll(&entry_dll) {
+        let backup = boot_path.join("sdologinentry64.sdo.dll");
+        std::fs::copy(&entry_dll, &backup).map_err(GameLaunchError::Io)?;
+        let src = download_ottercorp_dll().await?;
+        std::fs::copy(&src, &entry_dll).map_err(GameLaunchError::Io)?;
+        println!("Replaced sdologinentry64.dll with ottercorp version");
+    }
+
+    Ok(())
+}
+
+async fn download_ottercorp_dll() -> Result<std::path::PathBuf, GameLaunchError> {
+    const DLL_URL: &str = "https://raw.githubusercontent.com/ottercorp/XIVLauncher.Core/cn/src/XIVLauncher.Core/Resources/binaries/sdologinentry64.dll";
+    
+    let tools_dir = dirs::home_dir()
+        .map(|h| h.join(".xiv-launcher-rs/tools"))
+        .unwrap_or_else(|| std::path::PathBuf::from("./tools"));
+    std::fs::create_dir_all(&tools_dir).map_err(GameLaunchError::Io)?;
+    
+    let dll_path = tools_dir.join("sdologinentry64.dll");
+    
+    if dll_path.exists() {
+        return Ok(dll_path);
+    }
+    
+    println!("Downloading sdologinentry64.dll from ottercorp...");
+    let client = reqwest::Client::new();
+    let response = client
+        .get(DLL_URL)
+        .send()
+        .await
+        .map_err(|e| GameLaunchError::Wine(format!("Download failed: {e}")))?;
+    
+    if !response.status().is_success() {
+        return Err(GameLaunchError::Wine(format!("HTTP {}", response.status())));
+    }
+    
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| GameLaunchError::Wine(format!("Read failed: {e}")))?;
+    
+    std::fs::write(&dll_path, &bytes).map_err(GameLaunchError::Io)?;
+    println!("Downloaded {} bytes to {:?}", bytes.len(), dll_path);
+    
+    Ok(dll_path)
+}
+
+/// 检查 DLL 是否为 ottercorp 修改版（通过 PE 文件 version info 中的 CompanyName）。
+fn is_ottercorp_dll(path: &std::path::Path) -> bool {
+    // 简单检查：读取文件前 2KB，搜索 "ottercorp" 字符串
+    if let Ok(data) = std::fs::read(path) {
+        let text = String::from_utf8_lossy(&data);
+        return text.contains("ottercorp");
+    }
+    false
+}
+
 /// 启动游戏进程。
 ///
 /// macOS/Linux 通过 Wine 运行，Windows 直接运行。
@@ -81,6 +157,9 @@ pub async fn launch_game(
     config: &GameLaunchConfig,
     custom_wine_path: Option<&std::path::Path>,
 ) -> Result<GameLaunchResult, GameLaunchError> {
+    // 确保登录 DLL 是修改版
+    ensure_login_entry(&config.game_path).await?;
+
     let args = build_sdo_launch_args(config);
     let game_path = &config.game_path;
     let working_dir = game_path
