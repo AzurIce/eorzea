@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tracing::{error, info};
 use xiv_launcher_auth::sdo::SdoAuth;
-use xiv_launcher_rs_lib::launcher::{Launcher, LoginMethod};
+use xiv_launcher_rs_lib::launcher::Launcher;
 
 fn prompt(label: &str) -> String {
     print!("{}: ", label);
@@ -52,29 +52,22 @@ async fn main() {
         "1" => {
             let account = prompt("Account");
             let password = rpassword::read_password().unwrap();
-            launcher
-                .login(LoginMethod::Password {
-                    account: &account,
-                    password: &password,
-                })
-                .await
+            launcher.login_password(&account, &password).await
         }
         "2" => {
-            // QR 码登录：内部自动轮询，300 秒超时
-            println!("\nQR code login started. Please scan with Daoyu APP...");
-            launcher
-                .login(LoginMethod::QrCode {
-                    timeout: Some(Duration::from_secs(300)),
-                })
-                .await
+            // 请求二维码
+            let qr = launcher.request_qr_code().await.expect("request_qr_code failed");
+            let qr_path = "/tmp/xiv_qr.png";
+            std::fs::write(qr_path, qr.image_data()).unwrap();
+            println!("\nQR image saved to {} ({} bytes)", qr_path, qr.image_data().len());
+            println!("Please scan with Daoyu APP...\n");
+
+            // 等待扫码（300秒超时）
+            qr.wait_for_scan(Some(Duration::from_secs(300))).await
         }
         "3" => {
             let session_key = prompt("Auto-login session key");
-            launcher
-                .login(LoginMethod::AutoLogin {
-                    session_key: &session_key,
-                })
-                .await
+            launcher.login_auto(&session_key).await
         }
         _ => {
             error!("Invalid choice");
@@ -99,10 +92,7 @@ async fn main() {
     // 5. 启动游戏
     let game_path = PathBuf::from("/Volumes/Files/_ffxiv/XIVLauncherGamePath/game/ffxiv_dx11.exe");
     println!("\nLaunching game...");
-    match launcher
-        .launch(&token, area, areas, &game_path)
-        .await
-    {
+    match launcher.launch(&token, area, areas, &game_path).await {
         Ok(result) => {
             info!("Game launched! PID: {}", result.child.id());
             println!("Command: {}", result.command);

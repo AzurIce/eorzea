@@ -161,6 +161,7 @@ const SDO_APP_ID: &str = "100001900";
 ///
 /// 创建时自动采集本机设备指纹（MAC/CPU/硬盘序列号的 MD5 哈希），
 /// 无需调用方手动提供。详见 [`crate::sdo_device`] 模块文档。
+#[derive(Clone)]
 pub struct SdoAuth {
     client: Client,
     base_url: String,
@@ -174,6 +175,7 @@ pub struct SdoAuth {
 /// - `guid`: SDO 分配的会话 GUID，后续所有请求需携带
 /// - `dynamic_key`: 动态密钥（当前流程未使用，预留给加密密码等场景）
 /// - `device_id` / `mac_id`: 设备标识，随请求发送至 SDO 服务端
+#[derive(Clone)]
 pub struct SdoContext {
     pub guid: String,
     pub dynamic_key: Option<String>,

@@ -2,6 +2,14 @@
 //!
 //! 将 `xiv-launcher-auth` 的认证能力和 `game.rs` / `wine.rs` 的启动能力
 //! 组合成高层 API，供 Tauri 前端或 CLI 示例直接调用。
+//!
+//! # 设计原则
+//!
+//! **登录** 和 **启动** 完全解耦：
+//! - 登录返回 `LaunchToken`，不依赖游戏路径。
+//! - 启动接受 `LaunchToken` + 大区 + 游戏路径。
+//!
+//! QR 登录为**分步式**：先生成二维码展示，再在后台等待扫码结果。
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -22,16 +30,108 @@ pub struct LaunchToken {
     pub auto_login_session_key: Option<String>,
 }
 
-/// 登录方式。
-pub enum LoginMethod<'a> {
-    /// 叨鱼 APP 扫码登录。
+/// 扫码登录会话。
+///
+/// 由 [`Launcher::request_qr_code`] 创建，包含二维码图片和扫码状态轮询能力。
+pub struct QrCodeSession {
+    code_key: String,
+    image_data: Vec<u8>,
+    auth: SdoAuth,
+    ctx: SdoContext,
+}
+
+impl std::fmt::Debug for QrCodeSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QrCodeSession")
+            .field("code_key", &self.code_key)
+            .field("image_data", &format!("{} bytes", self.image_data.len()))
+            .finish()
+    }
+}
+
+impl QrCodeSession {
+    /// 二维码 PNG 图片字节（可直接展示或保存）。
+    pub fn image_data(&self) -> &[u8] {
+        &self.image_data
+    }
+
+    /// 二维码标识（调试用）。
+    pub fn code_key(&self) -> &str {
+        &self.code_key
+    }
+
+    /// 阻塞等待用户扫码并确认。
     ///
-    /// `timeout` 控制扫码等待的最大时长，`None` 表示无限等待。
-    QrCode { timeout: Option<Duration> },
-    /// 账号密码登录。
-    Password { account: &'a str, password: &'a str },
-    /// 自动登录（使用之前保存的 session key）。
-    AutoLogin { session_key: &'a str },
+    /// - `timeout = None` → 无限等待
+    /// - `timeout = Some(d)` → `d` 后返回 `LauncherError::Auth("QR code scan timed out")`
+    ///
+    /// 前端应在**后台 task**中调用此方法，主线程继续响应 UI。
+    #[instrument(skip(self))]
+    pub async fn wait_for_scan(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<LaunchToken, LauncherError> {
+        let start = std::time::Instant::now();
+        let poll_interval = tokio::time::Duration::from_secs(3);
+
+        info!(timeout = ?timeout, "waiting for QR scan");
+
+        loop {
+            tokio::time::sleep(poll_interval).await;
+
+            if let Some(t) = timeout {
+                if start.elapsed() >= t {
+                    return Err(LauncherError::Auth("QR code scan timed out".into()));
+                }
+            }
+
+            match self.auth.qr_code_poll(&self.ctx, &self.code_key, 30).await {
+                Ok(PollResult::Success(data)) => {
+                    info!("QR code scan confirmed");
+                    return self.exchange_for_token(data).await;
+                }
+                Ok(PollResult::Pending) => {
+                    debug!("qr code scan pending...");
+                }
+                Err(e) => {
+                    return Err(LauncherError::Auth(format!("qr_code_poll failed: {e}")));
+                }
+            }
+        }
+    }
+
+    async fn exchange_for_token(
+        &self,
+        data: SdoLoginData,
+    ) -> Result<LaunchToken, LauncherError> {
+        let snda_id = data
+            .snda_id
+            .ok_or_else(|| LauncherError::Auth("no snda_id in qr response".into()))?;
+        let tgt = data
+            .tgt
+            .ok_or_else(|| LauncherError::Auth("no tgt in qr response".into()))?;
+
+        // 激活权限
+        self.auth
+            .get_promotion_info(&tgt)
+            .await
+            .map_err(|e| LauncherError::Auth(format!("get_promotion_info failed: {e}")))?;
+
+        // 换取 ticket
+        let ticket = self
+            .auth
+            .sso_login(&self.ctx, &tgt)
+            .await
+            .map_err(|e| LauncherError::Auth(format!("sso_login failed: {e}")))?;
+
+        info!(ticket = %mask_sensitive(&ticket), "qr login successful");
+
+        Ok(LaunchToken {
+            ticket,
+            snda_id,
+            auto_login_session_key: data.auto_login_session_key,
+        })
+    }
 }
 
 /// 封装完整链路的高层启动器。
@@ -73,63 +173,96 @@ impl Launcher {
         xiv_launcher_auth::sdo_device::get_mac_address_hash()
     }
 
-    /// 获取登录上下文（guid 等）。
-    #[instrument(skip(self))]
-    pub async fn get_context(&self) -> Result<SdoContext, LauncherError> {
-        let ctx = self
-            .auth
-            .get_context()
-            .await
-            .map_err(|e| LauncherError::Auth(format!("get_context failed: {e}")))?;
-        debug!(guid = %ctx.guid, "got login context");
-        Ok(ctx)
-    }
+    // ── 一步登录（密码 / 自动登录）──────────────────────────────────────
 
-    /// 使用指定方式登录，返回 `LaunchToken`。
-    ///
-    /// 这是高层封装，内部处理了从登录到换取 ticket 的完整流程。
-    #[instrument(skip(self, method))]
-    pub async fn login(&self, method: LoginMethod<'_>) -> Result<LaunchToken, LauncherError> {
+    /// 使用账号密码登录，返回 `LaunchToken`。
+    #[instrument(skip(self, account, password))]
+    pub async fn login_password(
+        &self,
+        account: &str,
+        password: &str,
+    ) -> Result<LaunchToken, LauncherError> {
         let ctx = self.get_context().await?;
 
-        let (snda_id, tgt, session_key) = match method {
-            LoginMethod::QrCode { timeout } => {
-                info!(timeout = ?timeout, "starting QR code login flow");
-                self.qr_code_flow(&ctx, timeout).await?
-            }
-            LoginMethod::Password { account, password } => {
-                info!("starting password login flow");
-                self.password_flow(&ctx, account, password).await?
-            }
-            LoginMethod::AutoLogin { session_key } => {
-                info!("starting auto-login flow");
-                self.auto_login_flow(&ctx, session_key).await?
-            }
-        };
-
-        // 激活权限
-        info!("activating promotion info");
-        self.auth
-            .get_promotion_info(&tgt)
-            .await
-            .map_err(|e| LauncherError::Auth(format!("get_promotion_info failed: {e}")))?;
-
-        // 换取 ticket
-        info!("exchanging tgt for ticket");
-        let ticket = self
+        let result = self
             .auth
-            .sso_login(&ctx, &tgt)
+            .static_login(&ctx, account, password)
             .await
-            .map_err(|e| LauncherError::Auth(format!("sso_login failed: {e}")))?;
+            .map_err(|e| LauncherError::Auth(format!("static_login failed: {e}")))?;
 
-        info!(ticket = %mask_sensitive(&ticket), "login successful");
+        if result.return_code != 0 {
+            return Err(LauncherError::Auth(format!(
+                "static_login returned error code: {}",
+                result.return_code
+            )));
+        }
 
-        Ok(LaunchToken {
-            ticket,
-            snda_id,
-            auto_login_session_key: session_key,
+        let snda_id = result
+            .data
+            .snda_id
+            .ok_or_else(|| LauncherError::Auth("no snda_id in response".into()))?;
+        let tgt = result
+            .data
+            .tgt
+            .ok_or_else(|| LauncherError::Auth("no tgt in response (captcha required?)".into()))?;
+
+        self.exchange_tgt_for_token(&ctx, &tgt, &snda_id, result.data.auto_login_session_key)
+            .await
+    }
+
+    /// 使用自动登录 session key 登录，返回 `LaunchToken`。
+    #[instrument(skip(self, session_key))]
+    pub async fn login_auto(
+        &self,
+        session_key: &str,
+    ) -> Result<LaunchToken, LauncherError> {
+        let ctx = self.get_context().await?;
+
+        let result = self
+            .auth
+            .auto_login(&ctx, session_key)
+            .await
+            .map_err(|e| LauncherError::Auth(format!("auto_login failed: {e}")))?;
+
+        let snda_id = result
+            .data
+            .snda_id
+            .ok_or_else(|| LauncherError::Auth("no snda_id in auto_login response".into()))?;
+        let tgt = result
+            .data
+            .tgt
+            .ok_or_else(|| LauncherError::Auth("no tgt in auto_login response".into()))?;
+
+        self.exchange_tgt_for_token(&ctx, &tgt, &snda_id, result.data.auto_login_session_key)
+            .await
+    }
+
+    // ── 分步扫码登录 ──────────────────────────────────────────────────
+
+    /// 请求二维码，返回 [`QrCodeSession`]。
+    ///
+    /// 前端应调用 [`QrCodeSession::image_data`] 展示二维码，
+    /// 然后在后台调用 [`QrCodeSession::wait_for_scan`] 等待扫码结果。
+    #[instrument(skip(self))]
+    pub async fn request_qr_code(&self) -> Result<QrCodeSession, LauncherError> {
+        let ctx = self.get_context().await?;
+        let result = self
+            .auth
+            .qr_code_request(&ctx)
+            .await
+            .map_err(|e| LauncherError::Auth(format!("qr_code_request failed: {e}")))?;
+
+        info!(code_key = %result.code_key, bytes = result.image_data.len(), "qr code requested");
+
+        Ok(QrCodeSession {
+            code_key: result.code_key,
+            image_data: result.image_data,
+            auth: self.auth.clone(),
+            ctx,
         })
     }
+
+    // ── 启动游戏 ──────────────────────────────────────────────────────
 
     /// 启动游戏。
     ///
@@ -166,138 +299,47 @@ impl Launcher {
         Ok(result)
     }
 
-    /// 获取二维码数据（用于 UI 展示）。
-    ///
-    /// 返回 `(code_key, png_bytes)`。
-    #[instrument(skip(self, ctx))]
-    pub async fn request_qr_code(&self, ctx: &SdoContext) -> Result<(String, Vec<u8>), LauncherError> {
-        let result = self
-            .auth
-            .qr_code_request(ctx)
-            .await
-            .map_err(|e| LauncherError::Auth(format!("qr_code_request failed: {e}")))?;
-        info!(code_key = %result.code_key, bytes = result.image_data.len(), "qr code requested");
-        Ok((result.code_key, result.image_data))
-    }
-
-    /// 轮询 QR 码扫码状态。
-    ///
-    /// - `Ok(Some(data))` → 扫码成功，返回登录数据
-    /// - `Ok(None)` → 仍在等待
-    /// - `Err(...)` → 发生错误
-    #[instrument(skip(self, ctx))]
-    pub async fn poll_qr_code(
-        &self,
-        ctx: &SdoContext,
-        code_key: &str,
-    ) -> Result<Option<SdoLoginData>, LauncherError> {
-        match self.auth.qr_code_poll(ctx, code_key, 30).await {
-            Ok(PollResult::Success(data)) => {
-                info!("qr code scan confirmed");
-                Ok(Some(data))
-            }
-            Ok(PollResult::Pending) => Ok(None),
-            Err(e) => Err(LauncherError::Auth(format!("qr_code_poll failed: {e}"))),
-        }
-    }
-
     // ── internal helpers ─────────────────────────────────────────────
 
-    async fn password_flow(
-        &self,
-        ctx: &SdoContext,
-        account: &str,
-        password: &str,
-    ) -> Result<(String, String, Option<String>), LauncherError> {
-        let result = self
+    #[instrument(skip(self))]
+    async fn get_context(&self) -> Result<SdoContext, LauncherError> {
+        let ctx = self
             .auth
-            .static_login(ctx, account, password)
+            .get_context()
             .await
-            .map_err(|e| LauncherError::Auth(format!("static_login failed: {e}")))?;
-
-        if result.return_code != 0 {
-            return Err(LauncherError::Auth(format!(
-                "static_login returned error code: {}",
-                result.return_code
-            )));
-        }
-
-        let snda_id = result
-            .data
-            .snda_id
-            .ok_or_else(|| LauncherError::Auth("no snda_id in response".into()))?;
-        let tgt = result
-            .data
-            .tgt
-            .ok_or_else(|| LauncherError::Auth("no tgt in response (captcha required?)".into()))?;
-
-        Ok((snda_id, tgt, result.data.auto_login_session_key))
+            .map_err(|e| LauncherError::Auth(format!("get_context failed: {e}")))?;
+        debug!(guid = %ctx.guid, "got login context");
+        Ok(ctx)
     }
 
-    async fn qr_code_flow(
+    #[instrument(skip(self, ctx, tgt))]
+    async fn exchange_tgt_for_token(
         &self,
         ctx: &SdoContext,
-        timeout: Option<Duration>,
-    ) -> Result<(String, String, Option<String>), LauncherError> {
-        let qr = self
-            .auth
-            .qr_code_request(ctx)
+        tgt: &str,
+        snda_id: &str,
+        session_key: Option<String>,
+    ) -> Result<LaunchToken, LauncherError> {
+        // 激活权限
+        self.auth
+            .get_promotion_info(tgt)
             .await
-            .map_err(|e| LauncherError::Auth(format!("qr_code_request failed: {e}")))?;
+            .map_err(|e| LauncherError::Auth(format!("get_promotion_info failed: {e}")))?;
 
-        info!(code_key = %qr.code_key, "waiting for qr scan...");
-
-        let start = std::time::Instant::now();
-        let poll_interval = tokio::time::Duration::from_secs(3);
-
-        loop {
-            tokio::time::sleep(poll_interval).await;
-
-            if let Some(t) = timeout {
-                if start.elapsed() >= t {
-                    return Err(LauncherError::Auth("QR code scan timed out".into()));
-                }
-            }
-
-            match self.auth.qr_code_poll(ctx, &qr.code_key, 30).await {
-                Ok(PollResult::Success(data)) => {
-                    let snda_id = data
-                        .snda_id
-                        .ok_or_else(|| LauncherError::Auth("no snda_id in qr response".into()))?;
-                    let tgt = data
-                        .tgt
-                        .ok_or_else(|| LauncherError::Auth("no tgt in qr response".into()))?;
-                    return Ok((snda_id, tgt, data.auto_login_session_key));
-                }
-                Ok(PollResult::Pending) => {
-                    debug!("qr code scan pending...");
-                }
-                Err(e) => return Err(LauncherError::Auth(format!("qr_code_poll failed: {e}"))),
-            }
-        }
-    }
-
-    async fn auto_login_flow(
-        &self,
-        ctx: &SdoContext,
-        session_key: &str,
-    ) -> Result<(String, String, Option<String>), LauncherError> {
-        let result = self
+        // 换取 ticket
+        let ticket = self
             .auth
-            .auto_login(ctx, session_key)
+            .sso_login(ctx, tgt)
             .await
-            .map_err(|e| LauncherError::Auth(format!("auto_login failed: {e}")))?;
+            .map_err(|e| LauncherError::Auth(format!("sso_login failed: {e}")))?;
 
-        let snda_id = result
-            .data
-            .snda_id
-            .ok_or_else(|| LauncherError::Auth("no snda_id in auto_login response".into()))?;
-        let tgt = result
-            .data
-            .tgt
-            .ok_or_else(|| LauncherError::Auth("no tgt in auto_login response".into()))?;
+        info!(ticket = %mask_sensitive(&ticket), "login successful");
 
-        Ok((snda_id, tgt, result.data.auto_login_session_key))
+        Ok(LaunchToken {
+            ticket,
+            snda_id: snda_id.to_string(),
+            auto_login_session_key: session_key,
+        })
     }
 }
 
