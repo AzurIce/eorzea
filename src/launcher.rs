@@ -4,6 +4,7 @@
 //! 组合成高层 API，供 Tauri 前端或 CLI 示例直接调用。
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tracing::{debug, info, instrument};
 use xiv_launcher_auth::sdo::{PollResult, SdoAuth, SdoContext};
 use xiv_launcher_auth::{SdoArea, SdoLoginData};
@@ -24,7 +25,9 @@ pub struct LaunchToken {
 /// 登录方式。
 pub enum LoginMethod<'a> {
     /// 叨鱼 APP 扫码登录。
-    QrCode,
+    ///
+    /// `timeout` 控制扫码等待的最大时长，`None` 表示无限等待。
+    QrCode { timeout: Option<Duration> },
     /// 账号密码登录。
     Password { account: &'a str, password: &'a str },
     /// 自动登录（使用之前保存的 session key）。
@@ -90,9 +93,9 @@ impl Launcher {
         let ctx = self.get_context().await?;
 
         let (snda_id, tgt, session_key) = match method {
-            LoginMethod::QrCode => {
-                info!("starting QR code login flow");
-                self.qr_code_flow(&ctx).await?
+            LoginMethod::QrCode { timeout } => {
+                info!(timeout = ?timeout, "starting QR code login flow");
+                self.qr_code_flow(&ctx, timeout).await?
             }
             LoginMethod::Password { account, password } => {
                 info!("starting password login flow");
@@ -234,6 +237,7 @@ impl Launcher {
     async fn qr_code_flow(
         &self,
         ctx: &SdoContext,
+        timeout: Option<Duration>,
     ) -> Result<(String, String, Option<String>), LauncherError> {
         let qr = self
             .auth
@@ -243,10 +247,18 @@ impl Launcher {
 
         info!(code_key = %qr.code_key, "waiting for qr scan...");
 
-        // 这个函数在内部轮询，但高层 API 通常由调用方轮询
-        // 这里提供一个简化的阻塞轮询版本，UI 应使用 request_qr_code + poll_qr_code
+        let start = std::time::Instant::now();
+        let poll_interval = tokio::time::Duration::from_secs(3);
+
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            tokio::time::sleep(poll_interval).await;
+
+            if let Some(t) = timeout {
+                if start.elapsed() >= t {
+                    return Err(LauncherError::Auth("QR code scan timed out".into()));
+                }
+            }
+
             match self.auth.qr_code_poll(ctx, &qr.code_key, 30).await {
                 Ok(PollResult::Success(data)) => {
                     let snda_id = data

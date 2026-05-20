@@ -1,5 +1,6 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing::{error, info};
 use xiv_launcher_auth::sdo::SdoAuth;
 use xiv_launcher_rs_lib::launcher::{Launcher, LoginMethod};
@@ -59,64 +60,13 @@ async fn main() {
                 .await
         }
         "2" => {
-            // QR 码登录：先请求二维码，展示给用户，然后轮询
-            let ctx = launcher.get_context().await.expect("get_context failed");
-            let (code_key, png_bytes) = launcher
-                .request_qr_code(&ctx)
-                .await
-                .expect("qr_code_request failed");
-
-            let qr_path = "/tmp/xiv_qr.png";
-            std::fs::write(qr_path, &png_bytes).unwrap();
-            println!("\nQR image saved to {} ({} bytes)", qr_path, png_bytes.len());
-            println!("Please scan with Daoyu APP...\n");
-
-            // 轮询扫码结果
-            let login_data = loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                match launcher.poll_qr_code(&ctx, &code_key).await {
-                    Ok(Some(data)) => {
-                        println!("QR scanned and confirmed!");
-                        break data;
-                    }
-                    Ok(None) => {
-                        print!(".");
-                        io::stdout().flush().unwrap();
-                    }
-                    Err(e) => {
-                        error!("QR poll failed: {}", e);
-                        panic!("QR login failed");
-                    }
-                }
-            };
-
-            // 手动走完剩余流程（因为 login() 方法内部会处理，但 QR 需要外部轮询）
-            let snda_id = login_data
-                .snda_id
-                .clone()
-                .expect("no snda_id in qr response");
-            let tgt = login_data
-                .tgt
-                .clone()
-                .expect("no tgt in qr response");
-
-            // 激活 + sso_login
+            // QR 码登录：内部自动轮询，300 秒超时
+            println!("\nQR code login started. Please scan with Daoyu APP...");
             launcher
-                .auth
-                .get_promotion_info(&tgt)
+                .login(LoginMethod::QrCode {
+                    timeout: Some(Duration::from_secs(300)),
+                })
                 .await
-                .expect("get_promotion_info failed");
-            let ticket = launcher
-                .auth
-                .sso_login(&ctx, &tgt)
-                .await
-                .expect("sso_login failed");
-
-            Ok(xiv_launcher_rs_lib::launcher::LaunchToken {
-                ticket,
-                snda_id,
-                auto_login_session_key: login_data.auto_login_session_key,
-            })
         }
         "3" => {
             let session_key = prompt("Auto-login session key");
