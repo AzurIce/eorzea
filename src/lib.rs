@@ -1,4 +1,5 @@
 pub mod game;
+pub mod launcher;
 pub mod wine;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
