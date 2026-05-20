@@ -15,7 +15,7 @@ fn prompt_password(label: &str) -> String {
     rpassword::read_password().unwrap()
 }
 
-async fn do_sso_flow(auth: &SdoAuth, ctx: &xiv_launcher_auth::sdo::SdoContext, tgt: &str, snda_id: Option<&str>) -> Option<String> {
+async fn do_sso_flow(auth: &SdoAuth, ctx: &xiv_launcher_auth::sdo::SdoContext, tgt: &str) -> Option<String> {
     println!("\n--- getPromotionInfo ---");
     if let Err(e) = auth.get_promotion_info(tgt).await {
         eprintln!("FAILED: {e}");
@@ -27,7 +27,6 @@ async fn do_sso_flow(auth: &SdoAuth, ctx: &xiv_launcher_auth::sdo::SdoContext, t
     match auth.sso_login(ctx, tgt).await {
         Ok(ticket) => {
             println!("OK: ticket={}", ticket);
-            let _ = snda_id;
             Some(ticket)
         }
         Err(e) => {
@@ -93,8 +92,7 @@ async fn main() {
         }
     };
 
-    let mut ticket: Option<String> = None;
-    let mut snda_id: Option<String> = None;
+    let mut _ticket: Option<String> = None;
 
     match choice {
         "1" => {
@@ -114,9 +112,8 @@ async fn main() {
                     println!("  snda_id={:?}", result.data.snda_id);
                     println!("  tgt={:?}", result.data.tgt);
                     println!("  input_user_id={:?}", result.data.input_user_id);
-                    snda_id = result.data.snda_id.clone();
                     if let Some(ref tgt) = result.data.tgt {
-                        ticket = do_sso_flow(&auth, &ctx, tgt, snda_id.as_deref()).await;
+                        _ticket = do_sso_flow(&auth, &ctx, tgt).await;
                     } else {
                         println!("\n[WARN] No tgt in static_login response. Full data: {:?}", result.data);
                     }
@@ -137,12 +134,11 @@ async fn main() {
                             match auth.slide_login_poll(&ctx, key).await {
                                 Ok(xiv_launcher_auth::sdo::PollResult::Success(data)) => {
                                     println!("\nOK: Login confirmed!");
-                                    snda_id = data.snda_id.clone();
                                     if let Some(ref sk) = data.auto_login_session_key {
                                         println!("auto_login_session_key={}", sk);
                                     }
                                     if let Some(ref tgt) = data.tgt {
-                                        ticket = do_sso_flow(&auth, &ctx, tgt, snda_id.as_deref()).await;
+                                        _ticket = do_sso_flow(&auth, &ctx, tgt).await;
                                     }
                                     break;
                                 }
@@ -180,9 +176,8 @@ async fn main() {
                                 println!("  tgt={:?}", data.tgt);
                                 println!("  input_user_id={:?}", data.input_user_id);
                                 println!("  auto_login_session_key={:?}", data.auto_login_session_key);
-                                snda_id = data.snda_id.clone();
                                 if let Some(ref tgt) = data.tgt {
-                                    ticket = do_sso_flow(&auth, &ctx, tgt, snda_id.as_deref()).await;
+                                    _ticket = do_sso_flow(&auth, &ctx, tgt).await;
                                 } else {
                                     println!("\n[WARN] No tgt in QR login response. Full data: {:?}", data);
                                 }
@@ -208,9 +203,8 @@ async fn main() {
             match auth.auto_login(&ctx, &session_key).await {
                 Ok(result) => {
                     println!("OK: return_code={}", result.return_code);
-                    snda_id = result.data.snda_id.clone();
                     if let Some(ref tgt) = result.data.tgt {
-                        ticket = do_sso_flow(&auth, &ctx, tgt, snda_id.as_deref()).await;
+                        _ticket = do_sso_flow(&auth, &ctx, tgt).await;
                     }
                 }
                 Err(e) => eprintln!("FAILED: {e}"),

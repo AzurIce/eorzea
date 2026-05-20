@@ -284,7 +284,12 @@ impl SdoAuth {
         debug!(return_code = result.return_code, "staticLogin response");
         self.check_sdo_error(&result)?;
 
-        info!("Password login successful");
+        info!(
+            snda_id = ?result.data.snda_id,
+            auto_login_session_key = ?result.data.auto_login_session_key,
+            auto_login_max_age_h = result.data.auto_login_max_age.map(|s| s as f32 / 3600.0),
+            "Password login successful"
+        );
         Ok(result)
     }
 
@@ -364,7 +369,12 @@ impl SdoAuth {
         match result.return_code {
             0 => {
                 if result.data.next_action == Some(0) {
-                    info!("Push login confirmed by user");
+                    info!(
+                        snda_id = ?result.data.snda_id,
+                        auto_login_session_key = ?result.data.auto_login_session_key,
+                        auto_login_max_age_h = result.data.auto_login_max_age.map(|s| s as f32 / 3600.0),
+                        "Push login confirmed by user"
+                    );
                     Ok(PollResult::Success(result.data))
                 } else {
                     debug!("Push login pending");
@@ -458,7 +468,12 @@ impl SdoAuth {
         debug!(return_code = result.return_code, "codeKeyLogin response");
         match result.return_code {
             0 => {
-                info!("QR code login successful");
+                info!(
+                    snda_id = ?result.data.snda_id,
+                    auto_login_session_key = ?result.data.auto_login_session_key,
+                    auto_login_max_age_h = result.data.auto_login_max_age.map(|s| s as f32 / 3600.0),
+                    "QR code login successful"
+                );
                 Ok(PollResult::Success(result.data))
             }
             -10515805 => {
@@ -513,7 +528,12 @@ impl SdoAuth {
             return Err(AuthError::AutoLoginExpired);
         }
 
-        info!("Auto login successful");
+        info!(
+            snda_id = ?result.data.snda_id,
+            new_auto_login_session_key = ?result.data.auto_login_session_key,
+            auto_login_max_age_h = result.data.auto_login_max_age.map(|s| s as f32 / 3600.0),
+            "Auto login successful"
+        );
         Ok(result)
     }
 
