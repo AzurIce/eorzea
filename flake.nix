@@ -41,16 +41,44 @@
             extensions = [ "rust-src" ];
           }
         );
+
+        # Tauri v2 system libraries: needed for pkg-config (compile), the linker
+        # (via cc-wrapper -L/-rpath) and at runtime (via rpath).
+        tauriSystemLibs = with pkgs; [
+          openssl # auth crate's reqwest uses default TLS (openssl-sys)
+          webkitgtk_4_1 # provides both webkit2gtk-4.1.pc and javascriptcoregtk-4.1.pc
+          gtk3
+          libsoup_3
+          librsvg
+          libayatana-appindicator
+          glib-networking
+        ];
       in
       {
         packages = { };
         devShells.default = craneLib.devShell {
           packages =
-            [ ]
-            ++ (with pkgs; [
+            with pkgs; [
               cargo-tauri
               gh
-            ]);
+              bun # frontend (bun.lock, `bun run dev` per tauri.conf.json)
+              pkg-config
+            ];
+          buildInputs = tauriSystemLibs;
+          shellHook = ''
+            # Let webkit/GTK find glib-networking's TLS modules at runtime
+            export GIO_EXTRA_MODULES="${pkgs.glib-networking}/lib/gio/modules"
+            # WebKitGTK 2.52's EGL accelerated compositing trips Mutter 50's strict
+            # wp_linux_drm_syncobj_surface_v1 check ("Missing acquire timeline"
+            # protocol error -> app killed at startup). Software rendering avoids
+            # the dmabuf/syncobj path entirely; verified stable. If Mutter is
+            # upgraded and the bug is fixed upstream, this line can be removed.
+            export WEBKIT_DISABLE_COMPOSITING_MODE=1
+            # Fallback if the app ever crashes with
+            #   "Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display"
+            # for another reason:
+            #   export GDK_BACKEND=x11
+          '';
         };
       }
     );
