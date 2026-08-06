@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`xiv-launcher-rs` is a Rust reimplementation of the FFXIV launcher, porting auth and game-launch logic from `../XIVLauncher.Core` (C#). The project uses a Tauri + Rust workspace:
+`xiv-launcher-rs` is a Rust reimplementation of the FFXIV launcher, porting auth and game-launch logic from `XIVLauncher.Core` (C#). The project uses a Tauri + Rust workspace:
 
 ```
 xiv-launcher-rs/              # workspace root (tauri crate)
@@ -68,7 +68,13 @@ cargo run -p xiv-launcher-auth --example se_login            # requires feature 
 
 ### Reference Implementation (C#)
 
-When in doubt about protocol details, check the corresponding files in `../XIVLauncher.Core`:
+When in doubt about protocol details, check the corresponding files in `XIVLauncher.Core`:
+
+> **参考仓库默认位置**：`~/Files/repos/XIVLauncher.Core`（主仓库，`cn` 分支）。
+> 实际认证/启动代码在其 submodule `lib/FFXIVQuickLauncher/`（CN 分支）下，
+> 例如 `SdoLauncher.cs` 位于
+> `~/Files/repos/XIVLauncher.Core/lib/FFXIVQuickLauncher/src/XIVLauncher.Common/Game/SdoLauncher.cs`。
+> 文档中凡提及 `XIVLauncher.Core/...` 均指该默认位置。
 
 | Rust module | C# reference |
 |-------------|--------------|
