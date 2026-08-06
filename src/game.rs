@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use tracing::{debug, error, info, instrument, warn};
 use xiv_launcher_auth::SdoArea;
-use crate::wine::WineTool;
+use crate::settings::WineSettings;
+use crate::wine::{build_launch_env, WineTool};
 
 fn mask_sensitive(value: &str) -> String {
     if value.len() <= 8 {
@@ -196,13 +197,15 @@ fn is_ottercorp_dll(path: &std::path::Path) -> bool {
 /// 启动游戏进程。
 ///
 /// macOS/Linux 通过 Wine 运行，Windows 直接运行。
-#[instrument(skip(config))]
+/// `wine` 参数决定使用哪个 Wine（及 prefix、esync/fsync、DXVK 等设置）。
+#[instrument(skip(config, wine))]
 pub async fn launch_game(
     config: &GameLaunchConfig,
-    custom_wine_path: Option<&std::path::Path>,
+    wine: &WineSettings,
 ) -> Result<GameLaunchResult, GameLaunchError> {
     info!(
         game_path = %config.game_path.display(),
+        wine_type = ?wine.startup_type,
         "launching game"
     );
 
@@ -243,34 +246,35 @@ pub async fn launch_game(
 
     #[cfg(not(target_os = "windows"))]
     {
-        let wine = WineTool::ensure(custom_wine_path)
+        let tool = WineTool::resolve(wine)
             .await
             .map_err(|e| {
-                error!(error = %e, "failed to ensure Wine installation");
+                error!(error = %e, "failed to resolve Wine");
                 GameLaunchError::Wine(format!("{e}"))
             })?;
 
-        // 确保 DXVK 已安装
-        wine.ensure_dxvk().await
-            .map_err(|e| {
-                error!(error = %e, "DXVK setup failed");
-                GameLaunchError::Wine(format!("DXVK setup failed: {e}"))
-            })?;
-        info!("DXVK setup complete");
+        // 校验 wine 可执行（wine64 --version）
+        if let Err(e) = tool.probe() {
+            error!(error = %e, "wine probe failed");
+            return Err(GameLaunchError::Wine(format!("wine probe failed: {e}")));
+        }
+
+        // 需要 DXVK 时确保已安装
+        if wine.dxvk.enabled {
+            tool.ensure_dxvk()
+                .await
+                .map_err(|e| {
+                    error!(error = %e, "DXVK setup failed");
+                    GameLaunchError::Wine(format!("DXVK setup failed: {e}"))
+                })?;
+            info!("DXVK setup complete");
+        }
 
         let arg_list: Vec<String> = args.split_whitespace().map(|s| s.to_string()).collect();
 
-        // macOS 需要设置 WINEDLLOVERRIDES 来使用 DXVK
-        #[cfg(target_os = "macos")]
-        let env = vec![
-            ("WINEDLLOVERRIDES".to_string(), "msquic=,mscoree=n,b;d3d11=n;dxgi=n,b".to_string()),
-        ];
-        #[cfg(not(target_os = "macos"))]
-        let env = vec![
-            ("WINEDLLOVERRIDES".to_string(), "msquic=,mscoree=n,b;d3d9,d3d11,d3d10core,dxgi=n".to_string()),
-        ];
+        let env = build_launch_env(wine, &tool);
 
-        let child = wine
+        let child = tool
             .run(game_path, &arg_list, working_dir, &env)
             .map_err(|e| {
                 error!(error = %e, "failed to run game through Wine");
@@ -281,7 +285,7 @@ pub async fn launch_game(
 
         Ok(GameLaunchResult {
             child,
-            command: format!("{:?} {:?} {}", wine.wine64_path, game_path, args),
+            command: format!("{:?} {:?} {}", tool.wine64_path, game_path, args),
         })
     }
 }
