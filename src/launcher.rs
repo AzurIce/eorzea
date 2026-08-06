@@ -11,13 +11,14 @@
 //!
 //! QR 登录为**分步式**：先生成二维码展示，再在后台等待扫码结果。
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 use tracing::{debug, info, instrument};
 use xiv_launcher_auth::sdo::{PollResult, SdoAuth, SdoContext};
 use xiv_launcher_auth::{SdoArea, SdoLoginData};
 
 use crate::game::{GameLaunchConfig, GameLaunchError, GameLaunchResult};
+use crate::settings::{WineSettings, WineStartupType};
 
 /// 登录凭证（ticket + snda_id + 可选的自动登录 session_key）。
 #[derive(Debug, Clone)]
@@ -138,29 +139,46 @@ impl QrCodeSession {
 pub struct Launcher {
     /// 底层 SDO 认证客户端（如需直接调用底层 API，可通过此字段访问）。
     pub auth: SdoAuth,
-    custom_wine_path: Option<PathBuf>,
+    /// 启动游戏时使用的 Wine 配置（可通过 [`Self::with_wine_settings`] 修改，
+    /// 或每次启动时用 [`Self::launch_with_wine`] 覆盖）。
+    wine_settings: WineSettings,
 }
 
 impl Launcher {
     /// 创建新的 Launcher。
     ///
     /// 内部会自动初始化 `SdoAuth` 并采集设备指纹。
+    /// Wine 配置默认使用 [`WineSettings::default`]（Auto 模式）。
     #[instrument]
     pub fn new() -> Result<Self, LauncherError> {
         let auth = SdoAuth::new().map_err(|e| LauncherError::Auth(format!("{e}")))?;
         info!("Launcher created, device_id collected");
         Ok(Self {
             auth,
-            custom_wine_path: None,
+            wine_settings: WineSettings::default(),
         })
     }
 
-    /// 设置自定义 Wine 路径（可选）。
+    /// 设置 Wine 配置（可选）。
     ///
-    /// 如果不设置，启动时会自动检测或下载 Wine。
-    pub fn with_wine_path(mut self, path: impl AsRef<Path>) -> Self {
-        self.custom_wine_path = Some(path.as_ref().to_path_buf());
+    /// 如果不设置，启动时使用默认配置（自动检测或下载 Wine）。
+    pub fn with_wine_settings(mut self, settings: WineSettings) -> Self {
+        self.wine_settings = settings;
         self
+    }
+
+    /// 便捷方法：指定自定义 Wine 路径。
+    ///
+    /// 等价于 `with_wine_settings(WineSettings { startup_type: Custom, custom_path: Some(path), .. })`。
+    pub fn with_wine_path(mut self, path: impl AsRef<Path>) -> Self {
+        self.wine_settings.startup_type = WineStartupType::Custom;
+        self.wine_settings.custom_path = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// 获取当前 Wine 配置。
+    pub fn wine_settings(&self) -> &WineSettings {
+        &self.wine_settings
     }
 
     /// 获取设备 ID（用于调试或展示）。
@@ -264,12 +282,28 @@ impl Launcher {
 
     // ── 启动游戏 ──────────────────────────────────────────────────────
 
-    /// 启动游戏。
+    /// 启动游戏（使用当前持久化的 Wine 配置）。
     ///
     /// `game_path` 应指向 `ffxiv_dx11.exe` 的完整路径。
     #[instrument(skip(self, token, area, areas, game_path))]
     pub async fn launch(
         &self,
+        token: &LaunchToken,
+        area: SdoArea,
+        areas: Vec<SdoArea>,
+        game_path: impl AsRef<Path>,
+    ) -> Result<GameLaunchResult, LauncherError> {
+        self.launch_with_wine(&self.wine_settings, token, area, areas, game_path)
+            .await
+    }
+
+    /// 启动游戏，单次覆盖 Wine 配置（不写回持久化设置）。
+    ///
+    /// 用于「本次启动换一个 wine」的场景，例如示例/CLI 传入不同 wine 路径。
+    #[instrument(skip(self, wine, token, area, areas, game_path))]
+    pub async fn launch_with_wine(
+        &self,
+        wine: &WineSettings,
         token: &LaunchToken,
         area: SdoArea,
         areas: Vec<SdoArea>,
@@ -289,9 +323,9 @@ impl Launcher {
             additional_args: String::new(),
         };
 
-        info!(path = %game_path.display(), "launching game");
+        info!(path = %game_path.display(), wine_type = ?wine.startup_type, "launching game");
 
-        let result = crate::game::launch_game(&config, self.custom_wine_path.as_deref())
+        let result = crate::game::launch_game(&config, wine)
             .await
             .map_err(LauncherError::from)?;
 

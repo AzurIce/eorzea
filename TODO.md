@@ -87,6 +87,19 @@
 - [ ] **Boot 版本检查**：缺失 `CheckBootVersion`
 - [ ] **UID 缓存**：缺失 `IUniqueIdCache` 实现（`X-Patch-Unique-Id` 缓存）
 
+### P2-4 Wine 配置与启动环境 (`WineSettings.cs` / `CompatibilityTools.cs` → `src/wine.rs` + `src/settings.rs`)
+
+- [x] **`WineSettings` 配置模型**：`startup_type`（Auto/Managed/Custom/System）、`custom_path`、`prefix`、esync/fsync/msync、`debug_vars`、自定义 `env`、DXVK 设置（enabled/hud/frame_limit）、gamemode — `src/settings.rs`
+- [x] **配置持久化**：`~/.xiv-launcher-rs/settings.json`（serde JSON，缺字段回退默认）— `load_settings`/`save_settings`
+- [x] **`WineTool::resolve(&WineSettings)`**：配置 → 运行时解析（Auto = 自定义→托管→系统→下载；Managed/Custom/System 显式分派），`custom_path` 支持 wine64 文件或 bin 目录归一化
+- [x] **`WineTool::probe()`**：`wine64 --version` 校验可执行性
+- [x] **`build_launch_env()`**：对齐 `CompatibilityTools.RunInPrefix` 环境变量（`WINEDLLOVERRIDES`、`WINEESYNC/WINEFSYNC/WINEMSYNC`、`WINEDEBUG`、`DXVK_STATE_CACHE_PATH`/`DXVK_CONFIG_FILE`/`DXVK_HUD`/`DXVK_FRAME_RATE`、`LD_PRELOAD` gamemode、自定义 env 覆盖）
+- [x] **每次启动指定不同 wine**：`Launcher::with_wine_settings`（持久）+ `Launcher::launch_with_wine`（单次覆盖）
+- [ ] **DXVK 变体选择**：当前固定 dxvk-async 1.10.1（CN 镜像）；上游已切换 dxvk-gplasync，未实现
+- [ ] **wine 日志**：`WineSettings.log_file` 未接入（C# 有 StreamWriter 日志）
+- [ ] **prefix 引导 `EnsurePrefix()`**：C# 首次 `cmd /c dir %userprofile%/Documents` 初始化，未实现
+- [ ] **`wineserver` 管理**：C# 有 `wineserver` 路径处理，未实现
+
 ---
 
 ## P3 — 国际服 (SE) 补全（低优先级）
