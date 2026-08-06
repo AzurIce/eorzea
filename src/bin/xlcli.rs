@@ -45,7 +45,7 @@ enum Command {
         sub: GameCommand,
     },
 
-    /// 账号管理（多账号 + 默认账号，配置持久化到 xiv-launcher-rs.toml）
+    /// 账号管理（多账号 + 默认账号，配置持久化到 auth.toml）
     Auth {
         #[command(subcommand)]
         sub: AuthCommand,
@@ -81,9 +81,6 @@ enum Command {
         #[arg(long)]
         qr_file: Option<PathBuf>,
 
-        /// 配置文件路径（默认 {game_dir}/xiv-launcher-rs.toml）
-        #[arg(long)]
-        config: Option<PathBuf>,
     },
 }
 
@@ -170,24 +167,15 @@ enum AuthCommand {
         #[arg(long)]
         qr_file: Option<PathBuf>,
 
-        /// 配置文件路径（默认 ~/.xiv-launcher-rs/xiv-launcher-rs.toml）
-        #[arg(long)]
-        config: Option<PathBuf>,
     },
 
     /// 显示已保存的账号和默认账号
-    Status {
-        #[arg(long)]
-        config: Option<PathBuf>,
-    },
+    Status {},
 
     /// 设置默认账号
     Default {
         /// 账号（snda_id 或 username）
         account: String,
-
-        #[arg(long)]
-        config: Option<PathBuf>,
     },
 
     /// 删除账号（缺省删除默认账号）
@@ -195,9 +183,6 @@ enum AuthCommand {
         /// 账号（snda_id 或 username）
         #[arg(long)]
         account: Option<String>,
-
-        #[arg(long)]
-        config: Option<PathBuf>,
     },
 }
 
@@ -238,23 +223,19 @@ async fn main() {
                 username,
                 session_key,
                 qr_file,
-                config,
             } => {
                 cmd_auth_login(
                     method,
                     username.as_deref(),
                     session_key.as_deref(),
                     qr_file,
-                    config.as_deref(),
                 )
                 .await
             }
-            AuthCommand::Status { config } => cmd_auth_status(config.as_deref()),
-            AuthCommand::Default { account, config } => {
-                cmd_auth_default(&account, config.as_deref())
-            }
-            AuthCommand::Logout { account, config } => {
-                cmd_auth_logout(account.as_deref(), config.as_deref())
+            AuthCommand::Status {} => cmd_auth_status(),
+            AuthCommand::Default { account } => cmd_auth_default(&account),
+            AuthCommand::Logout { account } => {
+                cmd_auth_logout(account.as_deref())
             }
         },
         Command::Launch {
@@ -265,7 +246,6 @@ async fn main() {
             username,
             wine,
             qr_file,
-            config,
         } => {
             cmd_launch(
                 &game_path,
@@ -275,7 +255,6 @@ async fn main() {
                 username.as_deref(),
                 wine.as_deref(),
                 qr_file,
-                config.as_deref(),
             )
             .await;
         }
@@ -598,7 +577,6 @@ async fn cmd_auth_login(
     username: Option<&str>,
     session_key: Option<&str>,
     qr_file: Option<PathBuf>,
-    config: Option<&std::path::Path>,
 ) {
     let token = match do_login(&method, username, session_key, qr_file).await {
         Ok(t) => t,
@@ -609,21 +587,21 @@ async fn cmd_auth_login(
     };
 
     // 保存账号
-    let cfg_path = xiv_launcher_rs_lib::auth_config::config_path(config);
-    let mut cfg = xiv_launcher_rs_lib::auth_config::load(&cfg_path);
+    let cfg_path = xiv_launcher_rs_lib::auth::config_path();
+    let mut cfg = xiv_launcher_rs_lib::auth::load(&cfg_path);
     let make_default = cfg.accounts.is_empty(); // 第一个账号自动设为默认
     let username = username
         .map(|s| s.to_string())
         .or_else(|| token.username.clone());
     cfg.upsert(
-        xiv_launcher_rs_lib::auth_config::Account {
+        xiv_launcher_rs_lib::auth::Account {
             snda_id: token.snda_id.clone(),
             username,
             auto_login_session_key: token.auto_login_session_key.clone(),
         },
         make_default,
     );
-    if let Err(e) = xiv_launcher_rs_lib::auth_config::save(&cfg_path, &cfg) {
+    if let Err(e) = xiv_launcher_rs_lib::auth::save(&cfg_path, &cfg) {
         eprintln!("保存配置失败: {e}");
         std::process::exit(1);
     }
@@ -643,9 +621,9 @@ async fn cmd_auth_login(
 }
 
 /// `auth status`：显示已保存账号。
-fn cmd_auth_status(config: Option<&std::path::Path>) {
-    let cfg_path = xiv_launcher_rs_lib::auth_config::config_path(config);
-    let cfg = xiv_launcher_rs_lib::auth_config::load(&cfg_path);
+fn cmd_auth_status() {
+    let cfg_path = xiv_launcher_rs_lib::auth::config_path();
+    let cfg = xiv_launcher_rs_lib::auth::load(&cfg_path);
 
     println!("=== 已保存账号 ({}) ===", cfg_path.display());
     if cfg.accounts.is_empty() {
@@ -672,9 +650,9 @@ fn cmd_auth_status(config: Option<&std::path::Path>) {
 }
 
 /// `auth default`：设置默认账号。
-fn cmd_auth_default(account: &str, config: Option<&std::path::Path>) {
-    let cfg_path = xiv_launcher_rs_lib::auth_config::config_path(config);
-    let mut cfg = xiv_launcher_rs_lib::auth_config::load(&cfg_path);
+fn cmd_auth_default(account: &str) {
+    let cfg_path = xiv_launcher_rs_lib::auth::config_path();
+    let mut cfg = xiv_launcher_rs_lib::auth::load(&cfg_path);
 
     // 支持 snda_id 或 username 匹配；存储时 username 优先（可读），无则 snda_id
     let found = cfg.find_by_identifier(account).cloned();
@@ -684,7 +662,7 @@ fn cmd_auth_default(account: &str, config: Option<&std::path::Path>) {
             cfg.default_account = Some(
                 acc.username.clone().unwrap_or_else(|| acc.snda_id.clone()),
             );
-            if let Err(e) = xiv_launcher_rs_lib::auth_config::save(&cfg_path, &cfg) {
+            if let Err(e) = xiv_launcher_rs_lib::auth::save(&cfg_path, &cfg) {
                 eprintln!("保存配置失败: {e}");
                 std::process::exit(1);
             }
@@ -698,9 +676,9 @@ fn cmd_auth_default(account: &str, config: Option<&std::path::Path>) {
 }
 
 /// `auth logout`：删除账号（缺省删默认账号）。
-fn cmd_auth_logout(account: Option<&str>, config: Option<&std::path::Path>) {
-    let cfg_path = xiv_launcher_rs_lib::auth_config::config_path(config);
-    let mut cfg = xiv_launcher_rs_lib::auth_config::load(&cfg_path);
+fn cmd_auth_logout(account: Option<&str>) {
+    let cfg_path = xiv_launcher_rs_lib::auth::config_path();
+    let mut cfg = xiv_launcher_rs_lib::auth::load(&cfg_path);
 
     let target = match account {
         Some(a) => a.to_string(),
@@ -720,7 +698,7 @@ fn cmd_auth_logout(account: Option<&str>, config: Option<&std::path::Path>) {
         match by_name {
             Some(id) => {
                 cfg.remove(&id);
-                let _ = xiv_launcher_rs_lib::auth_config::save(&cfg_path, &cfg);
+                let _ = xiv_launcher_rs_lib::auth::save(&cfg_path, &cfg);
                 println!("已删除账号: {target} ({})", cfg_path.display());
             }
             None => {
@@ -729,7 +707,7 @@ fn cmd_auth_logout(account: Option<&str>, config: Option<&std::path::Path>) {
             }
         }
     } else {
-        if let Err(e) = xiv_launcher_rs_lib::auth_config::save(&cfg_path, &cfg) {
+        if let Err(e) = xiv_launcher_rs_lib::auth::save(&cfg_path, &cfg) {
             eprintln!("保存配置失败: {e}");
             std::process::exit(1);
         }
@@ -746,13 +724,12 @@ async fn cmd_launch(
     username: Option<&str>,
     wine: Option<&std::path::Path>,
     qr_file: Option<PathBuf>,
-    config: Option<&std::path::Path>,
 ) {
     // 确定登录方式：
     // 1. --account 指定（或配置默认账号）且该账号有 session key → auto 登录
     // 2. --method 手动登录
-    let cfg_path = xiv_launcher_rs_lib::auth_config::config_path(config);
-    let cfg = xiv_launcher_rs_lib::auth_config::load(&cfg_path);
+    let cfg_path = xiv_launcher_rs_lib::auth::config_path();
+    let cfg = xiv_launcher_rs_lib::auth::load(&cfg_path);
 
     let token = if let Some(m) = method {
         let method_enum = match m {
@@ -788,15 +765,15 @@ async fn cmd_launch(
                                 // 立即更新配置，否则下次自动登录会过期
                                 if let Some(new_key) = &t.auto_login_session_key {
                                     let cfg_path =
-                                        xiv_launcher_rs_lib::auth_config::config_path(config);
-                                    let mut cfg = xiv_launcher_rs_lib::auth_config::load(&cfg_path);
+                                        xiv_launcher_rs_lib::auth::config_path();
+                                    let mut cfg = xiv_launcher_rs_lib::auth::load(&cfg_path);
                                     if let Some(acc) = cfg
                                         .accounts
                                         .iter_mut()
                                         .find(|a| a.snda_id == t.snda_id)
                                     {
                                         acc.auto_login_session_key = Some(new_key.clone());
-                                        if let Err(e) = xiv_launcher_rs_lib::auth_config::save(
+                                        if let Err(e) = xiv_launcher_rs_lib::auth::save(
                                             &cfg_path, &cfg,
                                         ) {
                                             eprintln!("更新 session key 失败: {e}");
@@ -859,7 +836,9 @@ async fn cmd_launch(
         std::process::exit(1);
     }
 
-    let mut launcher = Launcher::new().expect("failed to create Launcher");
+    let mut launcher = Launcher::new()
+        .expect("failed to create Launcher")
+        .with_wine_settings(xiv_launcher_rs_lib::config::load_settings());
     if let Some(w) = wine {
         launcher = launcher.with_wine_path(w);
     }
@@ -878,7 +857,7 @@ async fn cmd_launch(
 }
 
 /// 辅助：显示账号展示名（找不到时回退为传入的 id）。
-fn a_display(cfg: &xiv_launcher_rs_lib::auth_config::AuthConfig, id: &str) -> String {
+fn a_display(cfg: &xiv_launcher_rs_lib::auth::AuthConfig, id: &str) -> String {
     cfg.find(id)
         .map(|a| a.display_name().to_string())
         .unwrap_or_else(|| id.to_string())

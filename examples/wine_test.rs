@@ -11,7 +11,7 @@
 
 use tracing::{error, info};
 
-use xiv_launcher_rs_lib::settings::{WineSettings, WineStartupType};
+use xiv_launcher_rs_lib::config::{WineSettings, WineStartupType};
 use xiv_launcher_rs_lib::wine::WineTool;
 
 #[tokio::main]

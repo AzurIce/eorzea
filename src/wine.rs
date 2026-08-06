@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tracing::{debug, error, info, warn};
 
-use crate::settings::{WineSettings, WineStartupType};
+use crate::config::{WineSettings, WineStartupType};
 
 /// Wine 管理工具。
 #[derive(Debug)]
@@ -26,7 +26,7 @@ impl WineTool {
     /// 优先级：
     /// 1. 用户自定义路径（通过 `custom_path` 参数）
     /// 2. XIVLauncher 已下载的 wine（`~/.xlcore/beta/wine/bin/wine64`）
-    /// 3. 系统 wine64（`PATH` 中的 `wine64`）
+    /// 3. 系统 wine（`PATH` 中的 `wine64` 或 `wine`）
     #[tracing::instrument]
     pub fn detect(custom_path: Option<&Path>) -> Option<Self> {
         // 1. 自定义路径
@@ -47,20 +47,14 @@ impl WineTool {
             }
         }
 
-        // 3. 系统 wine64
-        if let Ok(output) = Command::new("which").arg("wine64").output() {
-            if output.status.success() {
-                let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !path_str.is_empty() {
-                    let path = PathBuf::from(path_str);
-                    info!(?path, "Found system wine64");
-                    return Some(Self {
-                        wine64_path: path,
-                        prefix_path: Self::default_prefix_path(),
-                        is_managed: false,
-                    });
-                }
-            }
+        // 3. 系统 wine（wine64 优先，回退 wine——新 WoW64 构建如 nixpkgs 只提供 wine）
+        if let Some(path) = find_system_wine() {
+            info!(?path, "Found system wine");
+            return Some(Self {
+                wine64_path: path,
+                prefix_path: Self::default_prefix_path(),
+                is_managed: false,
+            });
         }
 
         info!("Wine not found");
@@ -144,39 +138,39 @@ impl WineTool {
                 Ok(Self::apply_prefix(tool, settings))
             }
             WineStartupType::System => {
-                if let Ok(output) = Command::new("which").arg("wine64").output() {
-                    if output.status.success() {
-                        let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                        if !path_str.is_empty() {
-                            let tool = Self {
-                                wine64_path: PathBuf::from(path_str),
-                                prefix_path: Self::default_prefix_path(),
-                                is_managed: false,
-                            };
-                            return Ok(Self::apply_prefix(tool, settings));
-                        }
-                    }
+                if let Some(path) = find_system_wine() {
+                    let tool = Self {
+                        wine64_path: path,
+                        prefix_path: Self::default_prefix_path(),
+                        is_managed: false,
+                    };
+                    return Ok(Self::apply_prefix(tool, settings));
                 }
                 Err(WineError::NotFound(
-                    "system wine64 not found in PATH".to_string(),
+                    "system wine/wine64 not found in PATH".to_string(),
                 ))
             }
         }
     }
 
-    /// 校验自定义路径：接受 `wine64` 可执行文件，或含 `wine64`/`bin/wine64` 的目录。
+    /// 校验自定义路径：接受 wine 可执行文件，或含 `wine64`/`wine`（或其 `bin/` 下）的目录。
     fn normalize_wine64_path(path: &Path) -> Result<PathBuf, WineError> {
         if path.is_file() {
             return Ok(path.to_path_buf());
         }
         if path.is_dir() {
-            for candidate in [path.join("wine64"), path.join("bin/wine64")] {
+            for candidate in [
+                path.join("wine64"),
+                path.join("wine"),
+                path.join("bin/wine64"),
+                path.join("bin/wine"),
+            ] {
                 if candidate.is_file() {
                     return Ok(candidate);
                 }
             }
             return Err(WineError::NotFound(format!(
-                "no wine64 found under directory {:?}",
+                "no wine/wine64 found under directory {:?}",
                 path
             )));
         }
@@ -492,6 +486,24 @@ impl WineTool {
     }
 }
 
+/// 在 PATH 中查找系统 wine（优先 `wine64`，回退 `wine`）。
+///
+/// 新 WoW64 架构（wine 11+，如 nixpkgs `wineWow64Packages`）已合并加载器，
+/// 只提供 `wine`，不再提供 `wine64`。
+fn find_system_wine() -> Option<PathBuf> {
+    for name in ["wine64", "wine"] {
+        if let Ok(output) = Command::new("which").arg(name).output() {
+            if output.status.success() {
+                let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path_str.is_empty() {
+                    return Some(PathBuf::from(path_str));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// 在目录下查找包含 `bin/wine64` 的子目录（tar 包顶层目录名不确定）。
 fn find_wine64_under(dir: &Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(dir).ok()?;
@@ -676,7 +688,7 @@ mod tests {
             esync: true,
             fsync: true,
             debug_vars: Some("+seh".to_string()),
-            dxvk: crate::settings::DxvkSettings {
+            dxvk: crate::config::DxvkSettings {
                 enabled: false,
                 hud: None,
                 frame_limit: None,
@@ -705,7 +717,7 @@ mod tests {
     #[test]
     fn test_build_launch_env_dxvk_hud_frame_limit() {
         let settings = WineSettings {
-            dxvk: crate::settings::DxvkSettings {
+            dxvk: crate::config::DxvkSettings {
                 enabled: true,
                 hud: Some("fps".to_string()),
                 frame_limit: Some(120),

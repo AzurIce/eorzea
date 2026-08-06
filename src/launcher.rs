@@ -18,7 +18,7 @@ use xiv_launcher_auth::sdo::{PollResult, SdoAuth, SdoContext};
 use xiv_launcher_auth::{SdoArea, SdoLoginData};
 
 use crate::game::{GameLaunchConfig, GameLaunchError, GameLaunchResult};
-use crate::settings::{WineSettings, WineStartupType};
+use crate::config::{WineSettings, WineStartupType};
 
 /// 登录凭证（ticket + snda_id + 可选的自动登录 session_key）。
 #[derive(Debug, Clone)]

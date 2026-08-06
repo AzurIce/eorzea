@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use tracing::{debug, error, info, instrument, warn};
 use xiv_launcher_auth::SdoArea;
-use crate::settings::WineSettings;
+use crate::config::WineSettings;
 use crate::wine::{build_launch_env, WineTool};
 
 fn mask_sensitive(value: &str) -> String {

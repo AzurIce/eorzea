@@ -1,9 +1,9 @@
-pub mod auth_config;
+pub mod auth;
 pub mod game_files;
 pub mod term_img;
 pub mod game;
 pub mod launcher;
-pub mod settings;
+pub mod config;
 pub mod wine;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/

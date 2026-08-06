@@ -1,10 +1,8 @@
-//! xiv-launcher-rs 持久化配置（账号管理）。
+//! xiv-launcher-rs 账号配置（`~/.xiv-launcher-rs/auth.toml`）。
 //!
-//! 配置文件名 `xiv-launcher-rs.toml`，TOML 格式。位置优先级：
-//!
-//! 1. `--config <path>` 显式指定
-//! 2. `XIV_LAUNCHER_RS_CONFIG` 环境变量
-//! 3. `~/.xiv-launcher-rs/xiv-launcher-rs.toml`（默认）
+//! 与 Wine 配置（`config.toml`，见 `settings.rs`）分开存储。
+//! 位置固定：`~/.xiv-launcher-rs/auth.toml`。
+//! 旧版 `xiv-launcher-rs.toml` 会在首次加载时自动迁移。
 //!
 //! ```toml
 //! default_account = "12345"
@@ -131,24 +129,33 @@ impl AuthConfig {
     }
 }
 
-/// 配置文件路径解析。
-///
-/// 优先级：显式 `--config` > 环境变量 `XIV_LAUNCHER_RS_CONFIG` >
-/// `~/.xiv-launcher-rs/xiv-launcher-rs.toml`。
-pub fn config_path(explicit: Option<&Path>) -> PathBuf {
-    if let Some(p) = explicit {
-        return p.to_path_buf();
-    }
-    if let Some(p) = std::env::var_os("XIV_LAUNCHER_RS_CONFIG") {
-        return PathBuf::from(p);
-    }
+/// 配置文件路径：`~/.xiv-launcher-rs/auth.toml`。
+pub fn config_path() -> PathBuf {
+    dirs::home_dir()
+        .map(|h| h.join(".xiv-launcher-rs/auth.toml"))
+        .unwrap_or_else(|| PathBuf::from("auth.toml"))
+}
+
+/// 旧版 `xiv-launcher-rs.toml` 路径（迁移用）。
+pub fn legacy_path() -> PathBuf {
     dirs::home_dir()
         .map(|h| h.join(".xiv-launcher-rs/xiv-launcher-rs.toml"))
         .unwrap_or_else(|| PathBuf::from("xiv-launcher-rs.toml"))
 }
 
-/// 加载配置（文件不存在时返回空配置）。
+/// 加载配置（文件不存在时返回空配置，旧文件自动迁移）。
 pub fn load(path: &Path) -> AuthConfig {
+    if !path.exists() {
+        let legacy = legacy_path();
+        if legacy.exists() && legacy != *path {
+            let cfg = load_from_legacy(&legacy);
+            if cfg != AuthConfig::default() {
+                info!(path = %legacy.display(), "migrating legacy xiv-launcher-rs.toml to auth.toml");
+                let _ = save(path, &cfg);
+                return cfg;
+            }
+        }
+    }
     match std::fs::read_to_string(path) {
         Ok(content) => match toml::from_str(&content) {
             Ok(cfg) => {
@@ -165,6 +172,14 @@ pub fn load(path: &Path) -> AuthConfig {
             AuthConfig::default()
         }
     }
+}
+
+/// 从指定 TOML 路径加载（不迁移）。
+pub fn load_from_legacy(path: &Path) -> AuthConfig {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| toml::from_str(&s).ok())
+        .unwrap_or_default()
 }
 
 /// 保存配置到文件（自动创建父目录）。

@@ -3,6 +3,8 @@
 //! 对应 C# 的 `WineSettings.cs` + 配置持久化。
 //! 与 `wine.rs` 的关系：这里是**声明式配置**，`WineTool` 是解析后的运行时对象。
 //! 支持"启动时使用不同的 wine"：持久化默认配置 + `Launcher::launch_with_wine` 单次覆盖。
+//!
+//! 配置文件：`~/.xiv-launcher-rs/config.toml`（TOML，旧版 `settings.json` 自动迁移）。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -96,8 +98,15 @@ impl Default for WineSettings {
     }
 }
 
-/// 配置文件路径：`~/.xiv-launcher-rs/settings.json`。
+/// 配置文件路径：`~/.xiv-launcher-rs/config.toml`。
 pub fn settings_path() -> PathBuf {
+    dirs::home_dir()
+        .map(|h| h.join(".xiv-launcher-rs/config.toml"))
+        .unwrap_or_else(|| PathBuf::from("config.toml"))
+}
+
+/// 旧版 `settings.json` 路径（迁移用）。
+pub fn legacy_settings_path() -> PathBuf {
     dirs::home_dir()
         .map(|h| h.join(".xiv-launcher-rs/settings.json"))
         .unwrap_or_else(|| PathBuf::from("settings.json"))
@@ -106,7 +115,7 @@ pub fn settings_path() -> PathBuf {
 /// 从指定路径加载配置；文件不存在或解析失败时返回默认值。
 pub fn load_settings_from(path: &Path) -> WineSettings {
     match std::fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str(&text) {
+        Ok(text) => match toml::from_str(&text) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = %e, "failed to parse settings, using defaults");
@@ -117,19 +126,46 @@ pub fn load_settings_from(path: &Path) -> WineSettings {
     }
 }
 
-/// 加载默认位置（`~/.xiv-launcher-rs/settings.json`）的配置。
+/// 加载默认位置（`~/.xiv-launcher-rs/config.toml`）的配置。
+///
+/// 若新文件不存在但旧版 `settings.json` 存在，自动迁移并保存。
 pub fn load_settings() -> WineSettings {
-    load_settings_from(&settings_path())
+    let path = settings_path();
+    if !path.exists() {
+        let legacy = legacy_settings_path();
+        if legacy.exists() {
+            let s = load_settings_from_json(&legacy);
+            if s != WineSettings::default() {
+                tracing::info!(path = %legacy.display(), "migrating legacy settings.json to config.toml");
+                let _ = save_settings(&s);
+                return s;
+            }
+        }
+    }
+    load_settings_from(&path)
 }
 
-/// 保存配置到指定路径（创建父目录，pretty JSON）。
+/// 从旧版 JSON 格式（`settings.json`）加载。
+fn load_settings_from_json(path: &Path) -> WineSettings {
+    match std::fs::read_to_string(path) {
+        Ok(text) => match serde_json::from_str(&text) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "failed to parse legacy settings.json");
+                WineSettings::default()
+            }
+        },
+        Err(_) => WineSettings::default(),
+    }
+}
+
+/// 保存配置到指定路径（创建父目录，pretty TOML）。
 pub fn save_settings_to(path: &Path, settings: &WineSettings) -> Result<(), std::io::Error> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(settings)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(path, json)
+    let toml_str = toml::to_string_pretty(settings).map_err(std::io::Error::other)?;
+    std::fs::write(path, toml_str)
 }
 
 /// 保存配置到默认位置。
@@ -174,16 +210,16 @@ mod tests {
             gamemode: true,
         };
 
-        let json = serde_json::to_string_pretty(&s).unwrap();
-        let back: WineSettings = serde_json::from_str(&json).unwrap();
+        let toml_str = toml::to_string_pretty(&s).unwrap();
+        let back: WineSettings = toml::from_str(&toml_str).unwrap();
         assert_eq!(back, s);
     }
 
     #[test]
     fn test_serde_missing_fields_use_defaults() {
         // 旧配置只有部分字段，缺字段应回退默认值
-        let json = r#"{"startup_type":"custom","custom_path":"/opt/wine"}"#;
-        let s: WineSettings = serde_json::from_str(json).unwrap();
+        let toml_str = "startup_type = \"custom\"\ncustom_path = \"/opt/wine\"\n";
+        let s: WineSettings = toml::from_str(toml_str).unwrap();
         assert_eq!(s.startup_type, WineStartupType::Custom);
         assert!(!s.esync);
         assert!(s.dxvk.enabled);
@@ -194,7 +230,7 @@ mod tests {
     fn test_save_load_roundtrip() {
         let dir = std::env::temp_dir().join(format!("xlrs-settings-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.json");
+        let path = dir.join("config.toml");
 
         let s = WineSettings {
             startup_type: WineStartupType::System,
@@ -212,7 +248,7 @@ mod tests {
     fn test_load_missing_file_returns_default() {
         let dir =
             std::env::temp_dir().join(format!("xlrs-settings-missing-{}", std::process::id()));
-        let path = dir.join("nope.json");
+        let path = dir.join("nope.toml");
         let s = load_settings_from(&path);
         assert_eq!(s, WineSettings::default());
     }
