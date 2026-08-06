@@ -31,9 +31,10 @@ rpassword = "7"
 clap = { version = "4", features = ["derive"] }
 sha1 = "0.10"
 flate2 = "1"
+base64 = "0.22"
+toml = "0.8"
 
 [[example]]
 name = "sdo_launch"
 path = "examples/sdo_launch.rs"
 required-features = ["xiv-launcher-auth/sdo"]
-

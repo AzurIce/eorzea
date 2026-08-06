@@ -23,6 +23,8 @@
 
 - [x] **自动注入 Cookie**：每个请求注入 `CASCID=CID{MD5(MAC)}` 和 `SECURE_CASCID=CID{MD5(MAC)}` 及 `_rsid=""`（通过 `build_cookie_header()` 方法）
 - [x] **`getPromotionInfo` 补全 `serviceUrl` 参数**：已添加 `serviceUrl=http%3A%2F%2Fwww.sdo.com`
+- [x] **`getPromotionInfo` 请求/响应对齐**：请求已补全 `common_query()` 和完整 CAS Cookie，并解析 JSON、检查 `return_code`/`error_type`；激活失败会中止登录
+- [x] **`macId` 参数语义对齐**：`common_query()` 发送 `SdoUtils.GetMac()` 对应的原始设备标识，密码登录 `mac` 和 `CASCID` 继续使用其 MD5
 - [x] **请求头 `Host`**：所有 SDO 请求添加 `Host: cas.sdo.com`
 
 ### P0-3 SDO 错误处理完善
@@ -41,9 +43,9 @@
 
 ### P1-1 扫码登录后处理 (`SdoLauncher.cs` → `QrCodeLogin`)
 
-- [ ] **`getAccountGroup` 调用**：扫码成功后需调用 `getAccountGroup.json?tgt={tgt}&serviceUrl=http://www.sdo.com` 获取账号列表
-- [ ] **`accountGroupLogin` 调用**（自动登录时）：传入 `sndaId` 和 `autoLoginKeepTime` 获取新的 tgt
-- [ ] **选择 `sndaId`**：如果账号组有多个 sndaId，需要让用户选择或使用默认
+- [x] **`getAccountGroup`/`accountGroupLogin`**：扫码/推送确认后调用 `account_group_login` 刷新 tgt 并获取 `auto_login_session_key`（对应 C# `AccountGroupLogin`），`launch` 自动登录链路打通
+- [x] **自动登录续期**：`autoLogin.json` 每次返回新 key + `autoLoginMaxAge`（剩余期限）；`fast_login`（`fastLogin.json`）再刷新 tgt/snda_id 对齐 C# `LoginBySessionKey`；`launch` 自动登录后保存新 key 到配置（旧 key 立即作废），并在输出显示剩余有效期
+- [ ] **选择 `sndaId`**：`getAccountGroup` 多账号选择暂未实现（当前直接用响应中的 snda_id）
 - [x] **QR 扫码完整链路**：`qr_code_request` → 轮询 → `sso_login(tgt)` → ticket 获取已验证通过
 
 ### P1-2 推送/滑动登录超时与取消
@@ -68,6 +70,7 @@
 - [x] **`XL.DcTraveler` 参数**：当 `dc_travel_port > 0` 时添加
 - [x] **端到端验证**：`sdo_login` 示例完成 QR 扫码 → `sso_login` → ticket 获取 → 启动参数构造
 - [x] **`sdologinentry64.dll` 替换**：`EnsureLoginEntry()` — 自动从 ottercorp GitHub 下载修改版 DLL，缓存到 `~/.xiv-launcher-rs/tools/`，复制到 `{gamePath}/sdo/sdologinentry64.dll`
+  - **已修复（2026-08-06）**：`is_ottercorp_dll()` 原先按 UTF-8 搜索 `"ottercorp"`，但 PE version info 中该字符串是 UTF-16LE 存储，检测恒为 false → 每次启动都把当前 DLL 备份覆盖 `.sdo.dll`，第二次启动即永久覆盖原版备份，修改版 shim 转发到自身导致游戏内 5003「帐号认证发生了错误」。现已同时匹配 ASCII/UTF-16LE 两种编码，且已有 `.sdo.dll` 备份时不再覆盖
 
 ### P2-2 参数加密 (`ArgumentBuilder.cs` → `BuildEncrypted`)
 
@@ -86,8 +89,11 @@
 - [x] **SDO 版本检查协议**：`game_files` 的 `check_update()` 实现 `CheckGameUpdate`（POST `{area_patch}/http/win32/shanda_release_chs_game/{ver}`，`X-Hash-Check` 头，解析 `X-Patch-Unique-Id` + TSV），免登录，已通过真实 API 验证（返回 185 补丁/126 GiB）
 - [x] **补丁列表解析**：`game_files/patch_list.rs` 实现 `PatchListParser`（跳过前 5 行、9 字段带 hash / 6 字段 boot），`PatchListEntry` 扩展为完整字段（`hash_type`/`hash_block_size`/`hashes[]`）
 - [x] **补丁下载管理**：`game_files/patch_manager.rs` 实现下载管线（并发 4 槽同 C# `MAX_DOWNLOADS_AT_ONCE`、SHA1 块校验同 `CheckPatchValidity`、已校验文件跳过、进度回调）；SHA1 块算法已用真实补丁验证通过
+- [x] **修复跨仓库补丁缓存名碰撞（2026-08-06）**：缓存名加入完整 URL 的 SHA1 身份，`ffxiv`、`ex1`-`ex5` 的同名补丁不再互相覆盖；安装前再次校验长度/逐块 SHA1，不匹配时禁止应用和写 `.ver`。旧的 basename + version 歧义缓存不会再被复用
 - [x] **xlcli 命令行**：`src/bin/xlcli.rs`（clap）— `areas` / `game status` / `game check` / `game update`（下载 + 应用）
-- [x] **补丁应用**（ZiPatch）：`src/game_files/zpatch/` 完整移植 C# `ZiPatch` 解析与应用（FHDR/APLY/SQPK:T/F/A/D/E/H/I/X/ADIR/DELD/EOF），`RemotePatchInstaller` 流程（应用 → `SetVer` → `VerToBck`）；**已通过真实游戏目录端到端验证**（17 补丁 1.17 GiB 全部应用成功，再次 check 返回已最新）
+- [x] **xlcli auth**：多账号管理 — `auth login qr|password|auto` / `auth status` / `auth default <账号>` / `auth logout`；配置持久化到 `~/.xiv-launcher-rs/xiv-launcher-rs.toml`（`--config` 或 `XIV_LAUNCHER_RS_CONFIG` 覆盖）；`launch` 未指定账号时用默认账号自动登录
+- [x] **xlcli login/launch**：登录 + 启动游戏；扫码二维码通过终端图片协议直接显示（kitty graphics protocol / iTerm2 OSC 1337，`src/term_img.rs`），无协议时 fallback 保存 PNG
+- [x] **补丁应用**（ZiPatch）：`src/game_files/zpatch/` 完整移植 C# `ZiPatch` 解析与应用（FHDR/APLY/SQPK:T/F/A/D/E/H/I/X/ADIR/DELD/EOF），`RemotePatchInstaller` 流程（应用 → `SetVer` → `VerToBck`）；已用修复后的唯一缓存键重放 11 个补丁（877.50 MiB），版本检查通过且实际启动进入游戏
 - [ ] **Boot 版本检查**：国服无需实现（C# `CheckBootVersion` 对 CN 直接 `return Array.Empty`）
 - [ ] **完整性校验**（`PatchVerifier`）：未实现，需 IndexedZiPatch 索引或逐文件 hash
 - [ ] **断点续传**（Range）：当前不完整文件整体重下，部分下载续传待加
@@ -101,6 +107,7 @@
 - [x] **`WineTool::probe()`**：`wine64 --version` 校验可执行性
 - [x] **`build_launch_env()`**：对齐 `CompatibilityTools.RunInPrefix` 环境变量（`WINEDLLOVERRIDES`、`WINEESYNC/WINEFSYNC/WINEMSYNC`、`WINEDEBUG`、`DXVK_STATE_CACHE_PATH`/`DXVK_CONFIG_FILE`/`DXVK_HUD`/`DXVK_FRAME_RATE`、`LD_PRELOAD` gamemode、自定义 env 覆盖）
 - [x] **每次启动指定不同 wine**：`Launcher::with_wine_settings`（持久）+ `Launcher::launch_with_wine`（单次覆盖）
+- [x] **Wine 非 ASCII 游戏路径预检**：Linux/macOS 启动前拒绝包含非 ASCII 字符的完整游戏路径并返回明确错误，避免游戏内报误导性的 5003「帐号认证发生了错误」
 - [ ] **DXVK 变体选择**：当前固定 dxvk-async 1.10.1（CN 镜像）；上游已切换 dxvk-gplasync，未实现
 - [ ] **wine 日志**：`WineSettings.log_file` 未接入（C# 有 StreamWriter 日志）
 - [ ] **prefix 引导 `EnsurePrefix()`**：C# 首次 `cmd /c dir %userprofile%/Documents` 初始化，未实现

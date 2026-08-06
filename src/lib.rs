@@ -1,4 +1,6 @@
+pub mod auth_config;
 pub mod game_files;
+pub mod term_img;
 pub mod game;
 pub mod launcher;
 pub mod settings;

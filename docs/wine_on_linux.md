@@ -39,6 +39,8 @@ Linux 下跑 FFXIV 涉及三个相互独立的目录：
 
 **prefix 与 wine binary 没有绑定关系**：一个 prefix 可以被不同版本的 wine 共用（`WINEPREFIX` 只是个环境变量，指哪用哪），一个 wine 也可以同时服务多个 prefix。XIVLauncher 就是"单一 prefix + 可换 wine binary"的用法——它把托管 wine 升级到新版本时 prefix 并不重建。
 
+本项目在 Linux/macOS 上要求游戏完整路径只包含 ASCII 字符，例如 `~/Games/ffxiv`。Wine 可以把普通 Unix 路径映射到 Z: 盘，但 FFXIV 国服的启动链路不能可靠处理非 ASCII 路径；使用 `~/Games/最终幻想XIV` 一类目录可能在游戏内表现为误导性的 `5003` 认证错误。启动器会在启动 Wine 前拒绝这类路径并返回明确错误。
+
 换掉 Wine 方案 = 换掉第一个目录（解释器），游戏文件原封不动。唯一的耦合点在 prefix：注册表、DLL override 和 DXVK 安装状态是装在 prefix 里的，换 Wine 家族（如 staging ↔ Proton 系）偶尔需要重建 prefix，但游戏文件从不受影响。
 
 ## 方案对比

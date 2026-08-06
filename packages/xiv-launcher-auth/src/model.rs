@@ -154,13 +154,13 @@ pub struct SdoLoginResult {
 /// - 推送登录: `push_msg_session_key`（用于轮询）
 #[derive(Debug, Clone, Deserialize)]
 pub struct SdoLoginData {
-    #[serde(default)]
+    #[serde(default, rename = "failReason", alias = "failReason")]
     pub fail_reason: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "nextAction", alias = "nextAction")]
     pub next_action: Option<i32>,
     #[serde(default)]
     pub guid: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "dynamicKey", alias = "dynamicKey")]
     pub dynamic_key: Option<String>,
     #[serde(default)]
     pub ticket: Option<String>,
@@ -168,17 +168,17 @@ pub struct SdoLoginData {
     pub snda_id: Option<String>,
     #[serde(default)]
     pub tgt: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "autoLoginSessionKey", alias = "autoLoginSessionKey")]
     pub auto_login_session_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "autoLoginMaxAge", alias = "autoLoginMaxAge")]
     pub auto_login_max_age: Option<i32>,
-    #[serde(default)]
+    #[serde(default, rename = "inputUserId", alias = "inputUserId")]
     pub input_user_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "pushMsgSerialNum", alias = "pushMsgSerialNum")]
     pub push_msg_serial_num: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "pushMsgSessionKey", alias = "pushMsgSessionKey")]
     pub push_msg_session_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "accountArray", alias = "accountArray")]
     pub account_array: Option<Vec<String>>,
     #[serde(default, rename = "SndaIdArray", alias = "sndaIdArray")]
     pub snda_id_array: Option<Vec<String>>,

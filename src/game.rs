@@ -49,8 +49,6 @@ pub struct GameLaunchResult {
 /// 参考 C# `SdoLauncher.LaunchGameSdo()` 的参数构造方式。
 #[instrument(skip(config))]
 pub fn build_sdo_launch_args(config: &GameLaunchConfig) -> String {
-    let areas_info = build_lobby_hosts(&config.areas);
-
     let mut args = Vec::new();
 
     args.push(format!("-AppID={}", 100001900));
@@ -63,11 +61,11 @@ pub fn build_sdo_launch_args(config: &GameLaunchConfig) -> String {
     args.push(format!("DEV.MaxEntitledExpansionID={}", config.max_expansion));
     args.push(format!("DEV.TestSID={}", config.session_id));
     args.push(format!("XL.SndaId={}", config.snda_id));
-    args.push(format!("XL.LobbyHosts={}", areas_info));
+    // C# MainPage 传 areasInfo=""（空），游戏从服务器获取服务器列表
+    args.push("XL.LobbyHosts=".to_string());
 
-    if let Some(port) = config.dc_travel_port {
-        args.push(format!("XL.DcTraveler={}", port));
-    }
+    // C# 总是传 XL.DcTraveler（无 DC 传送时为 0）
+    args.push(format!("XL.DcTraveler={}", config.dc_travel_port.unwrap_or(0)));
 
     if !config.additional_args.is_empty() {
         args.push(config.additional_args.clone());
@@ -82,6 +80,7 @@ pub fn build_sdo_launch_args(config: &GameLaunchConfig) -> String {
     result
 }
 
+#[cfg(test)]
 fn build_lobby_hosts(areas: &[SdoArea]) -> String {
     areas
         .iter()
@@ -116,8 +115,14 @@ pub async fn ensure_login_entry(game_path: &std::path::Path) -> Result<(), GameL
     } else if !is_ottercorp_dll(&entry_dll) {
         info!(path = %entry_dll.display(), "existing DLL is not ottercorp version, replacing");
         let backup = boot_path.join("sdologinentry64.sdo.dll");
-        std::fs::copy(&entry_dll, &backup).map_err(GameLaunchError::Io)?;
-        info!(backup = %backup.display(), "backed up original DLL");
+        // 已有备份时不要覆盖：备份是修改版 shim 转发的目标，
+        // 一旦检测误判再次覆盖备份会永久丢失原版 DLL。
+        if !backup.exists() {
+            std::fs::copy(&entry_dll, &backup).map_err(GameLaunchError::Io)?;
+            info!(backup = %backup.display(), "backed up original DLL");
+        } else {
+            info!(backup = %backup.display(), "backup already exists, keeping it");
+        }
         let src = download_ottercorp_dll().await?;
         std::fs::copy(&src, &entry_dll).map_err(GameLaunchError::Io)?;
         info!("replaced sdologinentry64.dll with ottercorp version");
@@ -180,13 +185,18 @@ async fn download_ottercorp_dll() -> Result<std::path::PathBuf, GameLaunchError>
 }
 
 /// 检查 DLL 是否为 ottercorp 修改版（通过 PE 文件 version info 中的 CompanyName）。
+///
+/// 注意：PE version info 中的字符串以 UTF-16LE 存储（`o\0t\0t\0...`），
+/// 直接按字节/UTF-8 搜索 "ottercorp" 永远匹配不到，必须同时检查两种编码。
 #[instrument]
 fn is_ottercorp_dll(path: &std::path::Path) -> bool {
-    // 简单检查：读取文件前 2KB，搜索 "ottercorp" 字符串
     debug!(path = %path.display(), "checking if DLL is ottercorp version");
     if let Ok(data) = std::fs::read(path) {
-        let text = String::from_utf8_lossy(&data);
-        let result = text.contains("ottercorp");
+        const ASCII: &[u8] = b"ottercorp";
+        // UTF-16LE 编码的 "ottercorp"
+        const UTF16LE: &[u8] = b"o\0t\0t\0e\0r\0c\0o\0r\0p\0";
+        let found = |needle: &[u8]| data.windows(needle.len()).any(|w| w == needle);
+        let result = found(ASCII) || found(UTF16LE);
         debug!(is_ottercorp = result, "DLL check complete");
         return result;
     }
@@ -208,6 +218,9 @@ pub async fn launch_game(
         wine_type = ?wine.startup_type,
         "launching game"
     );
+
+    #[cfg(not(target_os = "windows"))]
+    validate_wine_game_path(&config.game_path)?;
 
     // 确保登录 DLL 是修改版
     ensure_login_entry(&config.game_path).await?;
@@ -290,12 +303,25 @@ pub async fn launch_game(
     }
 }
 
+#[cfg(not(target_os = "windows"))]
+fn validate_wine_game_path(path: &std::path::Path) -> Result<(), GameLaunchError> {
+    if path.to_string_lossy().is_ascii() {
+        return Ok(());
+    }
+
+    Err(GameLaunchError::UnsupportedWinePath(path.to_path_buf()))
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum GameLaunchError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("Wine error: {0}")]
     Wine(String),
+    #[error(
+        "Wine game path contains non-ASCII characters: {0}. Move the game to an ASCII-only path"
+    )]
+    UnsupportedWinePath(PathBuf),
 }
 
 #[cfg(test)]
@@ -347,7 +373,8 @@ mod tests {
         assert!(args.contains("XL.SndaId=snda456"));
         assert!(args.contains("XL.DcTraveler=57001"));
         assert!(args.contains("Dev.LobbyHost01=ffxivlobby01.ff14.sdo.com"));
-        assert!(args.contains("XL.LobbyHosts=ffxivlobby01.ff14.sdo.com:54994"));
+        // C# MainPage 传 areasInfo=""（空），对齐后不携带服务器列表
+        assert!(args.contains("XL.LobbyHosts="));
     }
 
     #[test]
@@ -358,5 +385,49 @@ mod tests {
         ];
         let hosts = build_lobby_hosts(&areas);
         assert_eq!(hosts, "lobby1.sdo.com:54994|lobby5.sdo.com:54994");
+    }
+
+    #[test]
+    fn test_is_ottercorp_dll() {
+        let dir = std::env::temp_dir().join(format!("xlrs-dll-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // PE version info 以 UTF-16LE 存储 CompanyName
+        let utf16 = dir.join("utf16.dll");
+        std::fs::write(&utf16, b"\x00\x01o\0t\0t\0e\0r\0c\0o\0r\0p\0\x00\x01").unwrap();
+        assert!(is_ottercorp_dll(&utf16));
+
+        // 兼容纯 ASCII 出现的情况
+        let ascii = dir.join("ascii.dll");
+        std::fs::write(&ascii, b"prefix ottercorp suffix").unwrap();
+        assert!(is_ottercorp_dll(&ascii));
+
+        // 原版 DLL（不含 ottercorp）
+        let original = dir.join("original.dll");
+        std::fs::write(&original, b"Shanda Games sdologinentry64").unwrap();
+        assert!(!is_ottercorp_dll(&original));
+
+        // 真实缓存的修改版 DLL（如存在）必须被识别
+        if let Some(home) = dirs::home_dir() {
+            let cached = home.join(".xiv-launcher-rs/tools/sdologinentry64.dll");
+            if cached.exists() {
+                assert!(is_ottercorp_dll(&cached), "cached ottercorp DLL not detected");
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn test_validate_wine_game_path() {
+        assert!(validate_wine_game_path(std::path::Path::new(
+            "/home/user/Games/ffxiv/game/ffxiv_dx11.exe"
+        ))
+        .is_ok());
+        assert!(validate_wine_game_path(std::path::Path::new(
+            "/home/user/Games/最终幻想XIV/game/ffxiv_dx11.exe"
+        ))
+        .is_err());
     }
 }

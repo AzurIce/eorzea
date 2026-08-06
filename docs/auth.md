@@ -126,12 +126,12 @@ FF14 国际服的登录协议在社区中已有非常成熟的逆向分析，主
 | `cas.sdo.com/authen/pushMessageLogin.json` | 轮询推送状态 | ✅ 已实现 |
 | `cas.sdo.com/authen/getCodeKey.json` | 获取二维码 | ✅ 已实现 |
 | `cas.sdo.com/authen/codeKeyLogin.json` | 轮询扫码状态 | ✅ 已实现 |
-| `cas.sdo.com/authen/autoLogin.json` | 自动登录 | ✅ 已实现 |
-| `cas.sdo.com/authen/fastLogin.json` | **快速登录刷新** | ❌ **缺失** |
+| `cas.sdo.com/authen/autoLogin.json` | 自动登录（换新 key + 剩余期限） | ✅ 已实现 |
+| `cas.sdo.com/authen/fastLogin.json` | **快速登录刷新**（autoLogin 后再刷 tgt/snda_id） | ✅ 已实现 |
 | `cas.sdo.com/authen/ssoLogin.json` | TGT 换 ticket | ✅ 已实现 |
-| `cas.sdo.com/authen/getPromotionInfo.json` | 激活 TGT 权限 | ⚠️ 缺少 `serviceUrl` 参数 |
-| `cas.sdo.com/authen/getAccountGroup` | 扫码后账号组查询 | ❌ **缺失** |
-| `cas.sdo.com/authen/accountGroupLogin` | 账号组登录刷新 TGT | ❌ **缺失** |
+| `cas.sdo.com/authen/getPromotionInfo.json` | 激活 TGT 权限 | ✅ 已实现（含 `serviceUrl`） |
+| `cas.sdo.com/authen/getAccountGroup` | 扫码后账号组查询（⚠️ 无 `.json` 后缀） | ✅ 已实现 |
+| `cas.sdo.com/authen/accountGroupLogin` | 账号组登录刷新 TGT + session key | ✅ 已实现 |
 | `cas.sdo.com/authen/thirdPartyLogin` | WeGame Token 登录 | ❌ **缺失** |
 
 #### 关于设备指纹的风控
@@ -139,7 +139,8 @@ FF14 国际服的登录协议在社区中已有非常成熟的逆向分析，主
 中文资讯站多次提到 SDO/盛趣的风控系统（代号"玄武"）会采集 MAC、硬盘序列号、CPU ID 等硬件信息。**但没有公开逆向资料详细说明其校验逻辑。**
 
 可靠结论：
-- `device_id` / `mac_id` 的用途是：①作为请求参数发送给 SDO 服务端；②生成 `CASCID` Cookie（`CID{MD5(mac)}`）
+- `device_id` / MAC 标识有两套表示：`common_query()` 的 `macId` 发送 `SdoUtils.GetMac()` 对应的原始标识；密码登录的 `mac` 参数和 `CASCID` / `SECURE_CASCID` Cookie 使用其 MD5（`CID{MD5(mac)}`）
+- `getPromotionInfo.json` 与其他 CAS 请求一样携带通用参数和完整 CAS Cookie；其 JSON `return_code` / `error_type` 必须校验，激活失败不能继续换取 ticket
 - **没有证据表明 SDO 服务端会对指纹格式做严格校验**，更可能是将其作为"设备唯一标识"用于关联账号和检测异常登录
 - 因此，只要 Rust 生成的指纹**在同一台机器上稳定不变**，就应该能正常工作
 
@@ -173,11 +174,12 @@ FF14 国际服的登录协议在社区中已有非常成熟的逆向分析，主
 2. **版本报告动态生成**（`se.rs`）
    - 当前硬编码 `ex1-ex3`，应根据 `max_expansion` 动态生成到 `ex5`
 
-3. **实现 `fastLogin.json`**
-   - 自动登录流程的关键缺失步骤，C# 在 `autoLogin.json` 后会调用此接口进一步刷新凭证
+3. **实现 `fastLogin.json`** ✅（`sdo.rs::fast_login`）
+   - `autoLogin.json` 后用新 tgt 再刷新 snda_id/tgt，对齐 C# `LoginBySessionKey`
 
-4. **实现扫码后的 `getAccountGroup` 和 `accountGroupLogin`**
-   - 完成扫码登录的完整闭环
+4. **实现扫码后的 `getAccountGroup` 和 `accountGroupLogin`** ✅（`sdo.rs::get_account_group` / `account_group_login`）
+   - 扫码登录完整闭环已通；注意 `getAccountGroup` 端点**不带 `.json` 后缀**
+   - 自动登录 key 续期机制：`autoLogin.json` 每次返回新 key（旧 key 作废）+ `autoLoginMaxAge` 剩余期限；`launch` 自动登录后保存新 key，实现无限续期
 
 5. **Blowfish 字节序 bug（若需启动参数加密）**
    - 必须复刻 C# `Blowfish.cs` 的 endianness 行为，不能使用标准库

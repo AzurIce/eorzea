@@ -351,9 +351,17 @@
 ## 已知限制（TODO）
 
 1. **密码登录风控**：新设备触发验证码要求，需改用扫码
-2. **getAccountGroup**：扫码后缺失账号组校验（P1-1）
+2. **getAccountGroup** ✅：已实现（`sdo.rs::get_account_group` + `account_group_login`，扫码闭环打通）
 3. **Wine 死锁**：macOS 上偶发 `RtlpWaitForCriticalSection` 超时
 4. **参数加密**：未实现 Blowfish 加密（P2-2，国服实际不加密）
+5. **WeGame 登录**：`thirdPartyLogin` / `LoginBySid` 未实现
+
+## 自动登录与 key 续期
+
+- `autoLogin.json` 用旧 key 换**新 key**（旧 key 立即作废）+ `autoLoginMaxAge`（剩余期限）
+- `fastLogin.json` 再用新 tgt 刷新 snda_id/tgt（对齐 C# `LoginBySessionKey`）
+- `xlcli launch` 自动登录成功后把新 key 写回配置 → 每次启动自动续期（约 30 天）
+- key 过期（`-10515005`）时提示重新 `auth login qr`
 
 ---
 

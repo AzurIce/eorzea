@@ -5883,6 +5883,7 @@ dependencies = [
 name = "xiv-launcher-rs"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "clap",
  "dirs 5.0.1",
  "flate2",
@@ -5896,6 +5897,7 @@ dependencies = [
  "tauri-plugin-opener",
  "thiserror 2.0.18",
  "tokio",
+ "toml 0.8.2",
  "tracing",
  "tracing-subscriber",
  "xiv-launcher-auth",

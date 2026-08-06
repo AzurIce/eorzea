@@ -27,8 +27,12 @@ pub struct LaunchToken {
     pub ticket: String,
     /// SDO 账号 ID（`XL.SndaId`）。
     pub snda_id: String,
+    /// 账号名（`inputUserId`，如有）。
+    pub username: Option<String>,
     /// 自动登录 session key（如有）。
     pub auto_login_session_key: Option<String>,
+    /// 自动登录 session key 剩余有效期（秒，`autoLoginMaxAge`）。
+    pub auto_login_max_age: Option<i32>,
 }
 
 /// 扫码登录会话。
@@ -108,9 +112,40 @@ impl QrCodeSession {
         let snda_id = data
             .snda_id
             .ok_or_else(|| LauncherError::Auth("no snda_id in qr response".into()))?;
-        let tgt = data
+        let mut tgt = data
             .tgt
             .ok_or_else(|| LauncherError::Auth("no tgt in qr response".into()))?;
+
+        // 扫码确认：codeKeyLogin 响应已带 auto_login_session_key（autoLoginFlag=1）
+        // 再调 accountGroupLogin 刷新 tgt + key（对应 C#；失败不影响登录）
+        let mut auto_login_session_key = data.auto_login_session_key;
+        let exchange_result: Result<(String, String), LauncherError> = async {
+            // 1. 获取账号组（C# 在 AccountGroupLogin 前调用）
+            self.auth
+                .get_account_group(&tgt, &snda_id)
+                .await
+                .map_err(|e| LauncherError::Auth(format!("get_account_group failed: {e}")))?;
+            // 2. 刷新 tgt + 拿 session key
+            self.auth
+                .account_group_login(&self.ctx, &tgt, &snda_id, AUTO_LOGIN_KEEP_DAYS)
+                .await
+                .map_err(|e| LauncherError::Auth(format!("account_group_login failed: {e}")))
+        }
+        .await;
+        match exchange_result {
+            Ok((new_tgt, session_key)) => {
+                info!("accountGroupLogin successful, refreshed tgt and session key");
+                tgt = new_tgt;
+                auto_login_session_key = Some(session_key);
+            }
+            Err(e) => {
+                if auto_login_session_key.is_some() {
+                    info!(error = %e, "key exchange failed, using codeKeyLogin session key");
+                } else {
+                    info!(error = %e, "key exchange failed, continuing without auto-login key");
+                }
+            }
+        };
 
         // 激活权限
         self.auth
@@ -130,10 +165,15 @@ impl QrCodeSession {
         Ok(LaunchToken {
             ticket,
             snda_id,
-            auto_login_session_key: data.auto_login_session_key,
+            username: data.input_user_id,
+            auto_login_session_key,
+            auto_login_max_age: data.auto_login_max_age,
         })
     }
 }
+
+/// 自动登录保持天数（对应 C# `AutoLoginKeepDays`）。
+const AUTO_LOGIN_KEEP_DAYS: i32 = 30;
 
 /// 封装完整链路的高层启动器。
 pub struct Launcher {
@@ -224,8 +264,11 @@ impl Launcher {
             .tgt
             .ok_or_else(|| LauncherError::Auth("no tgt in response (captcha required?)".into()))?;
 
-        self.exchange_tgt_for_token(&ctx, &tgt, &snda_id, result.data.auto_login_session_key)
-            .await
+        let mut token = self
+            .exchange_tgt_for_token(&ctx, &tgt, &snda_id, result.data.auto_login_session_key)
+            .await?;
+        token.username = Some(account.to_string());
+        Ok(token)
     }
 
     /// 使用自动登录 session key 登录，返回 `LaunchToken`。
@@ -242,17 +285,33 @@ impl Launcher {
             .await
             .map_err(|e| LauncherError::Auth(format!("auto_login failed: {e}")))?;
 
-        let snda_id = result
+        let mut snda_id = result
             .data
             .snda_id
             .ok_or_else(|| LauncherError::Auth("no snda_id in auto_login response".into()))?;
-        let tgt = result
+        let mut tgt = result
             .data
             .tgt
             .ok_or_else(|| LauncherError::Auth("no tgt in auto_login response".into()))?;
+        let new_session_key = result.data.auto_login_session_key;
+        let max_age = result.data.auto_login_max_age;
 
-        self.exchange_tgt_for_token(&ctx, &tgt, &snda_id, result.data.auto_login_session_key)
-            .await
+        // fastLogin 再刷新一次 tgt/snda_id（对应 C# `LoginBySessionKey`）
+        match self.auth.fast_login(&ctx, &tgt).await {
+            Ok((new_snda_id, new_tgt)) => {
+                snda_id = new_snda_id;
+                tgt = new_tgt;
+            }
+            Err(e) => {
+                info!(error = %e, "fast_login failed, continuing with autoLogin credentials");
+            }
+        }
+
+        let mut token = self
+            .exchange_tgt_for_token(&ctx, &tgt, &snda_id, new_session_key)
+            .await?;
+        token.auto_login_max_age = max_age;
+        Ok(token)
     }
 
     // ── 分步扫码登录 ──────────────────────────────────────────────────
@@ -372,7 +431,9 @@ impl Launcher {
         Ok(LaunchToken {
             ticket,
             snda_id: snda_id.to_string(),
+            username: None,
             auto_login_session_key: session_key,
+            auto_login_max_age: None,
         })
     }
 }
@@ -409,7 +470,9 @@ mod tests {
         let token = LaunchToken {
             ticket: "ULS21-abc123".to_string(),
             snda_id: "12345".to_string(),
+            username: None,
             auto_login_session_key: None,
+            auto_login_max_age: None,
         };
         assert_eq!(token.ticket, "ULS21-abc123");
         assert_eq!(token.snda_id, "12345");

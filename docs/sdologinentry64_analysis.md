@@ -260,17 +260,24 @@ const DLL_URL: &str = "https://raw.githubusercontent.com/ottercorp/XIVLauncher.C
 
 ### 6.3 识别修改版
 
-通过读取 PE 文件并搜索 `"ottercorp"` 字符串来识别：
+PE version info 中的 `CompanyName` 以 UTF-16LE 存储，因此需要同时匹配 ASCII 和 UTF-16LE 两种编码的 `"ottercorp"`：
 
 ```rust
 fn is_ottercorp_dll(path: &std::path::Path) -> bool {
     if let Ok(data) = std::fs::read(path) {
-        let text = String::from_utf8_lossy(&data);
-        return text.contains("ottercorp");
+        const ASCII: &[u8] = b"ottercorp";
+        const UTF16LE: &[u8] = b"o\0t\0t\0e\0r\0c\0o\0r\0p\0";
+        let found = |needle: &[u8]| data.windows(needle.len()).any(|w| w == needle);
+        return found(ASCII) || found(UTF16LE);
     }
     false
 }
 ```
+
+> **历史 bug**：早期实现用 `String::from_utf8_lossy(&data).contains("ottercorp")` 按 UTF-8 搜索，
+> 永远匹配不到 UTF-16LE 存储的字符串，导致每次启动都误判为"非修改版"，
+> 反复把当前 DLL 备份覆盖到 `sdologinentry64.sdo.dll`——第二次启动后原版备份被修改版覆盖，
+> shim 转发到自身，游戏内报 5003「帐号认证发生了错误」。
 
 ---
 

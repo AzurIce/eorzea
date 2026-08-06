@@ -26,10 +26,15 @@ pub struct DownloadSummary {
 /// 校验文件是否符合补丁条目的逐块 SHA1 哈希。
 ///
 /// 对应 C# `PatchManager.CheckPatchValidity()`。
-pub fn verify_patch_sha1(
-    path: &Path,
-    entry: &PatchListEntry,
-) -> Result<bool, PatchDownloadError> {
+pub fn verify_patch_sha1(path: &Path, entry: &PatchListEntry) -> Result<bool, PatchDownloadError> {
+    let metadata = std::fs::metadata(path).map_err(|e| PatchDownloadError::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    if metadata.len() != entry.length {
+        return Ok(false);
+    }
+
     if entry.hash_type != "sha1" {
         warn!(
             hash_type = %entry.hash_type,
@@ -46,10 +51,6 @@ pub fn verify_patch_sha1(
         path: path.to_path_buf(),
         source: e,
     })?;
-
-    if data.len() as u64 != entry.length {
-        return Ok(false);
-    }
 
     use sha1::{Digest, Sha1};
 
@@ -71,6 +72,22 @@ pub fn verify_patch_sha1(
     }
 
     Ok(true)
+}
+
+/// 返回补丁条目唯一对应的缓存路径。
+///
+/// 不同仓库可能使用相同的 basename 和版本号，因此缓存键必须包含完整 URL 身份。
+pub(crate) fn patch_cache_path(dest_dir: &Path, entry: &PatchListEntry) -> PathBuf {
+    use sha1::{Digest, Sha1};
+
+    let file_name = entry
+        .url
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("patch");
+    let url_hash = format!("{:x}", Sha1::digest(entry.url.as_bytes()));
+    dest_dir.join(format!("{}-{}.{}", url_hash, file_name, entry.version))
 }
 
 /// 并发下载补丁到暂存目录。
@@ -142,14 +159,7 @@ async fn download_one(
     entry: &PatchListEntry,
     dest_dir: &Path,
 ) -> Result<(Option<u64>, PathBuf), PatchDownloadError> {
-    // 目标文件名：取 URL 最后一段，附上版本号避免冲突
-    let file_name = entry
-        .url
-        .rsplit('/')
-        .next()
-        .filter(|s| !s.is_empty())
-        .unwrap_or("patch");
-    let dest = dest_dir.join(format!("{}.{}", file_name, entry.version));
+    let dest = patch_cache_path(dest_dir, entry);
 
     // 已存在且校验通过 → 跳过
     if dest.exists() {
@@ -371,5 +381,45 @@ mod tests {
         // 无 hash 信息 → 跳过校验返回 true
         assert!(verify_patch_sha1(&path, &entry).unwrap());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_verify_boot_patch_wrong_length() {
+        let dir = temp_dir("xl-rs-verify-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("boot.patch");
+        std::fs::write(&path, b"short").unwrap();
+        let entry = PatchListEntry {
+            version: "boot".to_string(),
+            url: "http://test/boot".to_string(),
+            hash_type: String::new(),
+            hash_block_size: 0,
+            hashes: Vec::new(),
+            length: 8,
+        };
+        assert!(!verify_patch_sha1(&path, &entry).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_patch_cache_path_includes_url_identity() {
+        let data = b"same patch metadata";
+        let mut first = entry_for(data, 16);
+        first.version = "2026.07.16.0001.0000".to_string();
+        first.url = "http://patch/game/D2026.07.16.0001.0000.patch".to_string();
+
+        let mut second = first.clone();
+        second.url = "http://patch/game/ex5/D2026.07.16.0001.0000.patch".to_string();
+
+        let dir = Path::new("/patches");
+        let first_path = patch_cache_path(dir, &first);
+        let second_path = patch_cache_path(dir, &second);
+        assert_ne!(first_path, second_path);
+        assert!(first_path
+            .to_string_lossy()
+            .contains("D2026.07.16.0001.0000.patch"));
+        assert!(second_path
+            .to_string_lossy()
+            .contains("D2026.07.16.0001.0000.patch"));
     }
 }

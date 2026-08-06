@@ -66,9 +66,10 @@
 //! - **二维码**: `qr_code_request` 返回 PNG 格式的二维码图片字节，可直接展示。
 //!   `code_key` 从响应的 `Set-Cookie: CODEKEY=...` 中提取。
 //! - **轮询**: 以约 2-3 秒间隔调用 `qr_code_poll`。返回码 `-10515805` 表示尚未扫描。
-//! - **AccountGroup**: 扫码成功后，上游 C# 会调用 `getAccountGroup` 校验账号，然后
-//!   调用 `accountGroupLogin` 刷新 `tgt` 并获取 `auto_login_session_key`。
-//!   **本模块目前缺失这两个步骤**（见 [`crate::TODO`] 或 `TODO.md`）。
+//! - **AccountGroup**: 扫码成功后调用 [`SdoAuth::get_account_group`] 校验账号，再调用
+//!   [`SdoAuth::account_group_login`] 刷新 `tgt` 并获取 `auto_login_session_key`；
+//!   即使这两个调用失败，`codeKeyLogin` 响应自带的 `auto_login_session_key` 也可直接使用。
+//!   完整流程见 `docs/sdo_login_flow.md`。
 //!
 //! ## 4. 自动登录 (`LoginType::AutoLoginSession`)
 //!
@@ -87,7 +88,7 @@
 //! - **入口**: [`SdoAuth::auto_login`]
 //! - **session key 过期**: 若返回码为 `-10515005`，表示自动登录已失效，需重新用密码/扫码/推送方式登录。
 //! - **fastLogin**: 上游 C# 在 `auto_login` 之后还会调用 `fastLogin.json` 进一步刷新凭证。
-//!   **本模块目前缺失此步骤**。
+//!   **本模块目前缺失此步骤**（不影响免密登录主链路）。
 //!
 //! ## 5. WeGame Token 登录 (`LoginType::WeGameToken`)
 //!
@@ -124,13 +125,12 @@
 //! # 已知缺失（与上游 C# 的差异）
 //!
 //! - **WeGame 登录**: `thirdPartyLogin`、`LoginBySid` 未实现。
-//! - **AccountGroup**: `getAccountGroup`、`accountGroupLogin` 未实现。
 //! - **fastLogin**: 自动登录流程中缺少 `fastLogin.json` 步骤。
 //! - **DcTraveler**: 跨服传送功能（`GetDcTravelSessionId`）未实现。
 //! - **域名故障转移**: 目前需手动通过 `with_fallback_url()` 设置备用域名，不自动重试。
 //! - **日志脱敏**: 缺少 `MaskMiddleConverter` 对敏感字段的日志脱敏。
 //!
-//! 完整差异列表见仓库根目录 `TODO.md`。
+//! 完整差异列表见仓库根目录 `TODO.md`；登录字段/流程速查见 `docs/sdo_login_flow.md`。
 
 use crate::error::AuthError;
 use crate::model::*;
@@ -166,6 +166,7 @@ pub struct SdoAuth {
     client: Client,
     base_url: String,
     device_id: String,
+    mac: String,
     mac_id: String,
 }
 
@@ -193,11 +194,13 @@ impl SdoAuth {
     /// [`SdoAuth::with_fallback_url`] 设置备用域名。
     pub fn new() -> Result<Self, AuthError> {
         info!("Creating SdoAuth client");
+        let mac = crate::sdo_device::get_mac_id_raw();
         Ok(Self {
             client: Client::builder().cookie_store(true).build()?,
             base_url: SDO_BASE_URL.to_string(),
             device_id: crate::sdo_device::get_device_id(),
-            mac_id: crate::sdo_device::get_mac_address_hash(),
+            mac_id: crate::crypto::md5_hex_upper(mac.as_bytes()),
+            mac,
         })
     }
 
@@ -284,7 +287,7 @@ impl SdoAuth {
 
         let result: SdoLoginResult = self.get_json_raw(&url).await?;
         debug!(return_code = result.return_code, "staticLogin response");
-        self.check_sdo_error(&result)?;
+        self.check_sdo_error(&result, true)?;
 
         info!(
             snda_id = ?result.data.snda_id,
@@ -497,6 +500,127 @@ impl SdoAuth {
         }
     }
 
+    /// 获取账号组（调用 `getAccountGroup.json`）。
+    ///
+    /// 扫码/推送确认后调用：验证 `snda_id` 是否在账号组中，
+    /// 返回账号列表（对应 C# `GetAccountGroup()`）。
+    #[instrument(skip(self, tgt))]
+    pub async fn get_account_group(
+        &self,
+        tgt: &str,
+        snda_id: &str,
+    ) -> Result<Vec<String>, AuthError> {
+        // C# 直接拼接 tgt（不 URL 编码）；注意 C# 里该 endPoint 不带 `.json` 后缀
+        let url = format!(
+            "{}/getAccountGroup?serviceUrl=http%3A%2F%2Fwww.sdo.com&tgt={}&{}",
+            self.base_url,
+            tgt,
+            self.common_query(),
+        );
+        debug!(url = %url, "getAccountGroup request");
+
+        let result: SdoLoginResult = self.get_json_raw(&url).await?;
+        debug!(return_code = result.return_code, "getAccountGroup response");
+        // getAccountGroup 响应无 tgt 字段，不检查 tgt
+        self.check_sdo_error(&result, false)?;
+
+        let snda_ids = result.data.snda_id_array.unwrap_or_default();
+        if !snda_ids.iter().any(|s| s == snda_id) {
+            info!(
+                snda_id,
+                available = ?snda_ids,
+                "snda_id not in account group"
+            );
+        }
+        Ok(snda_ids)
+    }
+
+    /// 账号组登录（调用 `accountGroupLogin.json`）。
+    ///
+    /// 扫码/推送登录确认后调用：传入 `tgt` + `snda_id`，刷新 `tgt` 并获取
+    /// `auto_login_session_key`（用于下次免密登录）。
+    /// 对应 C# `SdoLauncher.AccountGroupLogin()`。
+    ///
+    /// 返回 `(新 tgt, auto_login_session_key)`。
+    #[instrument(skip(self, _ctx, tgt))]
+    pub async fn account_group_login(
+        &self,
+        _ctx: &SdoContext,
+        tgt: &str,
+        snda_id: &str,
+        auto_login_days: i32,
+    ) -> Result<(String, String), AuthError> {
+        // C# 直接拼接 tgt/sndaId（不 URL 编码）；注意该 endPoint 与 getAccountGroup 一样
+        // 不带 `.json` 后缀（SDO 特例）
+        let url = format!(
+            "{}/accountGroupLogin?serviceUrl=http%3A%2F%2Fwww.sdo.com&tgt={}&sndaId={}&autoLoginFlag=1&autoLoginKeepTime={}&{}",
+            self.base_url,
+            tgt,
+            snda_id,
+            auto_login_days,
+            self.common_query(),
+        );
+        debug!(url = %url, "accountGroupLogin request");
+
+        let result: SdoLoginResult = self.get_json_raw(&url).await?;
+        debug!(return_code = result.return_code, "accountGroupLogin response");
+        self.check_sdo_error(&result, false)?;
+
+        let new_tgt = result.data.tgt.ok_or_else(|| {
+            AuthError::InvalidResponse("accountGroupLogin: no tgt in response".into())
+        })?;
+        let session_key = result.data.auto_login_session_key.ok_or_else(|| {
+            AuthError::InvalidResponse("accountGroupLogin: no auto_login_session_key in response".into())
+        })?;
+
+        info!(
+            auto_login_max_age_h = result
+                .data
+                .auto_login_max_age
+                .map(|s| s as f32 / 3600.0),
+            "accountGroupLogin successful"
+        );
+        Ok((new_tgt, session_key))
+    }
+
+    /// 快速登录（调用 `fastLogin.json`）。
+    ///
+    /// 自动登录后调用：用 `autoLogin` 返回的 `tgt` 再刷新 `snda_id` 和 `tgt`。
+    /// 对应 C# `LoginBySessionKey()` 中的 fastLogin 步骤。
+    ///
+    /// 返回 `(snda_id, 新 tgt)`。
+    #[instrument(skip(self, ctx, tgt))]
+    pub async fn fast_login(
+        &self,
+        ctx: &SdoContext,
+        tgt: &str,
+    ) -> Result<(String, String), AuthError> {
+        let url = format!(
+            "{}/fastLogin.json?tgt={}&guid={}&{}",
+            self.base_url,
+            tgt,
+            urlencoding::encode(&ctx.guid),
+            self.common_query(),
+        );
+        debug!(url = %url, "fastLogin request");
+
+        let result: SdoLoginResult = self.get_json_raw(&url).await?;
+        debug!(return_code = result.return_code, "fastLogin response");
+        self.check_sdo_error(&result, false)?;
+
+        let snda_id = result
+            .data
+            .snda_id
+            .ok_or_else(|| AuthError::InvalidResponse("fastLogin: no snda_id".into()))?;
+        let new_tgt = result
+            .data
+            .tgt
+            .ok_or_else(|| AuthError::InvalidResponse("fastLogin: no tgt".into()))?;
+
+        info!("fastLogin successful");
+        Ok((snda_id, new_tgt))
+    }
+
     /// 自动登录（调用 `autoLogin.json`），使用之前登录返回的 `auto_login_session_key`。
     ///
     /// 快速登录方式，无需再次输入密码或扫码。
@@ -561,7 +685,21 @@ impl SdoAuth {
             self.common_query(),
         );
 
-        let resp: SdoResponse<serde_json::Value> = self.get_json_with_cookies(&url).await?;
+        // C# 特判：ssoLogin 需带 CASTGC cookie（CAS 认证票据），否则返回的 ticket 无效
+        let resp: SdoResponse<serde_json::Value> = self
+            .client
+            .get(&url)
+            .header("User-Agent", SDO_USER_AGENT)
+            .header("Cache-Control", "no-cache")
+            .header("Host", "cas.sdo.com")
+            .header(
+                "Cookie",
+                format!("CASTGC={}; CAS_LOGIN_STATE=1; {}", tgt, self.build_cookie_header()),
+            )
+            .send()
+            .await?
+            .json()
+            .await?;
         debug!(return_code = resp.return_code, "ssoLogin response");
         if resp.return_code != 0 {
             error!(return_code = resp.return_code, "ssoLogin failed");
@@ -593,26 +731,38 @@ impl SdoAuth {
     #[instrument(skip(self, tgt), err)]
     pub async fn get_promotion_info(&self, tgt: &str) -> Result<(), AuthError> {
         let masked_url = format!(
-            "{}/getPromotionInfo.json?tgt=***&serviceUrl=http%3A%2F%2Fwww.sdo.com",
+            "{}/getPromotionInfo.json?tgt=***&serviceUrl=http%3A%2F%2Fwww.sdo.com&{}",
             self.base_url,
+            self.common_query(),
         );
         debug!(url = %masked_url, "Getting promotion info");
 
         let url = format!(
-            "{}/getPromotionInfo.json?tgt={}&serviceUrl=http%3A%2F%2Fwww.sdo.com",
+            "{}/getPromotionInfo.json?tgt={}&serviceUrl=http%3A%2F%2Fwww.sdo.com&{}",
             self.base_url,
             urlencoding::encode(tgt),
+            self.common_query(),
         );
 
-        let _ = self
+        let result: SdoLoginResult = self
             .client
             .get(&url)
             .header("User-Agent", SDO_USER_AGENT)
             .header("Cache-Control", "no-cache")
             .header("Host", "cas.sdo.com")
-            .header("Cookie", format!("CASTGC={}; CAS_LOGIN_STATE=1", tgt))
+            .header(
+                "Cookie",
+                format!(
+                    "CASTGC={}; CAS_LOGIN_STATE=1; {}",
+                    tgt,
+                    self.build_cookie_header()
+                ),
+            )
             .send()
+            .await?
+            .json()
             .await?;
+        self.check_sdo_error(&result, false)?;
         info!("Promotion info activated");
         Ok(())
     }
@@ -653,7 +803,7 @@ impl SdoAuth {
             "authenSource=1&appId={}&areaId=1&appIdSite={}&locale=zh_CN&productId=4&frameType=1&endpointOS=1&version=21&customSecurityLevel=2&deviceId={}&thirdLoginExtern=0&macId={}&productVersion=1.9.7.10&tag=0",
             SDO_APP_ID, SDO_APP_ID,
             urlencoding::encode(&self.device_id),
-            urlencoding::encode(&self.mac_id),
+            urlencoding::encode(&self.mac),
         )
     }
 
@@ -730,7 +880,12 @@ impl SdoAuth {
     }
 
     #[instrument(skip(self, result), fields(return_code = result.return_code))]
-    fn check_sdo_error(&self, result: &SdoLoginResult) -> Result<(), AuthError> {
+    /// SDO 响应错误检查。
+    ///
+    /// `require_tgt`: 登录类接口（staticLogin/codeKeyLogin 等）为 `true`——
+    /// 成功响应必须携带 `tgt`，否则视为风控验证码；
+    /// 无 `tgt` 返回的接口（如 `getAccountGroup`）传 `false`。
+    fn check_sdo_error(&self, result: &SdoLoginResult, require_tgt: bool) -> Result<(), AuthError> {
         // C#: if (result.ReturnCode != 0 || result.ErrorType != 0) throw
         if result.return_code != 0 || result.error_type.unwrap_or(0) != 0 {
             match result.return_code {
@@ -764,7 +919,9 @@ impl SdoAuth {
         }
 
         // return_code == 0 && error_type == 0, but Tgt is empty → need captcha (risk control)
-        if result.data.tgt.is_none() || result.data.tgt.as_ref().unwrap().is_empty() {
+        if require_tgt
+            && (result.data.tgt.is_none() || result.data.tgt.as_ref().unwrap().is_empty())
+        {
             warn!("TGT is empty, captcha required (risk control)");
             return Err(AuthError::CaptchaRequired);
         }
@@ -798,4 +955,33 @@ pub enum PollResult {
 pub struct QrCodeResult {
     pub code_key: String,
     pub image_data: Vec<u8>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_auth() -> SdoAuth {
+        SdoAuth {
+            client: Client::new(),
+            base_url: SDO_BASE_URL.to_string(),
+            device_id: "device-id".to_string(),
+            mac: "raw-mac-id".to_string(),
+            mac_id: "HASHEDMAC".to_string(),
+        }
+    }
+
+    #[test]
+    fn common_query_uses_raw_mac_id() {
+        let query = test_auth().common_query();
+        assert!(query.contains("macId=raw-mac-id"));
+        assert!(!query.contains("macId=HASHEDMAC"));
+    }
+
+    #[test]
+    fn cookie_uses_hashed_mac_id() {
+        let cookie = test_auth().build_cookie_header();
+        assert!(cookie.contains("CASCID=CIDHASHEDMAC"));
+        assert!(cookie.contains("SECURE_CASCID=CIDHASHEDMAC"));
+    }
 }

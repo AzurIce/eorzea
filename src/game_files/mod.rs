@@ -24,10 +24,12 @@ pub mod zpatch;
 
 use std::path::Path;
 use tracing::{debug, info, instrument, warn};
-use xiv_launcher_auth::{SdoArea, PatchListEntry};
+use xiv_launcher_auth::{PatchListEntry, SdoArea};
 
+use self::patch_manager::{
+    download_patches, patch_cache_path, verify_patch_sha1, DownloadSummary, PatchDownloadError,
+};
 use self::version::{build_version_report, read_local_versions, LocalVersions};
-use self::patch_manager::{download_patches, DownloadSummary, PatchDownloadError};
 use self::zpatch::ZiPatchError;
 
 /// SDO 补丁检查 User-Agent（C# `Constants.PatcherUserAgent`，国服硬编码）。
@@ -277,13 +279,7 @@ impl GameFileManager {
 
         for patch in patches {
             let repo = repo_from_url(&patch.url);
-            let file_name = patch
-                .url
-                .rsplit('/')
-                .next()
-                .filter(|s| !s.is_empty())
-                .unwrap_or("patch");
-            let patch_file = patch_dir.join(format!("{}.{}", file_name, patch.version));
+            let patch_file = patch_cache_path(patch_dir, patch);
 
             if !patch_file.exists() {
                 warn!(
@@ -292,6 +288,13 @@ impl GameFileManager {
                 );
                 skipped += 1;
                 continue;
+            }
+
+            if !verify_patch_sha1(&patch_file, patch)? {
+                return Err(GameFileError::PatchIdentityMismatch {
+                    path: patch_file,
+                    url: patch.url.clone(),
+                });
             }
 
             let base_dir = game_root.join(repo.install_subdir());
@@ -391,10 +394,54 @@ pub enum GameFileError {
     #[error("ZiPatch install failed: {0}")]
     ZPatch(#[from] ZiPatchError),
 
+    #[error("cached patch does not match {url}: {path}")]
+    PatchIdentityMismatch {
+        path: std::path::PathBuf,
+        url: String,
+    },
+
     #[error("IO error at {path}: {source}")]
     Io {
         path: std::path::PathBuf,
         #[source]
         source: std::io::Error,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn install_rejects_mismatched_cached_patch_without_advancing_version() {
+        let root = std::env::temp_dir().join(format!(
+            "xl-rs-install-identity-{}",
+            std::process::id()
+        ));
+        let patch_dir = root.join("patches");
+        let game_root = root.join("game-root");
+        std::fs::create_dir_all(&patch_dir).unwrap();
+
+        let patch = PatchListEntry {
+            version: "2026.07.16.0001.0000".to_string(),
+            url: "http://patch/game/D2026.07.16.0001.0000.patch".to_string(),
+            hash_type: String::new(),
+            hash_block_size: 0,
+            hashes: Vec::new(),
+            length: 8,
+        };
+        let cached = patch_cache_path(&patch_dir, &patch);
+        std::fs::write(&cached, b"short").unwrap();
+
+        let result = GameFileManager::new()
+            .install(std::slice::from_ref(&patch), &patch_dir, &game_root)
+            .await;
+        assert!(matches!(
+            result,
+            Err(GameFileError::PatchIdentityMismatch { .. })
+        ));
+        assert!(!game_root.join("game/ffxivgame.ver").exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

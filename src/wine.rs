@@ -315,6 +315,19 @@ impl WineTool {
         // 清理下载的压缩包
         let _ = std::fs::remove_file(&tar_path);
 
+        // tar 包顶层目录名不确定（如 wine-xiv-staging-fsync-git-8.5.r4.g4211bac7），
+        // 解压后扫描找到实际的 bin/wine64，统一移动到 wine/ 目录
+        if !wine64_path.exists() {
+            if let Some(found) = find_wine64_under(&tools_dir) {
+                // 将解压出的目录重命名为 wine/（若 wine/ 已存在则先移除空目录）
+                if let Some(extracted_dir) = found.parent() {
+                    let _ = std::fs::remove_dir_all(&wine_dir);
+                    std::fs::rename(extracted_dir, &wine_dir).map_err(WineError::Io)?;
+                    debug!(from = ?extracted_dir, to = ?wine_dir, "renamed extracted wine dir");
+                }
+            }
+        }
+
         if !wine64_path.exists() {
             error!(?wine64_path, "wine64 not found after extraction");
             return Err(WineError::Extract(
@@ -477,6 +490,22 @@ impl WineTool {
             .map(|h| h.join(".xiv-launcher-rs/prefix"))
             .unwrap_or_else(|| PathBuf::from("./prefix"))
     }
+}
+
+/// 在目录下查找包含 `bin/wine64` 的子目录（tar 包顶层目录名不确定）。
+fn find_wine64_under(dir: &Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let candidate = path.join("bin/wine64");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// 组装启动 Wine 时的环境变量（纯函数，便于测试）。
