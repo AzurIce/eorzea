@@ -52,6 +52,26 @@
           librsvg
           libayatana-appindicator
           glib-networking
+          libunwind # wine (ubuntu build) dlopens libunwind.so.8 at runtime
+        ];
+        # Wine (ubuntu build) 运行所需的系统库：dlopen 加载，不在 ldd 里
+        wineLibs = with pkgs; [
+          freetype # TrueType 字体渲染
+          fontconfig
+          gnutls # 加密/pfx
+          vulkan-loader # DXVK
+          mesa # libGL
+          libx11
+          libxext
+          libxrender
+          libxrandr
+          libxi
+          libxcursor
+          libxinerama
+          libxxf86vm
+          libxcb
+          libpulseaudio # wine 声音（pulse/pipewire）
+          alsa-lib # wine 声音（ALSA）
         ];
       in
       {
@@ -64,10 +84,13 @@
               bun # frontend (bun.lock, `bun run dev` per tauri.conf.json)
               pkg-config
             ];
-          buildInputs = tauriSystemLibs;
+          buildInputs = tauriSystemLibs ++ wineLibs;
           shellHook = ''
             # Let webkit/GTK find glib-networking's TLS modules at runtime
             export GIO_EXTRA_MODULES="${pkgs.glib-networking}/lib/gio/modules"
+            # Make system libs discoverable at runtime (incl. wine's dlopen deps
+            # like libunwind.so.8, and the GTK stack for the tauri app)
+            export LD_LIBRARY_PATH="${lib.makeLibraryPath (tauriSystemLibs ++ wineLibs)}:$LD_LIBRARY_PATH"
             # WebKitGTK 2.52's EGL accelerated compositing trips Mutter 50's strict
             # wp_linux_drm_syncobj_surface_v1 check ("Missing acquire timeline"
             # protocol error -> app killed at startup). Software rendering avoids

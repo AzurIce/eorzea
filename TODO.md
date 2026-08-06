@@ -91,7 +91,7 @@
 - [x] **补丁下载管理**：`game_files/patch_manager.rs` 实现下载管线（并发 4 槽同 C# `MAX_DOWNLOADS_AT_ONCE`、SHA1 块校验同 `CheckPatchValidity`、已校验文件跳过、进度回调）；SHA1 块算法已用真实补丁验证通过
 - [x] **修复跨仓库补丁缓存名碰撞（2026-08-06）**：缓存名加入完整 URL 的 SHA1 身份，`ffxiv`、`ex1`-`ex5` 的同名补丁不再互相覆盖；安装前再次校验长度/逐块 SHA1，不匹配时禁止应用和写 `.ver`。旧的 basename + version 歧义缓存不会再被复用
 - [x] **xlcli 命令行**：`src/bin/xlcli.rs`（clap）— `areas` / `game status` / `game check` / `game update`（下载 + 应用）
-- [x] **xlcli auth**：多账号管理 — `auth login qr|password|auto` / `auth status` / `auth default <账号>` / `auth logout`；配置持久化到 `~/.xiv-launcher-rs/xiv-launcher-rs.toml`（`--config` 或 `XIV_LAUNCHER_RS_CONFIG` 覆盖）；`launch` 未指定账号时用默认账号自动登录
+- [x] **xlcli auth**：多账号管理 — `auth login qr|password|auto` / `auth status` / `auth default <账号>` / `auth logout`；配置持久化到 `~/.xiv-launcher-rs/auth.toml`（`--config` 或 `XIV_LAUNCHER_RS_CONFIG` 覆盖）；`launch` 未指定账号时用默认账号自动登录
 - [x] **xlcli login/launch**：登录 + 启动游戏；扫码二维码通过终端图片协议直接显示（kitty graphics protocol / iTerm2 OSC 1337，`src/term_img.rs`），无协议时 fallback 保存 PNG
 - [x] **补丁应用**（ZiPatch）：`src/game_files/zpatch/` 完整移植 C# `ZiPatch` 解析与应用（FHDR/APLY/SQPK:T/F/A/D/E/H/I/X/ADIR/DELD/EOF），`RemotePatchInstaller` 流程（应用 → `SetVer` → `VerToBck`）；已用修复后的唯一缓存键重放 11 个补丁（877.50 MiB），版本检查通过且实际启动进入游戏
 - [ ] **Boot 版本检查**：国服无需实现（C# `CheckBootVersion` 对 CN 直接 `return Array.Empty`）
@@ -99,16 +99,20 @@
 - [ ] **断点续传**（Range）：当前不完整文件整体重下，部分下载续传待加
 - [ ] **UID 缓存**：缺失 `IUniqueIdCache` 实现（`X-Patch-Unique-Id` 缓存）
 
-### P2-4 Wine 配置与启动环境 (`WineSettings.cs` / `CompatibilityTools.cs` → `src/wine.rs` + `src/settings.rs`)
+### P2-4 Wine 配置与启动环境 (`WineSettings.cs` / `CompatibilityTools.cs` → `src/wine.rs` + `src/config.rs`)
 
-- [x] **`WineSettings` 配置模型**：`startup_type`（Auto/Managed/Custom/System）、`custom_path`、`prefix`、esync/fsync/msync、`debug_vars`、自定义 `env`、DXVK 设置（enabled/hud/frame_limit）、gamemode — `src/settings.rs`
-- [x] **配置持久化**：`~/.xiv-launcher-rs/settings.json`（serde JSON，缺字段回退默认）— `load_settings`/`save_settings`
+- [x] **`WineSettings` 配置模型**：`startup_type`（Auto/Managed/Custom/System）、`custom_path`、`prefix`、esync/fsync/msync、`debug_vars`、自定义 `env`、DXVK 设置（enabled/hud/frame_limit）、gamemode — `src/config.rs`
+- [x] **配置持久化**：拆分存储 — `~/.xiv-launcher-rs/config.toml`（Wine 设置，TOML）+ `~/.xiv-launcher-rs/auth.toml`（账号，TOML）；旧 `settings.json`/`xiv-launcher-rs.toml` 自动迁移
 - [x] **`WineTool::resolve(&WineSettings)`**：配置 → 运行时解析（Auto = 自定义→托管→系统→下载；Managed/Custom/System 显式分派），`custom_path` 支持 wine64 文件或 bin 目录归一化
 - [x] **`WineTool::probe()`**：`wine64 --version` 校验可执行性
 - [x] **`build_launch_env()`**：对齐 `CompatibilityTools.RunInPrefix` 环境变量（`WINEDLLOVERRIDES`、`WINEESYNC/WINEFSYNC/WINEMSYNC`、`WINEDEBUG`、`DXVK_STATE_CACHE_PATH`/`DXVK_CONFIG_FILE`/`DXVK_HUD`/`DXVK_FRAME_RATE`、`LD_PRELOAD` gamemode、自定义 env 覆盖）
 - [x] **每次启动指定不同 wine**：`Launcher::with_wine_settings`（持久）+ `Launcher::launch_with_wine`（单次覆盖）
 - [x] **Wine 非 ASCII 游戏路径预检**：Linux/macOS 启动前拒绝包含非 ASCII 字符的完整游戏路径并返回明确错误，避免游戏内报误导性的 5003「帐号认证发生了错误」
 - [ ] **DXVK 变体选择**：当前固定 dxvk-async 1.10.1（CN 镜像）；上游已切换 dxvk-gplasync，未实现
+- [ ] **NixOS 适配**（详见 `docs/nixos.md`）：
+  - [ ] `Auto`/`Managed` 下 `probe()` 失败回退系统 wine 并给出 NixOS 提示
+  - [ ] 托管 wine 跑不起来且 PATH 有 `steam-run` 时自动用 steam-run 包装（需 `unset TZ` 规避 nixpkgs#279893）
+  - [x] NixOS 用户上手指南已写入 `docs/nixos.md`（系统 wine / nix-ld / steam-run 手动包装三条路径）
 - [ ] **wine 日志**：`WineSettings.log_file` 未接入（C# 有 StreamWriter 日志）
 - [ ] **prefix 引导 `EnsurePrefix()`**：C# 首次 `cmd /c dir %userprofile%/Documents` 初始化，未实现
 - [ ] **`wineserver` 管理**：C# 有 `wineserver` 路径处理，未实现
