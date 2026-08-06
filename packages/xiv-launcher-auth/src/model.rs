@@ -86,11 +86,22 @@ pub struct LoginResult {
 }
 
 /// 补丁列表条目。
+///
+/// 对应 C# `PatchListEntry`：TSV 补丁列表的一行。
+/// 9 字段行（游戏补丁）带 hash 信息，6 字段行（boot 补丁）只有 `url`。
 #[derive(Debug, Clone)]
 pub struct PatchListEntry {
+    /// 补丁后的目标版本（`VersionId`）。
     pub version: String,
+    /// 补丁文件下载地址。
     pub url: String,
-    pub hash: String,
+    /// 哈希算法（如 `sha1`）。
+    pub hash_type: String,
+    /// 哈希块大小（字节），按块校验。
+    pub hash_block_size: u64,
+    /// 逐块哈希列表（与文件按 `hash_block_size` 分块一一对应）。
+    pub hashes: Vec<String>,
+    /// 补丁文件大小（字节）。
     pub length: u64,
 }
 

@@ -1,6 +1,6 @@
 # xiv-launcher-auth 与 XIVLauncher.Core 差异追踪
 
-> 本文件记录 Rust `auth` 子 crate 与上游 C# (`../XIVLauncher.Core`) 实现之间的所有已知差异。
+> 本文件记录 Rust `auth` 子 crate 与上游 C# (`XIVLauncher.Core`) 实现之间的所有已知差异。
 > 当前聚焦 **SDO（中国服/盛趣）** 登录功能。`se`（国际服）为低优先级。
 
 ---
@@ -82,9 +82,15 @@
 
 ### P2-3 版本检查与补丁 (`Launcher.cs` → `CheckGameUpdate`)
 
-- [ ] **版本报告生成**：当前硬编码 `ex1-ex3`，应根据 `maxExpansion` 动态生成 `ex1-ex5`
-- [ ] **补丁列表解析**：`PatchListEntry` 结构体已有，缺解析逻辑（`PatchListParser`）
-- [ ] **Boot 版本检查**：缺失 `CheckBootVersion`
+- [x] **版本报告生成**：`game_files/version.rs` 的 `build_version_report()` 按 `max_expansion` 动态生成 ex1-ex5（不再硬编码），对齐 C# `GetVersionReport()`（首行为硬编码 boot hash，国服同 C# FIXME 值）
+- [x] **SDO 版本检查协议**：`game_files` 的 `check_update()` 实现 `CheckGameUpdate`（POST `{area_patch}/http/win32/shanda_release_chs_game/{ver}`，`X-Hash-Check` 头，解析 `X-Patch-Unique-Id` + TSV），免登录，已通过真实 API 验证（返回 185 补丁/126 GiB）
+- [x] **补丁列表解析**：`game_files/patch_list.rs` 实现 `PatchListParser`（跳过前 5 行、9 字段带 hash / 6 字段 boot），`PatchListEntry` 扩展为完整字段（`hash_type`/`hash_block_size`/`hashes[]`）
+- [x] **补丁下载管理**：`game_files/patch_manager.rs` 实现下载管线（并发 4 槽同 C# `MAX_DOWNLOADS_AT_ONCE`、SHA1 块校验同 `CheckPatchValidity`、已校验文件跳过、进度回调）；SHA1 块算法已用真实补丁验证通过
+- [x] **xlcli 命令行**：`src/bin/xlcli.rs`（clap）— `areas` / `game status` / `game check` / `game update`（下载 + 应用）
+- [x] **补丁应用**（ZiPatch）：`src/game_files/zpatch/` 完整移植 C# `ZiPatch` 解析与应用（FHDR/APLY/SQPK:T/F/A/D/E/H/I/X/ADIR/DELD/EOF），`RemotePatchInstaller` 流程（应用 → `SetVer` → `VerToBck`）；**已通过真实游戏目录端到端验证**（17 补丁 1.17 GiB 全部应用成功，再次 check 返回已最新）
+- [ ] **Boot 版本检查**：国服无需实现（C# `CheckBootVersion` 对 CN 直接 `return Array.Empty`）
+- [ ] **完整性校验**（`PatchVerifier`）：未实现，需 IndexedZiPatch 索引或逐文件 hash
+- [ ] **断点续传**（Range）：当前不完整文件整体重下，部分下载续传待加
 - [ ] **UID 缓存**：缺失 `IUniqueIdCache` 实现（`X-Patch-Unique-Id` 缓存）
 
 ---
@@ -151,4 +157,4 @@
 
 - 以上条目按优先级分组：P0 为核心登录链路必须打通的，P1 为扫码/推送完善，P2 为游戏启动所需，P3 为国际服（低优先级），P4 为质量提升。
 - 每次修复后应在对应条目旁标注完成日期和 commit hash，保持 TODO.md 与实际代码同步。
-- C# 参考文件路径均相对于 `../XIVLauncher.Core/lib/FFXIVQuickLauncher/src/XIVLauncher.Common/Game/`。
+- C# 参考文件路径均相对于 `XIVLauncher.Core/lib/FFXIVQuickLauncher/src/XIVLauncher.Common/Game/`。

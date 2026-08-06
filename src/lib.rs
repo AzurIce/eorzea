@@ -1,3 +1,4 @@
+pub mod game_files;
 pub mod game;
 pub mod launcher;
 pub mod wine;
