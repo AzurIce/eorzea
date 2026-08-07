@@ -121,6 +121,16 @@
 
 ---
 
+## P2-5 Dalamud 插件框架集成（新）
+
+- [x] **调查报告**：`docs/dalamud_integration.md`（加载机制、XIVLauncher 组件、Linux Wine 内注入、分阶段路线）
+- [x] **阶段 0 骨架**：`src/dalamud/`（model/updater/runner）— release 元数据获取（`VersionInfo` API）、版本门控（`SupportedGameVer == 游戏版本`）、本机安装检测、Injector argv 构造、Wine 路径转换（`winepath --windows`）、Injector JSON 解析；`xlcli dalamud status/launch`；`config.toml [dalamud]` section（flatten 兼容旧配置）
+- [x] **release 下载安装（惰性）**：7z 下载（进度回调）+ 关键文件校验 + 原子安装（`Hooks/<AssemblyVersion>`）+ 写 `version.json`；`launch` 时版本匹配但未安装自动下载（无需独立 install 命令）；注：release 包不含 `hashes.json`（远端 `Hash` 用于校验安装后生成的 runtime hashes）
+- [ ] **Windows x64 .NET runtime 下载/组装**（`RuntimeVersion` 管理）
+- [ ] **Dalamud assets 获取**
+- [x] **launch backend 切换**：`launch_game` 支持 `dalamud` 配置时走 Injector（winepath 转换 + Injector 启动 + JSON 解析）；`Launcher::launch_with_options` 自动读 `[dalamud].enabled`（可被 CLI 覆盖）并安全降级；`xlcli launch --dalamud/--no-dalamud` 覆盖配置
+- [ ] **阶段 2+**：Windows runner、Wine PID→Unix PID 映射、staging/beta、崩溃恢复（safe mode）
+
 ## P3 — 国际服 (SE) 补全（低优先级）
 
 ### P3-1 SE OAuth 完善 (`se.rs` vs `Launcher.cs`)

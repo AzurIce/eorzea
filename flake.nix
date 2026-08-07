@@ -81,6 +81,7 @@
             with pkgs; [
               cargo-tauri
               gh
+              p7zip # Dalamud release 解压（.7z）
               bun # frontend (bun.lock, `bun run dev` per tauri.conf.json)
               pkg-config
             ];

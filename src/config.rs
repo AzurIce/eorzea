@@ -5,9 +5,12 @@
 //! 支持"启动时使用不同的 wine"：持久化默认配置 + `Launcher::launch_with_wine` 单次覆盖。
 //!
 //! 配置文件：`~/.xiv-launcher-rs/config.toml`（TOML，旧版 `settings.json` 自动迁移）。
+//! 顶层为 Wine 设置（flatten），`[dalamud]` section 为 Dalamud 配置。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+use crate::dalamud::model::DalamudSettings;
 
 use serde::{Deserialize, Serialize};
 
@@ -79,6 +82,8 @@ pub struct WineSettings {
     pub dxvk: DxvkSettings,
     /// 启用 gamemode（`LD_PRELOAD+=libgamemodeauto.so.0`）
     pub gamemode: bool,
+    /// 游戏根目录（含 `boot/`、`game/`、`sdo/`；GUI 设置项，CLI 走 `--game-path` 参数）
+    pub game_path: Option<PathBuf>,
 }
 
 impl Default for WineSettings {
@@ -94,8 +99,45 @@ impl Default for WineSettings {
             env: BTreeMap::new(),
             dxvk: DxvkSettings::default(),
             gamemode: false,
+            game_path: None,
         }
     }
+}
+
+
+/// 整个 `config.toml` 的结构：Wine 设置（顶层）+ `[dalamud]` section。
+///
+/// `flatten` 保持 Wine 设置字段在顶层，兼容旧配置文件；保存时不会丢失 `[dalamud]`。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppConfig {
+    #[serde(default, flatten)]
+    pub settings: WineSettings,
+    #[serde(default)]
+    pub dalamud: DalamudSettings,
+}
+
+/// 从指定路径加载整个配置。
+pub fn load_app(path: &Path) -> AppConfig {
+    match std::fs::read_to_string(path) {
+        Ok(text) => match toml::from_str(&text) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "config parse failed, using defaults");
+                AppConfig::default()
+            }
+        },
+        Err(_) => AppConfig::default(),
+    }
+}
+
+/// 保存整个配置到指定路径。
+pub fn save_app(path: &Path, cfg: &AppConfig) -> Result<(), std::io::Error> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content = toml::to_string_pretty(cfg).map_err(std::io::Error::other)?;
+    std::fs::write(path, content)
 }
 
 /// 配置文件路径：`~/.xiv-launcher-rs/config.toml`。
@@ -112,18 +154,9 @@ pub fn legacy_settings_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("settings.json"))
 }
 
-/// 从指定路径加载配置；文件不存在或解析失败时返回默认值。
+/// 从指定路径加载 Wine 配置；文件不存在或解析失败时返回默认值。
 pub fn load_settings_from(path: &Path) -> WineSettings {
-    match std::fs::read_to_string(path) {
-        Ok(text) => match toml::from_str(&text) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(path = %path.display(), error = %e, "failed to parse settings, using defaults");
-                WineSettings::default()
-            }
-        },
-        Err(_) => WineSettings::default(),
-    }
+    load_app(path).settings
 }
 
 /// 加载默认位置（`~/.xiv-launcher-rs/config.toml`）的配置。
@@ -159,18 +192,29 @@ fn load_settings_from_json(path: &Path) -> WineSettings {
     }
 }
 
-/// 保存配置到指定路径（创建父目录，pretty TOML）。
+/// 保存 Wine 配置到指定路径（保留 `[dalamud]` section）。
 pub fn save_settings_to(path: &Path, settings: &WineSettings) -> Result<(), std::io::Error> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let toml_str = toml::to_string_pretty(settings).map_err(std::io::Error::other)?;
-    std::fs::write(path, toml_str)
+    let mut app = load_app(path);
+    app.settings = settings.clone();
+    save_app(path, &app)
 }
 
 /// 保存配置到默认位置。
 pub fn save_settings(settings: &WineSettings) -> Result<(), std::io::Error> {
     save_settings_to(&settings_path(), settings)
+}
+
+/// 读取默认位置的 `[dalamud]` 配置。
+pub fn load_dalamud_settings() -> DalamudSettings {
+    load_app(&settings_path()).dalamud
+}
+
+/// 保存 `[dalamud]` 配置到默认位置（保留 Wine 设置）。
+pub fn save_dalamud_settings(settings: &DalamudSettings) -> Result<(), std::io::Error> {
+    let path = settings_path();
+    let mut app = load_app(&path);
+    app.dalamud = settings.clone();
+    save_app(&path, &app)
 }
 
 #[cfg(test)]
@@ -208,6 +252,7 @@ mod tests {
                 frame_limit: Some(60),
             },
             gamemode: true,
+            game_path: Some(PathBuf::from("/games/ffxiv")),
         };
 
         let toml_str = toml::to_string_pretty(&s).unwrap();

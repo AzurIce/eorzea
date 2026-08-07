@@ -33,17 +33,43 @@ pub struct GameLaunchConfig {
     pub reset_config: i32,
     /// 额外启动参数。
     pub additional_args: String,
+    /// 启用 Dalamud 时的启动配置（`Some` 时通过 Injector 启动）。
+    pub dalamud: Option<DalamudLaunchConfig>,
+}
+
+/// Dalamud 启动配置（启用时由 Injector 创建游戏进程）。
+#[derive(Debug, Clone)]
+pub struct DalamudLaunchConfig {
+    /// Injector 可执行文件路径（`Hooks/<AssemblyVersion>/Dalamud.Injector.exe`，Unix 路径）。
+    pub injector_exe: PathBuf,
+    /// 发行目录（Injector 工作目录）。
+    pub install_dir: PathBuf,
+    /// `dalamudConfig.json` 路径。
+    pub config_path: PathBuf,
+    /// Dalamud 日志路径。
+    pub log_path: PathBuf,
+    /// 插件目录。
+    pub plugin_dir: PathBuf,
+    /// assets 目录。
+    pub asset_dir: PathBuf,
+    /// 加载方式（entrypoint / inject）。
+    pub load_method: crate::dalamud::model::DalamudLoadMethod,
+    pub delay_initialize_ms: u32,
+    pub no_plugins: bool,
+    pub no_third_party_plugins: bool,
 }
 
 /// 游戏启动结果。
 #[derive(Debug)]
 pub struct GameLaunchResult {
-    /// 启动的子进程。
+    /// 启动的子进程（direct 模式为游戏进程；Injector 模式为 Injector 进程）。
     pub child: std::process::Child,
     /// 完整的启动命令行。
     pub command: String,
     /// wine/游戏输出日志文件路径（如有）。
     pub log_path: Option<PathBuf>,
+    /// 游戏进程的 Wine PID（Injector 模式由 Injector 报告；direct 模式为 child.pid()）。
+    pub wine_pid: Option<u32>,
 }
 
 /// 默认游戏运行日志路径：`~/.xiv-launcher-rs/logs/game-{unix_ts}.log`。
@@ -301,6 +327,47 @@ pub async fn launch_game(
 
         let env = build_launch_env(wine, &tool);
 
+        // 启用 Dalamud → 通过 Injector 创建游戏；否则直接 wine 运行
+        if let Some(d) = &config.dalamud {
+            let to_win = |p: &std::path::Path| {
+                crate::dalamud::runner::unix_to_wine_path(&tool, p)
+                    .map_err(|e| GameLaunchError::Wine(format!("winepath failed: {e}")))
+            };
+            let start = crate::dalamud::model::DalamudStartInfo {
+                game_path: to_win(game_path)?,
+                working_directory: to_win(&d.install_dir)?,
+                configuration_path: to_win(&d.config_path)?,
+                logging_path: to_win(&d.log_path)?,
+                plugin_directory: to_win(&d.plugin_dir)?,
+                asset_directory: to_win(&d.asset_dir)?,
+                client_language: 4,
+                delay_initialize_ms: d.delay_initialize_ms,
+                no_plugins: d.no_plugins,
+                no_third_party_plugins: d.no_third_party_plugins,
+            };
+            let launch = crate::dalamud::runner::launch_through_injector(
+                &tool,
+                &d.injector_exe,
+                &start,
+                d.load_method,
+                &arg_list,
+                false,
+                &env,
+            )
+            .map_err(|e| {
+                error!(error = %e, "failed to launch through Dalamud Injector");
+                GameLaunchError::Wine(e.to_string())
+            })?;
+
+            info!(wine_pid = launch.wine_pid, "game spawned through Dalamud Injector");
+            return Ok(GameLaunchResult {
+                child: launch.injector,
+                command: format!("{:?} {:?} {}", tool.wine64_path, d.injector_exe, args),
+                log_path: Some(log_path),
+                wine_pid: Some(launch.wine_pid),
+            });
+        }
+
         let child = tool
             .run(game_path, &arg_list, working_dir, &env, Some(&log_path))
             .map_err(|e| {
@@ -308,12 +375,14 @@ pub async fn launch_game(
                 GameLaunchError::Io(e)
             })?;
 
-        info!(pid = child.id(), "game process spawned through Wine");
+        let pid = child.id();
+        info!(pid, "game process spawned through Wine");
 
         Ok(GameLaunchResult {
             child,
             command: format!("{:?} {:?} {}", tool.wine64_path, game_path, args),
             log_path: Some(log_path),
+            wine_pid: Some(pid),
         })
     }
 }
@@ -378,6 +447,7 @@ mod tests {
             dc_travel_port: Some(57001),
             reset_config: 0,
             additional_args: String::new(),
+            dalamud: None,
         };
 
         let args = build_sdo_launch_args(&config);
