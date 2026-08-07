@@ -45,12 +45,13 @@
 
 - [x] **`getAccountGroup`/`accountGroupLogin`**：扫码/推送确认后调用 `account_group_login` 刷新 tgt 并获取 `auto_login_session_key`（对应 C# `AccountGroupLogin`），`launch` 自动登录链路打通
 - [x] **自动登录续期**：`autoLogin.json` 每次返回新 key + `autoLoginMaxAge`（剩余期限）；`fast_login`（`fastLogin.json`）再刷新 tgt/snda_id 对齐 C# `LoginBySessionKey`；`launch` 自动登录后保存新 key 到配置（旧 key 立即作废），并在输出显示剩余有效期
-- [ ] **选择 `sndaId`**：`getAccountGroup` 多账号选择暂未实现（当前直接用响应中的 snda_id）
+- [x] **选择 `sndaId`**：`get_account_group` 返回 `SdoAccount { snda_id, account_name }` 配对列表（`sndaIdArray`×`accountArray`，对应 C# 取显示名逻辑）；`QrCodeSession`/`PushLoginSession` 暴露 `poll()` + `finalize(data, snda_id)`，多账号场景前端可自行轮询、展示账号组后传入用户选择的 `snda_id` 完成登录
 - [x] **QR 扫码完整链路**：`qr_code_request` → 轮询 → `sso_login(tgt)` → ticket 获取已验证通过
 
 ### P1-2 推送/滑动登录超时与取消
 
-- [ ] **超时机制**：QR 码 300s 超时，推送 30s 超时。当前全由调用方控制，应提供 `tokio::time::timeout` 包装
+- [x] **超时机制**：`QrCodeSession::wait_for_scan(None)` 默认 300s（`QR_CODE_TIMEOUT`）、`PushLoginSession::wait_for_confirm(None)` 默认 30s（`PUSH_LOGIN_TIMEOUT`），均对齐 C# 过期时间；`Some(d)` 可覆盖
+- [x] **Launcher 层推送登录封装**：`Launcher::request_push_login(account)` → `PushLoginSession`（`serial_num()` 展示验证序号、`poll()`/`wait_for_confirm()` 轮询、`finalize()` 收尾），内部自动先取消上一轮推送（`cancelPushMessageLogin`）
 - [ ] **取消推送**：`slide_login_request` 之前应该调用 `cancelPushMessageLogin`，当前已实现但逻辑应更健壮
 
 ### P1-3 WeGame 登录
@@ -152,7 +153,7 @@
 
 ### P4-3 错误处理
 
-- [ ] **`SdoLoginData` 补全 `AccountArray` / `SndaIdArray`**：扫码成功后返回的账号列表
+- [x] **`SdoLoginData` 补全 `AccountArray` / `SndaIdArray`**：扫码成功后返回的账号列表（字段早已存在，现由 `get_account_group` 实际消费）
 - [ ] **DC 跨服传送 API** (`DcTraveler.cs`)：`ff14bjz.sdo.com` 下的旅行/回归 API，暂不在 P0 范围内
 
 ---

@@ -65,9 +65,33 @@ impl QrCodeSession {
         &self.code_key
     }
 
+    /// 轮询一次扫码状态。
+    ///
+    /// 供需要自行驱动轮询的前端使用（例如扫码后展示账号组让用户选择）。
+    /// 一般以约 3 秒间隔调用，返回 [`PollResult::Success`] 后调用
+    /// [`Self::finalize`] 换取 [`LaunchToken`]。
+    pub async fn poll(&self) -> Result<PollResult, LauncherError> {
+        self.auth
+            .qr_code_poll(&self.ctx, &self.code_key, AUTO_LOGIN_KEEP_DAYS)
+            .await
+            .map_err(|e| LauncherError::Auth(format!("qr_code_poll failed: {e}")))
+    }
+
+    /// 用扫码结果换取 [`LaunchToken`]。
+    ///
+    /// `snda_id` 为 `None` 时使用响应中的默认账号；多账号场景下先调用
+    /// `auth.get_account_group` 展示账号列表，再传入用户选择的 `snda_id`。
+    pub async fn finalize(
+        &self,
+        data: &SdoLoginData,
+        snda_id: Option<&str>,
+    ) -> Result<LaunchToken, LauncherError> {
+        finalize_login(&self.auth, &self.ctx, data, snda_id, None).await
+    }
+
     /// 阻塞等待用户扫码并确认。
     ///
-    /// - `timeout = None` → 无限等待
+    /// - `timeout = None` → 默认 [`QR_CODE_TIMEOUT`]（300 秒，对应 C# 二维码过期时间）
     /// - `timeout = Some(d)` → `d` 后返回 `LauncherError::Auth("QR code scan timed out")`
     ///
     /// 前端应在**后台 task**中调用此方法，主线程继续响应 UI。
@@ -76,6 +100,7 @@ impl QrCodeSession {
         &self,
         timeout: Option<Duration>,
     ) -> Result<LaunchToken, LauncherError> {
+        let timeout = timeout.unwrap_or(QR_CODE_TIMEOUT);
         let start = std::time::Instant::now();
         let poll_interval = tokio::time::Duration::from_secs(3);
 
@@ -84,96 +109,206 @@ impl QrCodeSession {
         loop {
             tokio::time::sleep(poll_interval).await;
 
-            if let Some(t) = timeout {
-                if start.elapsed() >= t {
-                    return Err(LauncherError::Auth("QR code scan timed out".into()));
-                }
+            if start.elapsed() >= timeout {
+                return Err(LauncherError::Auth("QR code scan timed out".into()));
             }
 
-            match self.auth.qr_code_poll(&self.ctx, &self.code_key, 30).await {
-                Ok(PollResult::Success(data)) => {
+            match self.poll().await? {
+                PollResult::Success(data) => {
                     info!("QR code scan confirmed");
-                    return self.exchange_for_token(data).await;
+                    return self.finalize(&data, None).await;
                 }
-                Ok(PollResult::Pending) => {
+                PollResult::Pending => {
                     debug!("qr code scan pending...");
                 }
-                Err(e) => {
-                    return Err(LauncherError::Auth(format!("qr_code_poll failed: {e}")));
-                }
             }
         }
     }
+}
 
-    async fn exchange_for_token(
-        &self,
-        data: SdoLoginData,
-    ) -> Result<LaunchToken, LauncherError> {
-        let snda_id = data
-            .snda_id
-            .ok_or_else(|| LauncherError::Auth("no snda_id in qr response".into()))?;
-        let mut tgt = data
-            .tgt
-            .ok_or_else(|| LauncherError::Auth("no tgt in qr response".into()))?;
+/// 推送（一键）登录会话。
+///
+/// 由 [`Launcher::request_push_login`] 创建，包含叨鱼 App 上显示的验证序号
+/// 和确认状态轮询能力。
+pub struct PushLoginSession {
+    account: String,
+    serial_num: Option<String>,
+    push_msg_session_key: String,
+    auth: SdoAuth,
+    ctx: SdoContext,
+}
 
-        // 扫码确认：codeKeyLogin 响应已带 auto_login_session_key（autoLoginFlag=1）
-        // 再调 accountGroupLogin 刷新 tgt + key（对应 C#；失败不影响登录）
-        let mut auto_login_session_key = data.auto_login_session_key;
-        let exchange_result: Result<(String, String), LauncherError> = async {
-            // 1. 获取账号组（C# 在 AccountGroupLogin 前调用）
-            self.auth
-                .get_account_group(&tgt, &snda_id)
-                .await
-                .map_err(|e| LauncherError::Auth(format!("get_account_group failed: {e}")))?;
-            // 2. 刷新 tgt + 拿 session key
-            self.auth
-                .account_group_login(&self.ctx, &tgt, &snda_id, AUTO_LOGIN_KEEP_DAYS)
-                .await
-                .map_err(|e| LauncherError::Auth(format!("account_group_login failed: {e}")))
-        }
-        .await;
-        match exchange_result {
-            Ok((new_tgt, session_key)) => {
-                info!("accountGroupLogin successful, refreshed tgt and session key");
-                tgt = new_tgt;
-                auto_login_session_key = Some(session_key);
-            }
-            Err(e) => {
-                if auto_login_session_key.is_some() {
-                    info!(error = %e, "key exchange failed, using codeKeyLogin session key");
-                } else {
-                    info!(error = %e, "key exchange failed, continuing without auto-login key");
-                }
-            }
-        };
+impl std::fmt::Debug for PushLoginSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PushLoginSession")
+            .field("account", &self.account)
+            .field("serial_num", &self.serial_num)
+            .finish()
+    }
+}
 
-        // 激活权限
+impl PushLoginSession {
+    /// 叨鱼 App 上一键登录页面显示的验证序号（展示给用户核对）。
+    pub fn serial_num(&self) -> Option<&str> {
+        self.serial_num.as_deref()
+    }
+
+    /// 登录账号名。
+    pub fn account(&self) -> &str {
+        &self.account
+    }
+
+    /// 轮询一次推送确认状态。
+    ///
+    /// 一般以约 1 秒间隔调用，返回 [`PollResult::Success`] 后调用
+    /// [`Self::finalize`] 换取 [`LaunchToken`]。
+    pub async fn poll(&self) -> Result<PollResult, LauncherError> {
         self.auth
-            .get_promotion_info(&tgt)
+            .slide_login_poll(&self.ctx, &self.push_msg_session_key)
             .await
-            .map_err(|e| LauncherError::Auth(format!("get_promotion_info failed: {e}")))?;
-
-        // 换取 ticket
-        let ticket = self
-            .auth
-            .sso_login(&self.ctx, &tgt)
-            .await
-            .map_err(|e| LauncherError::Auth(format!("sso_login failed: {e}")))?;
-
-        info!(ticket = %mask_sensitive(&ticket), "qr login successful");
-
-        Ok(LaunchToken {
-            ticket,
-            snda_id,
-            username: data.input_user_id,
-            auto_login_session_key,
-            auto_login_max_age: data.auto_login_max_age,
-        })
+            .map_err(|e| LauncherError::Auth(format!("slide_login_poll failed: {e}")))
     }
+
+    /// 用推送确认结果换取 [`LaunchToken`]。
+    ///
+    /// `snda_id` 语义同 [`QrCodeSession::finalize`]。
+    pub async fn finalize(
+        &self,
+        data: &SdoLoginData,
+        snda_id: Option<&str>,
+    ) -> Result<LaunchToken, LauncherError> {
+        finalize_login(&self.auth, &self.ctx, data, snda_id, Some(self.account.clone())).await
+    }
+
+    /// 阻塞等待用户在叨鱼 App 上确认。
+    ///
+    /// - `timeout = None` → 默认 [`PUSH_LOGIN_TIMEOUT`]（30 秒，对应 C# 推送过期时间）
+    /// - `timeout = Some(d)` → `d` 后返回 `LauncherError::Auth("push login timed out")`
+    #[instrument(skip(self))]
+    pub async fn wait_for_confirm(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<LaunchToken, LauncherError> {
+        let timeout = timeout.unwrap_or(PUSH_LOGIN_TIMEOUT);
+        let start = std::time::Instant::now();
+        let poll_interval = tokio::time::Duration::from_secs(1);
+
+        info!(timeout = ?timeout, "waiting for push confirmation");
+
+        loop {
+            tokio::time::sleep(poll_interval).await;
+
+            if start.elapsed() >= timeout {
+                return Err(LauncherError::Auth("push login timed out".into()));
+            }
+
+            match self.poll().await? {
+                PollResult::Success(data) => {
+                    info!("push login confirmed");
+                    return self.finalize(&data, None).await;
+                }
+                PollResult::Pending => {
+                    debug!("push login pending...");
+                }
+            }
+        }
+    }
+}
+
+/// 扫码/推送确认后的公共收尾流程（对应 C# `QrCodeLogin`/`SlideLogin` 的后半段）：
+///
+/// 1. `getAccountGroup` 校验账号并解析显示名（多账号时用 `snda_id` override 选择）
+/// 2. `accountGroupLogin` 刷新 `tgt` + 获取 `auto_login_session_key`（失败不阻断登录）
+/// 3. `getPromotionInfo` 激活权限
+/// 4. `ssoLogin` 换取游戏 ticket
+async fn finalize_login(
+    auth: &SdoAuth,
+    ctx: &SdoContext,
+    data: &SdoLoginData,
+    snda_id_override: Option<&str>,
+    default_username: Option<String>,
+) -> Result<LaunchToken, LauncherError> {
+    let snda_id = snda_id_override
+        .map(str::to_string)
+        .or_else(|| data.snda_id.clone())
+        .ok_or_else(|| LauncherError::Auth("no snda_id in login response".into()))?;
+    let mut tgt = data
+        .tgt
+        .clone()
+        .ok_or_else(|| LauncherError::Auth("no tgt in login response".into()))?;
+
+    // 1. 获取账号组：校验 snda_id 并解析显示名（对应 C# `GetAccountGroup`，
+    //    返回 AccountArray[SndaIdArray.IndexOf(sndaId)]）
+    let account_name = match auth.get_account_group(&tgt, &snda_id).await {
+        Ok(accounts) => accounts
+            .iter()
+            .find(|a| a.snda_id == snda_id)
+            .map(|a| a.account_name.clone()),
+        Err(e) => {
+            info!(error = %e, "get_account_group failed, continuing without display name");
+            None
+        }
+    };
+
+    // 2. 刷新 tgt + 拿 session key（对应 C# `AccountGroupLogin`；失败不影响登录，
+    //    扫码/推送确认响应里可能已带 auto_login_session_key）
+    let mut auto_login_session_key = data.auto_login_session_key.clone();
+    match auth
+        .account_group_login(ctx, &tgt, &snda_id, AUTO_LOGIN_KEEP_DAYS)
+        .await
+    {
+        Ok((new_tgt, session_key)) => {
+            info!("accountGroupLogin successful, refreshed tgt and session key");
+            tgt = new_tgt;
+            auto_login_session_key = Some(session_key);
+        }
+        Err(e) => {
+            if auto_login_session_key.is_some() {
+                info!(error = %e, "key exchange failed, using existing session key");
+            } else {
+                info!(error = %e, "key exchange failed, continuing without auto-login key");
+            }
+        }
+    }
+
+    // 3. 激活权限
+    auth.get_promotion_info(&tgt)
+        .await
+        .map_err(|e| LauncherError::Auth(format!("get_promotion_info failed: {e}")))?;
+
+    // 4. 换取 ticket
+    let ticket = auth
+        .sso_login(ctx, &tgt)
+        .await
+        .map_err(|e| LauncherError::Auth(format!("sso_login failed: {e}")))?;
+
+    info!(ticket = %mask_sensitive(&ticket), "login successful");
+
+    // 用户名优先级：登录响应 inputUserId → 默认账号名（推送登录）→ 账号组显示名
+    let username = data
+        .input_user_id
+        .clone()
+        .filter(|s| !s.is_empty())
+        .or(default_username)
+        .or(account_name);
+
+    Ok(LaunchToken {
+        ticket,
+        snda_id,
+        username,
+        auto_login_session_key,
+        auto_login_max_age: data.auto_login_max_age,
+    })
 }
 
 /// 自动登录保持天数（对应 C# `AutoLoginKeepDays`）。
 const AUTO_LOGIN_KEEP_DAYS: i32 = 30;
+
+/// 扫码登录默认超时（对应 C# 二维码 300 秒过期）。
+pub const QR_CODE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// 推送登录默认超时（对应 C# 推送 30 秒过期）。
+pub const PUSH_LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 封装完整链路的高层启动器。
 pub struct Launcher {
@@ -334,6 +469,40 @@ impl Launcher {
         Ok(QrCodeSession {
             code_key: result.code_key,
             image_data: result.image_data,
+            auth: self.auth.clone(),
+            ctx,
+        })
+    }
+
+    // ── 分步推送（一键）登录 ──────────────────────────────────────────
+
+    /// 发起推送登录，返回 [`PushLoginSession`]。
+    ///
+    /// 内部会先取消上一轮的推送登录（对应 C# `cancelPushMessageLogin`）。
+    /// 前端应调用 [`PushLoginSession::serial_num`] 展示验证序号，
+    /// 然后在后台调用 [`PushLoginSession::wait_for_confirm`] 等待用户在叨鱼 App 上确认。
+    #[instrument(skip(self), fields(account = %account))]
+    pub async fn request_push_login(
+        &self,
+        account: &str,
+    ) -> Result<PushLoginSession, LauncherError> {
+        let ctx = self.get_context().await?;
+        let data = self
+            .auth
+            .slide_login_request(&ctx, account)
+            .await
+            .map_err(|e| LauncherError::Auth(format!("slide_login_request failed: {e}")))?;
+
+        let push_msg_session_key = data.push_msg_session_key.ok_or_else(|| {
+            LauncherError::Auth("no push_msg_session_key in sendPushMessage response".into())
+        })?;
+
+        info!(account = %account, serial_num = ?data.push_msg_serial_num, "push login requested");
+
+        Ok(PushLoginSession {
+            account: account.to_string(),
+            serial_num: data.push_msg_serial_num,
+            push_msg_session_key,
             auth: self.auth.clone(),
             ctx,
         })

@@ -503,13 +503,14 @@ impl SdoAuth {
     /// 获取账号组（调用 `getAccountGroup.json`）。
     ///
     /// 扫码/推送确认后调用：验证 `snda_id` 是否在账号组中，
-    /// 返回账号列表（对应 C# `GetAccountGroup()`）。
+    /// 返回账号列表（`sndaIdArray` 与 `accountArray` 配对，对应 C# `GetAccountGroup()`）。
+    /// 多账号场景下可由调用方展示列表并让用户选择登录哪个 `snda_id`。
     #[instrument(skip(self, tgt))]
     pub async fn get_account_group(
         &self,
         tgt: &str,
         snda_id: &str,
-    ) -> Result<Vec<String>, AuthError> {
+    ) -> Result<Vec<SdoAccount>, AuthError> {
         // C# 直接拼接 tgt（不 URL 编码）；注意 C# 里该 endPoint 不带 `.json` 后缀
         let url = format!(
             "{}/getAccountGroup?serviceUrl=http%3A%2F%2Fwww.sdo.com&tgt={}&{}",
@@ -525,6 +526,7 @@ impl SdoAuth {
         self.check_sdo_error(&result, false)?;
 
         let snda_ids = result.data.snda_id_array.unwrap_or_default();
+        let mut names = result.data.account_array.unwrap_or_default();
         if !snda_ids.iter().any(|s| s == snda_id) {
             info!(
                 snda_id,
@@ -532,7 +534,16 @@ impl SdoAuth {
                 "snda_id not in account group"
             );
         }
-        Ok(snda_ids)
+        // accountArray 与 sndaIdArray 一一对应；显示名缺失时用 snda_id 兜底
+        names.resize(snda_ids.len(), String::new());
+        Ok(snda_ids
+            .into_iter()
+            .zip(names)
+            .map(|(snda_id, name)| SdoAccount {
+                account_name: if name.is_empty() { snda_id.clone() } else { name },
+                snda_id,
+            })
+            .collect())
     }
 
     /// 账号组登录（调用 `accountGroupLogin.json`）。
@@ -955,6 +966,15 @@ pub enum PollResult {
 pub struct QrCodeResult {
     pub code_key: String,
     pub image_data: Vec<u8>,
+}
+
+/// 账号组中的一个账号（`getAccountGroup` 返回的 `sndaIdArray`/`accountArray` 配对）。
+#[derive(Debug, Clone)]
+pub struct SdoAccount {
+    /// SDO 账号 ID（`sndaId`）。
+    pub snda_id: String,
+    /// 账号显示名（`accountArray` 对应项；缺失时与 `snda_id` 相同）。
+    pub account_name: String,
 }
 
 #[cfg(test)]
