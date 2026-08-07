@@ -42,16 +42,13 @@
           }
         );
 
-        # Tauri v2 system libraries: needed for pkg-config (compile), the linker
-        # (via cc-wrapper -L/-rpath) and at runtime (via rpath).
-        tauriSystemLibs = with pkgs; [
+        # dioxus-native (winit + blitz/vello) 运行时库：wayland 客户端与键盘处理
+        # 均为 dlopen 加载，需出现在 LD_LIBRARY_PATH（版本需 >= 1.24，
+        # 否则系统 mesa vulkan ICD 缺 wl_fixes_interface 符号无法加载）。
+        guiSystemLibs = with pkgs; [
           openssl # auth crate's reqwest uses default TLS (openssl-sys)
-          webkitgtk_4_1 # provides both webkit2gtk-4.1.pc and javascriptcoregtk-4.1.pc
-          gtk3
-          libsoup_3
-          librsvg
-          libayatana-appindicator
-          glib-networking
+          wayland # winit wayland backend
+          libxkbcommon # 键盘输入
           libunwind # wine (ubuntu build) dlopens libunwind.so.8 at runtime
         ];
         # Wine (ubuntu build) 运行所需的系统库：dlopen 加载，不在 ldd 里
@@ -79,29 +76,15 @@
         devShells.default = craneLib.devShell {
           packages =
             with pkgs; [
-              cargo-tauri
               gh
               p7zip # Dalamud release 解压（.7z）
-              bun # frontend (bun.lock, `bun run dev` per tauri.conf.json)
               pkg-config
             ];
-          buildInputs = tauriSystemLibs ++ wineLibs;
+          buildInputs = guiSystemLibs ++ wineLibs;
           shellHook = ''
-            # Let webkit/GTK find glib-networking's TLS modules at runtime
-            export GIO_EXTRA_MODULES="${pkgs.glib-networking}/lib/gio/modules"
-            # Make system libs discoverable at runtime (incl. wine's dlopen deps
-            # like libunwind.so.8, and the GTK stack for the tauri app)
-            export LD_LIBRARY_PATH="${lib.makeLibraryPath (tauriSystemLibs ++ wineLibs)}:$LD_LIBRARY_PATH"
-            # WebKitGTK 2.52's EGL accelerated compositing trips Mutter 50's strict
-            # wp_linux_drm_syncobj_surface_v1 check ("Missing acquire timeline"
-            # protocol error -> app killed at startup). Software rendering avoids
-            # the dmabuf/syncobj path entirely; verified stable. If Mutter is
-            # upgraded and the bug is fixed upstream, this line can be removed.
-            export WEBKIT_DISABLE_COMPOSITING_MODE=1
-            # Fallback if the app ever crashes with
-            #   "Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display"
-            # for another reason:
-            #   export GDK_BACKEND=x11
+            # Make system libs discoverable at runtime (winit dlopens
+            # libwayland-client/libxkbcommon; wine dlopens libunwind etc.)
+            export LD_LIBRARY_PATH="${lib.makeLibraryPath (guiSystemLibs ++ wineLibs)}:$LD_LIBRARY_PATH"
           '';
         };
       }

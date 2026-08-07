@@ -2,18 +2,24 @@
 
 ## Project Overview
 
-`xiv-launcher-rs` is a Rust reimplementation of the FFXIV launcher, porting auth and game-launch logic from `XIVLauncher.Core` (C#). The project uses a Tauri + Rust workspace:
+`xiv-launcher-rs` is a Rust reimplementation of the FFXIV launcher, porting auth and game-launch logic from `XIVLauncher.Core` (C#). The project uses a dioxus-native + Rust workspace:
 
 ```
-xiv-launcher-rs/              # workspace root (tauri crate)
+xiv-launcher-rs/              # workspace root (dioxus-native GUI crate)
 ├── packages/
 │   └── xiv-launcher-auth/    # auth library (feature-gated)
-└── frontend/                 # Tauri frontend (Vite + Svelte 5 + TS, bun)
+└── src/
+    ├── main.rs               # GUI 入口（dioxus-native launch）
+    ├── ui/                   # GUI 页面（mod.rs 根组件/共享状态，login/home/settings）
+    └── bin/xlcli.rs          # CLI（游戏文件管理/账号/启动）
 ```
 
-GUI 相关：`src/commands.rs` 是 Tauri 命令层（设置/账号/登录/大区/更新/启动），
-`src/lib.rs` 注册命令并管理 `AppState`（Launcher、进行中的扫码/推送会话、token 缓存、大区缓存）。
-补丁进度通过 `patch-progress` 事件推送前端。
+GUI 相关：`src/ui/mod.rs` 是根组件与 `AppState`（标签页、auth.toml/config.toml 内存镜像、
+大区缓存、本会话 token 缓存、底部状态栏），通过 dioxus context 共享给
+`src/ui/login.rs`（账号列表 + 扫码/推送/密码登录）、`src/ui/home.rs`
+（账号/大区选择、版本、检查/更新游戏、启动）、`src/ui/settings.rs`（游戏目录与 Wine 配置）。
+所有耗时操作（登录、等扫码、下载）在 dioxus `spawn` 异步任务中执行
+（dioxus-native 内置 tokio runtime），不阻塞 UI 线程。
 
 **Current focus: SDO (中国服/盛趣) authentication and game launch.** The `se` (international) feature is implemented but not the priority.
 
