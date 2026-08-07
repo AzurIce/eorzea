@@ -78,7 +78,7 @@ impl Default for DalamudSettings {
 }
 
 /// Dalamud release 元数据（来自 `VersionInfo` API，字段为驼峰）。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DalamudVersionInfo {
     #[serde(rename = "AssemblyVersion")]
     pub assembly_version: String,

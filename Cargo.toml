@@ -33,6 +33,7 @@ sha1 = "0.10"
 flate2 = "1"
 base64 = "0.22"
 toml = "0.8"
+md5 = "0.7"
 
 [[example]]
 name = "sdo_launch"

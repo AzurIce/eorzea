@@ -162,6 +162,13 @@ enum DalamudCommand {
         game_path: PathBuf,
     },
 
+    /// 下载并安装匹配当前游戏版本的 Dalamud release（7z + MD5 校验 + 原子安装）
+    Install {
+        /// 游戏根目录（版本门控：仅安装支持当前游戏版本的 release）
+        #[arg(long)]
+        game_path: PathBuf,
+    },
+
     /// 通过 Dalamud Injector 启动游戏（版本不匹配时拒绝）
     Launch {
         /// 游戏根目录
@@ -246,6 +253,7 @@ async fn main() {
         Command::Areas => cmd_areas().await,
         Command::Dalamud { sub } => match sub {
             DalamudCommand::Status { game_path } => cmd_dalamud_status(&game_path).await,
+            DalamudCommand::Install { game_path } => cmd_dalamud_install(&game_path).await,
             DalamudCommand::Launch { game_path, area } => {
                 cmd_dalamud_launch(&game_path, &area).await
             }
@@ -970,6 +978,62 @@ async fn check_update_status(game_path: &std::path::Path) -> Result<String, Stri
         }
         Ok(xiv_launcher_rs_lib::game_files::CheckResult::NeedsPatchBoot) => Ok("💡 boot 需要更新（国服通常不出现）。".to_string()),
         Err(e) => Err(e.to_string()),
+    }
+}
+
+
+/// `dalamud install`：下载并安装匹配游戏版本的 Dalamud release。
+async fn cmd_dalamud_install(game_path: &std::path::Path) {
+    use xiv_launcher_rs_lib::dalamud::{InstallState, updater};
+
+    let settings = xiv_launcher_rs_lib::config::load_dalamud_settings();
+    let install_root = settings
+        .install_root
+        .clone()
+        .unwrap_or_else(updater::default_install_root);
+
+    let client = reqwest::Client::new();
+    let st = updater::status(&client, &install_root, game_path, &settings.track).await;
+
+    // 版本门控：release 必须支持当前游戏版本才能安装
+    if !st.remote_supported() {
+        let remote_ver = st
+            .remote
+            .as_ref()
+            .map(|r| format!("{} (支持 {})", r.assembly_version, r.supported_game_ver))
+            .unwrap_or_else(|| "?".to_string());
+        eprintln!(
+            "⛔ release {remote_ver} 不支持游戏版本 {}，不能安装（等待发布）。",
+            st.local_game_ver
+        );
+        std::process::exit(1);
+    }
+
+    let remote = st.remote.expect("remote_supported implies remote present");
+    println!(
+        "下载安装 Dalamud {}（支持游戏 {}）...",
+        remote.assembly_version, remote.supported_game_ver
+    );
+
+    let mut last = 0u64;
+    match updater::download_release(&client, &remote, &install_root, |done, total| {
+        if total > 0 && (done - last >= total / 20 || done == total) {
+            last = done;
+            println!(
+                "  下载 {}/{} ({:.0}%)",
+                human_bytes(done),
+                human_bytes(total),
+                done as f64 / total as f64 * 100.0
+            );
+        }
+    })
+    .await
+    {
+        Ok(path) => println!("✅ 安装完成: {}", path.display()),
+        Err(e) => {
+            eprintln!("❌ 安装失败: {e}");
+            std::process::exit(1);
+        }
     }
 }
 

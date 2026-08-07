@@ -13,11 +13,14 @@
 
 use std::path::Path;
 use std::time::Duration;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 use xiv_launcher_auth::sdo::{PollResult, SdoAuth, SdoContext};
 use xiv_launcher_auth::{SdoArea, SdoLoginData};
 
 use crate::game::{GameLaunchConfig, GameLaunchError, GameLaunchResult};
+
+/// `GameLaunchConfig.dalamud` 的类型别名（避免过长路径）。
+pub type GameLaunchConfigDalamud = crate::game::DalamudLaunchConfig;
 use crate::config::{WineSettings, WineStartupType};
 
 /// 登录凭证（ticket + snda_id + 可选的自动登录 session_key）。
@@ -449,7 +452,8 @@ impl Launcher {
         Ok(token)
     }
 
-    // ── 分步扫码登录 ──────────────────────────────────────────────────
+
+// ── 分步扫码登录 ──────────────────────────────────────────────────
 
     /// 请求二维码，返回 [`QrCodeSession`]。
     ///
@@ -539,6 +543,7 @@ impl Launcher {
     ) -> Result<GameLaunchResult, LauncherError> {
         let game_path = game_path.as_ref().to_path_buf();
 
+        let dalamud = Self::build_dalamud_config(&game_path).await?;
         let config = GameLaunchConfig {
             game_path: game_path.clone(),
             session_id: token.ticket.clone(),
@@ -549,6 +554,7 @@ impl Launcher {
             dc_travel_port: None,
             reset_config: 0,
             additional_args: String::new(),
+            dalamud,
         };
 
         info!(path = %game_path.display(), wine_type = ?wine.startup_type, "launching game");
@@ -604,6 +610,52 @@ impl Launcher {
             auto_login_session_key: session_key,
             auto_login_max_age: None,
         })
+    }
+
+    /// 根据 `[dalamud]` 配置检测是否通过 Injector 启动。
+    ///
+    /// 返回 `Some(DalamudLaunchConfig)` 仅当：启用 + 本机有安装 + 版本匹配。
+    /// 版本不匹配（release 尚未支持当前游戏）时**安全降级**为直接启动（不加载 Dalamud）。
+    async fn build_dalamud_config(
+        game_path: &Path,
+    ) -> Result<Option<GameLaunchConfigDalamud>, LauncherError> {
+        let settings = crate::config::load_dalamud_settings();
+        if !settings.enabled {
+            return Ok(None);
+        }
+
+        let install_root = settings
+            .install_root
+            .clone()
+            .unwrap_or_else(crate::dalamud::updater::default_install_root);
+        let client = reqwest::Client::new();
+        let st = crate::dalamud::updater::status(&client, &install_root, game_path, &settings.track).await;
+
+        use crate::dalamud::InstallState;
+        let install_path = match (&st.install_state, &st.install_path) {
+            (InstallState::Ready, Some(p)) => p.clone(),
+            (state, _) => {
+                warn!(
+                    state = ?state,
+                    "Dalamud not ready, launching game without it (safe degrade)"
+                );
+                return Ok(None);
+            }
+        };
+
+        let d = install_root.join("dalamud");
+        Ok(Some(GameLaunchConfigDalamud {
+            injector_exe: install_path.join("Dalamud.Injector.exe"),
+            install_dir: install_path,
+            config_path: d.join("config/dalamudConfig.json"),
+            log_path: d.join("logs/dalamud.log"),
+            plugin_dir: d.join("installedPlugins"),
+            asset_dir: d.join("assets"),
+            load_method: settings.load_method,
+            delay_initialize_ms: settings.delay_initialize_ms,
+            no_plugins: settings.no_plugins,
+            no_third_party_plugins: settings.no_third_party_plugins,
+        }))
     }
 }
 
