@@ -541,9 +541,22 @@ impl Launcher {
         areas: Vec<SdoArea>,
         game_path: impl AsRef<Path>,
     ) -> Result<GameLaunchResult, LauncherError> {
-        let game_path = game_path.as_ref().to_path_buf();
+        self.launch_with_options(wine, None, token, area, areas, game_path)
+            .await
+    }
 
-        let dalamud = Self::build_dalamud_config(&game_path).await?;
+    /// 启动游戏，可覆盖 Dalamud 启用状态（`Some(true/false)` 覆盖 `[dalamud].enabled`）。
+    pub async fn launch_with_options(
+        &self,
+        wine: &WineSettings,
+        dalamud_override: Option<bool>,
+        token: &LaunchToken,
+        area: SdoArea,
+        areas: Vec<SdoArea>,
+        game_path: impl AsRef<Path>,
+    ) -> Result<GameLaunchResult, LauncherError> {
+        let game_path = game_path.as_ref().to_path_buf();
+        let dalamud = Self::build_dalamud_config(&game_path, dalamud_override).await?;
         let config = GameLaunchConfig {
             game_path: game_path.clone(),
             session_id: token.ticket.clone(),
@@ -618,9 +631,11 @@ impl Launcher {
     /// 版本不匹配（release 尚未支持当前游戏）时**安全降级**为直接启动（不加载 Dalamud）。
     async fn build_dalamud_config(
         game_path: &Path,
+        override_enabled: Option<bool>,
     ) -> Result<Option<GameLaunchConfigDalamud>, LauncherError> {
         let settings = crate::config::load_dalamud_settings();
-        if !settings.enabled {
+        let enabled = override_enabled.unwrap_or(settings.enabled);
+        if !enabled {
             return Ok(None);
         }
 
@@ -632,15 +647,41 @@ impl Launcher {
         let st = crate::dalamud::updater::status(&client, &install_root, game_path, &settings.track).await;
 
         use crate::dalamud::InstallState;
-        let install_path = match (&st.install_state, &st.install_path) {
-            (InstallState::Ready, Some(p)) => p.clone(),
-            (state, _) => {
+        // 惰性安装：release 匹配游戏版本但本地未安装/版本旧时自动下载
+        let install_path = match &st.install_state {
+            InstallState::Ready => st.install_path.clone(),
+            InstallState::Missing => {
+                info!("Dalamud release matches game version, auto-installing");
+                let remote = st
+                    .remote
+                    .as_ref()
+                    .expect("Missing implies remote present");
+                match crate::dalamud::updater::download_release(
+                    &client,
+                    remote,
+                    &install_root,
+                    |_, _| {},
+                )
+                .await
+                {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        warn!(error = %e, "auto-install failed, launching without Dalamud");
+                        return Ok(None);
+                    }
+                }
+            }
+            other => {
                 warn!(
-                    state = ?state,
+                    state = ?other,
                     "Dalamud not ready, launching game without it (safe degrade)"
                 );
                 return Ok(None);
             }
+        };
+        let install_path = match install_path {
+            Some(p) => p,
+            None => return Ok(None),
         };
 
         let d = install_root.join("dalamud");
