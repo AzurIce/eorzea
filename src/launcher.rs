@@ -15,7 +15,7 @@ use std::path::Path;
 use std::time::Duration;
 use tracing::{debug, info, instrument, warn};
 use xiv_launcher_auth::sdo::{PollResult, SdoAuth, SdoContext};
-use xiv_launcher_auth::{SdoArea, SdoLoginData};
+use xiv_launcher_auth::{AuthError, SdoArea, SdoLoginData};
 
 use crate::game::{GameLaunchConfig, GameLaunchError, GameLaunchResult};
 
@@ -248,7 +248,13 @@ async fn finalize_login(
             .find(|a| a.snda_id == snda_id)
             .map(|a| a.account_name.clone()),
         Err(e) => {
-            info!(error = %e, "get_account_group failed, continuing without display name");
+            if is_fatal_auth_error(&e) {
+                // 认证/风控类错误（如短信确认）必须中断登录，不能继续换 ticket
+                return Err(LauncherError::Auth(format!(
+                    "get_account_group failed: {e}"
+                )));
+            }
+            info!(error = %e, "get_account_group failed (transient), continuing without display name");
             None
         }
     };
@@ -266,10 +272,16 @@ async fn finalize_login(
             auto_login_session_key = Some(session_key);
         }
         Err(e) => {
+            if is_fatal_auth_error(&e) {
+                // 认证/风控类错误必须中断登录
+                return Err(LauncherError::Auth(format!(
+                    "account_group_login failed: {e}"
+                )));
+            }
             if auto_login_session_key.is_some() {
-                info!(error = %e, "key exchange failed, using existing session key");
+                info!(error = %e, "key exchange failed (transient), using existing session key");
             } else {
-                info!(error = %e, "key exchange failed, continuing without auto-login key");
+                info!(error = %e, "key exchange failed (transient), continuing without auto-login key");
             }
         }
     }
@@ -713,6 +725,21 @@ pub enum LauncherError {
     Auth(String),
     #[error("Game launch error: {0}")]
     Game(#[from] GameLaunchError),
+}
+
+/// 认证/风控类错误必须中断登录；网络等瞬时错误可降级继续。
+fn is_fatal_auth_error(e: &AuthError) -> bool {
+    matches!(
+        e,
+        AuthError::SdoError { .. }
+            | AuthError::CaptchaRequired
+            | AuthError::FirstLoginOnDevice
+            | AuthError::AutoLoginExpired
+            | AuthError::QrNotScanned
+            | AuthError::PushMessageNotConfirmed
+            | AuthError::NoService
+            | AuthError::NoTerms
+    )
 }
 
 fn mask_sensitive(value: &str) -> String {
