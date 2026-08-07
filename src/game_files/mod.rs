@@ -19,6 +19,7 @@
 
 pub mod patch_list;
 pub mod patch_manager;
+pub mod verify;
 pub mod version;
 pub mod zpatch;
 

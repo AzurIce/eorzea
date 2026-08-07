@@ -139,7 +139,7 @@ enum GameCommand {
         concurrency: usize,
     },
 
-    /// 校验游戏文件完整性（尚未实现）
+    /// 校验游戏文件完整性（存在性 + sqpack 结构）
     Verify {
         /// 游戏根目录
         #[arg(long)]
@@ -284,9 +284,7 @@ async fn main() {
                 )
                 .await
             }
-            GameCommand::Verify { game_path: _ } => {
-                eprintln!("尚未实现：完整性校验依赖 IndexedZiPatch 格式，见 src/game_files 模块说明。");
-            }
+            GameCommand::Verify { game_path } => cmd_verify(&game_path),
         },
     }
 }
@@ -503,6 +501,54 @@ async fn cmd_update(
             eprintln!("下载失败: {e}");
             std::process::exit(1);
         }
+    }
+}
+
+
+/// `game verify`：校验游戏文件完整性。
+fn cmd_verify(game_path: &std::path::Path) {
+    use xiv_launcher_rs_lib::game_files::verify::{IssueSeverity, verify_game};
+
+    println!("=== 校验游戏文件完整性 ({}) ===", game_path.display());
+    let issues = verify_game(game_path, 5);
+
+    if issues.is_empty() {
+        println!("✅ 未发现问题，游戏文件完整。");
+        return;
+    }
+
+    let mut missing = Vec::new();
+    let mut corrupt = Vec::new();
+    let mut warnings = Vec::new();
+    for i in &issues {
+        match i.severity {
+            IssueSeverity::Missing => missing.push(i),
+            IssueSeverity::Corrupt => corrupt.push(i),
+            IssueSeverity::Warning => warnings.push(i),
+        }
+    }
+
+    if !missing.is_empty() {
+        println!("\n❌ 缺失文件 ({}):", missing.len());
+        for i in &missing {
+            println!("  {}", i.path);
+        }
+    }
+    if !corrupt.is_empty() {
+        println!("\n⚠️ 损坏文件 ({}):", corrupt.len());
+        for i in &corrupt {
+            println!("  {} — {}", i.path, i.message);
+        }
+    }
+    if !warnings.is_empty() {
+        println!("\n💡 警告 ({}):", warnings.len());
+        for i in &warnings {
+            println!("  {} — {}", i.path, i.message);
+        }
+    }
+
+    if !missing.is_empty() || !corrupt.is_empty() {
+        println!("\n建议: 用 `xlcli game update` 重新下载修复。");
     }
 }
 
