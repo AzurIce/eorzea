@@ -13,9 +13,12 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "xiv-launcher-rs",
-        "width": 800,
-        "height": 600
+        "title": "FFXIV 国服启动器",
+        "width": 960,
+        "height": 640,
+        "minWidth": 800,
+        "minHeight": 560,
+        "decorations": false
       }
     ],
     "security": {

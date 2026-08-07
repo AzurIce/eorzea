@@ -8,8 +8,12 @@
 xiv-launcher-rs/              # workspace root (tauri crate)
 ├── packages/
 │   └── xiv-launcher-auth/    # auth library (feature-gated)
-└── frontend/                 # Tauri frontend (Vite + TS)
+└── frontend/                 # Tauri frontend (Vite + Svelte 5 + TS, bun)
 ```
+
+GUI 相关：`src/commands.rs` 是 Tauri 命令层（设置/账号/登录/大区/更新/启动），
+`src/lib.rs` 注册命令并管理 `AppState`（Launcher、进行中的扫码/推送会话、token 缓存、大区缓存）。
+补丁进度通过 `patch-progress` 事件推送前端。
 
 **Current focus: SDO (中国服/盛趣) authentication and game launch.** The `se` (international) feature is implemented but not the priority.
 

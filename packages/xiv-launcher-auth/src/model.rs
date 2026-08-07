@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// 登录方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,7 +109,7 @@ pub struct PatchListEntry {
 ///
 /// 每个大区提供独立的 lobby、GM、补丁、存档上传服务器地址，
 /// 这些地址用于构造游戏启动参数和国服补丁检查。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SdoArea {
     #[serde(rename = "Areaid")]
     pub area_id: String,
