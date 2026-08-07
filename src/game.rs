@@ -42,6 +42,19 @@ pub struct GameLaunchResult {
     pub child: std::process::Child,
     /// 完整的启动命令行。
     pub command: String,
+    /// wine/游戏输出日志文件路径（如有）。
+    pub log_path: Option<PathBuf>,
+}
+
+/// 默认游戏运行日志路径：`~/.xiv-launcher-rs/logs/game-{unix_ts}.log`。
+pub fn default_game_log_path() -> PathBuf {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    dirs::home_dir()
+        .map(|h| h.join(format!(".xiv-launcher-rs/logs/game-{ts}.log")))
+        .unwrap_or_else(|| PathBuf::from(format!("game-{ts}.log")))
 }
 
 /// 构建国服启动参数字符串。
@@ -230,6 +243,7 @@ pub async fn launch_game(
     let working_dir = game_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
+    let log_path = default_game_log_path();
 
     info!(working_dir = %working_dir.display(), "determined working directory");
 
@@ -240,20 +254,20 @@ pub async fn launch_game(
 
     #[cfg(target_os = "windows")]
     {
-        let child = Command::new(game_path)
-            .args(args.split_whitespace())
-            .current_dir(working_dir)
-            .spawn()
-            .map_err(|e| {
-                error!(error = %e, "failed to spawn game process");
-                GameLaunchError::Io(e)
-            })?;
+        let mut cmd = Command::new(game_path);
+        cmd.args(args.split_whitespace()).current_dir(working_dir);
+        redirect_to_log(&mut cmd, &log_path);
+        let child = cmd.spawn().map_err(|e| {
+            error!(error = %e, "failed to spawn game process");
+            GameLaunchError::Io(e)
+        })?;
 
         info!(pid = child.id(), "game process spawned");
 
         Ok(GameLaunchResult {
             child,
             command: format!("{} {}", game_path.display(), args),
+            log_path: Some(log_path),
         })
     }
 
@@ -288,7 +302,7 @@ pub async fn launch_game(
         let env = build_launch_env(wine, &tool);
 
         let child = tool
-            .run(game_path, &arg_list, working_dir, &env)
+            .run(game_path, &arg_list, working_dir, &env, Some(&log_path))
             .map_err(|e| {
                 error!(error = %e, "failed to run game through Wine");
                 GameLaunchError::Io(e)
@@ -299,6 +313,7 @@ pub async fn launch_game(
         Ok(GameLaunchResult {
             child,
             command: format!("{:?} {:?} {}", tool.wine64_path, game_path, args),
+            log_path: Some(log_path),
         })
     }
 }
@@ -429,5 +444,19 @@ mod tests {
             "/home/user/Games/最终幻想XIV/game/ffxiv_dx11.exe"
         ))
         .is_err());
+    }
+}
+
+/// 将命令的 stdout/stderr 重定向到日志文件（Windows 直启分支用）。
+#[cfg(target_os = "windows")]
+fn redirect_to_log(cmd: &mut std::process::Command, log_path: &PathBuf) {
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(file) = std::fs::File::create(log_path) {
+        if let Ok(err_file) = file.try_clone() {
+            cmd.stdout(std::process::Stdio::from(file));
+            cmd.stderr(std::process::Stdio::from(err_file));
+        }
     }
 }

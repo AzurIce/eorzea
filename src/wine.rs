@@ -224,6 +224,7 @@ impl WineTool {
         args: &[String],
         working_dir: &Path,
         env: &[(String, String)],
+        log_file: Option<&Path>,
     ) -> Result<std::process::Child, std::io::Error> {
         info!(wine64_path = ?self.wine64_path, ?exe_path, "Starting game with wine");
         let mut cmd = Command::new(&self.wine64_path);
@@ -238,6 +239,23 @@ impl WineTool {
 
         for (k, v) in env {
             cmd.env(k, v);
+        }
+
+        // 日志重定向：Some(path) 时 wine/游戏输出写入文件，不污染终端
+        if let Some(log) = log_file {
+            if let Some(parent) = log.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let file = std::fs::File::create(log).map_err(|e| {
+                error!(path = %log.display(), error = %e, "failed to create wine log file");
+                e
+            })?;
+            let err_file = file.try_clone().map_err(|e| {
+                error!(error = %e, "failed to clone log file handle");
+                e
+            })?;
+            cmd.stdout(Stdio::from(file));
+            cmd.stderr(Stdio::from(err_file));
         }
 
         cmd.spawn()
@@ -774,7 +792,7 @@ mod tests {
         // run + build_launch_env
         let env = build_launch_env(&settings, &tool);
         let child = tool
-            .run(&PathBuf::from("game.exe"), &[], &dir, &env)
+            .run(&PathBuf::from("game.exe"), &[], &dir, &env, None)
             .expect("spawn fake wine");
         let status = child.wait_with_output().unwrap();
         assert!(status.status.success());

@@ -894,6 +894,9 @@ async fn cmd_launch(
         Ok(result) => {
             println!("游戏已启动! PID: {}", result.child.id());
             println!("命令行: {}", result.command);
+            if let Some(log) = &result.log_path {
+                println!("运行日志: {}（wine/游戏输出不再打印到终端）", log.display());
+            }
         }
         Err(e) => {
             eprintln!("启动失败: {e}");

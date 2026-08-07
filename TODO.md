@@ -113,7 +113,8 @@
   - [ ] `Auto`/`Managed` 下 `probe()` 失败回退系统 wine 并给出 NixOS 提示
   - [ ] 托管 wine 跑不起来且 PATH 有 `steam-run` 时自动用 steam-run 包装（需 `unset TZ` 规避 nixpkgs#279893）
   - [x] NixOS 用户上手指南已写入 `docs/nixos.md`（系统 wine / nix-ld / steam-run 手动包装三条路径）
-- [ ] **wine 日志**：`WineSettings.log_file` 未接入（C# 有 StreamWriter 日志）
+- [x] **wine/游戏日志重定向**：launch 时 wine/游戏输出写入 `~/.xiv-launcher-rs/logs/game-{ts}.log`，CLI 终端不再被污染；`GameLaunchResult.log_path` 暴露日志路径
+- [ ] **`WineSettings.log_file` 字段**：可配置日志路径（当前为默认路径，GUI 配置项待加）
 - [ ] **prefix 引导 `EnsurePrefix()`**：C# 首次 `cmd /c dir %userprofile%/Documents` 初始化，未实现
 - [ ] **`wineserver` 管理**：C# 有 `wineserver` 路径处理，未实现
 
