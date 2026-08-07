@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod dalamud;
 pub mod game_files;
 pub mod term_img;
 pub mod game;
