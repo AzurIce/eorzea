@@ -275,7 +275,8 @@ async fn main() {
                 } else {
                     None
                 };
-                cmd_dalamud_launch(&game_path, &area, override_enabled).await
+                let _ = override_enabled;
+                cmd_dalamud_launch(&game_path, &area).await
             }
         },
         Command::Auth { sub } => match sub {
@@ -970,6 +971,49 @@ async fn cmd_launch(
         launcher = launcher.with_wine_path(w);
     }
 
+    // Dalamud 状态提示（是否启用 + 实际状态）
+    let ds = xiv_launcher_rs_lib::config::load_dalamud_settings();
+    let d_enabled = dalamud_override.unwrap_or(ds.enabled);
+    if !d_enabled {
+        println!("Dalamud: 禁用（config [dalamud].enabled=false，或用 --dalamud 启用）");
+    } else {
+        let install_root = ds
+            .install_root
+            .clone()
+            .unwrap_or_else(xiv_launcher_rs_lib::dalamud::updater::default_install_root);
+        let client = reqwest::Client::new();
+        let dstatus = xiv_launcher_rs_lib::dalamud::updater::status(
+            &client, &install_root, game_path, &ds.track,
+        )
+        .await;
+        use xiv_launcher_rs_lib::dalamud::InstallState;
+        match dstatus.install_state {
+            InstallState::Ready => {
+                println!(
+                    "Dalamud: 启用（{}，版本匹配，走 Injector）",
+                    dstatus.local_assembly_version.as_deref().unwrap_or("?")
+                );
+            }
+            InstallState::Missing => {
+                println!("Dalamud: 启用（版本匹配，启动时自动安装）");
+            }
+            InstallState::Unsupported => {
+                println!(
+                    "⚠️ Dalamud: release {} 尚不支持游戏版本 {}（支持 {}），安全降级为直接启动",
+                    dstatus.remote.as_ref().map(|r| r.assembly_version.as_str()).unwrap_or("?"),
+                    dstatus.local_game_ver,
+                    dstatus.remote.as_ref().map(|r| r.supported_game_ver.as_str()).unwrap_or("?")
+                );
+            }
+            InstallState::OutOfDate => {
+                println!("⚠️ Dalamud: 已安装版本与游戏不匹配，安全降级为直接启动");
+            }
+            InstallState::Failed(msg) => {
+                println!("⚠️ Dalamud: 安装异常（{msg}），安全降级为直接启动");
+            }
+        }
+    }
+
     println!("\n启动游戏 ({}) ...", area.area_name);
     match launcher
         .launch_with_options(
@@ -1078,13 +1122,8 @@ async fn cmd_dalamud_status(game_path: &std::path::Path) {
 }
 
 /// `dalamud launch`：通过 Injector 启动游戏（版本门控）。
-async fn cmd_dalamud_launch(
-    game_path: &std::path::Path,
-    area_id: &str,
-    override_enabled: Option<bool>,
-) {
-    // `dalamud launch` 等价于 `launch --dalamud`：强制启用并通过 Injector 启动。
-    // 登录/自动安装/安全降级由 cmd_launch + launcher 处理。
+/// `dalamud launch`：等价于 `launch --dalamud`（强制启用，自动安装/安全降级由 launcher 处理）。
+async fn cmd_dalamud_launch(game_path: &std::path::Path, area_id: &str) {
     cmd_launch(
         game_path,
         area_id,
