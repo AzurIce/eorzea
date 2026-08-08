@@ -116,6 +116,7 @@
           wayland # winit wayland backend
           libxkbcommon # 键盘输入
           libunwind # wine (ubuntu build) dlopens libunwind.so.8 at runtime
+          dbus # rfd 的 xdg-portal 后端运行时 dlopen libdbus-1.so
         ];
         # Wine (ubuntu build) 运行所需的系统库：dlopen 加载，不在 ldd 里
         wineLibs = with pkgs; [

@@ -183,7 +183,8 @@ fn NavButton(label: &'static str, target: Tab, tab: Signal<Tab>) -> Element {
     let fg = if active { t.text } else { t.text_secondary };
     rsx! {
         button {
-            style: "display: block; width: 100%; padding: 8px 12px; border: none; border-radius: 6px; background: {bg}; color: {fg}; font-size: 14px; text-align: left; cursor: pointer;",
+            // display: block 撑满侧边栏；不要用 width: 100%（content-box 下会叠加 padding 溢出）
+            style: "display: block; padding: 8px 12px; border: none; border-radius: 6px; background: {bg}; color: {fg}; font-size: 14px; text-align: left; cursor: pointer;",
             onclick: move |_| tab.set(target),
             "{label}"
         }

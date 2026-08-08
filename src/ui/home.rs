@@ -1,8 +1,11 @@
-//! 主页：账号/大区选择、本地版本、检查/更新游戏、启动游戏。
+//! 主页：账号/大区选择、状态仪表盘（游戏位置/版本、Dalamud、Wine）、检查/更新游戏、启动游戏。
 
 use dioxus::prelude::*;
 use eorzea_auth::PatchListEntry;
+use eorzea_lib::config::{self, WineStartupType};
+use eorzea_lib::dalamud::updater;
 use eorzea_lib::game_files::{CheckResult, GameFileManager};
+use eorzea_lib::wine::WineTool;
 
 use super::login::{ActionButton, ErrorRow, Section};
 use super::AppState;
@@ -212,21 +215,63 @@ pub fn HomePage() -> Element {
         "请选择大区"
     };
 
+    // ── 状态卡片数据（均为本地检测，无网络/无副作用）─────────────────────
+    // game_root 已被上面的闭包 move，这里重新读一份
+    let status_game_root = state.settings.read().game_path.clone();
+    let game_exe_ok = status_game_root
+        .as_ref()
+        .map(|r| r.join("game/ffxiv_dx11.exe").exists())
+        .unwrap_or(false);
+
+    let dalamud_cfg = config::load_dalamud_settings();
+    let (dalamud_main, dalamud_sub) = if !dalamud_cfg.enabled {
+        ("未启用".to_string(), "config.toml 中 [dalamud] 未开启".to_string())
+    } else {
+        let root = dalamud_cfg
+            .install_root
+            .clone()
+            .unwrap_or_else(updater::default_install_root);
+        match updater::detect_local_install(&root) {
+            Some((ver, _)) => (format!("已安装 {ver}"), "启动时自动校验/更新".to_string()),
+            None => ("未安装".to_string(), "首次启动时自动安装".to_string()),
+        }
+    };
+
+    let wine_cfg = state.settings.read().clone();
+    let wine_startup = match wine_cfg.startup_type {
+        WineStartupType::Auto => "自动",
+        WineStartupType::Managed => "托管",
+        WineStartupType::Custom => "自定义",
+        WineStartupType::System => "系统",
+    };
+    // detect 只做本地探测（自定义路径 → 托管目录 → PATH），不会触发下载
+    let wine_tool = WineTool::detect(wine_cfg.custom_path.as_deref());
+    let wine_sub = match &wine_tool {
+        Some(w) if w.is_managed => format!("{}（托管）", w.wine64_path.display()),
+        Some(w) => format!("{}", w.wine64_path.display()),
+        None => "未检测到可用 wine".to_string(),
+    };
+
     rsx! {
         div {
-            style: "display: flex; flex-direction: column; gap: 24px;",
+            style: "display: flex; flex-direction: column; gap: 16px;",
 
+            // ── 启动设置（紧凑单行）─────────────────────────────────────
             Section { title: "启动设置",
                 div {
-                    style: "display: flex; flex-direction: column; gap: 12px;",
-                    LabeledRow { label: "账号",
+                    style: "display: flex; flex-direction: row; align-items: center; gap: 12px; flex-wrap: wrap;",
+                    span { style: "font-size: 14px; color: {t.text_secondary};", "账号" }
+                    div {
+                        style: "width: 220px;",
                         Dropdown {
                             items: account_items,
                             selected: state.selected_account,
                             placeholder: "请选择账号",
                         }
                     }
-                    LabeledRow { label: "大区",
+                    span { style: "font-size: 14px; color: {t.text_secondary};", "大区" }
+                    div {
+                        style: "width: 220px;",
                         Dropdown {
                             items: area_items,
                             selected: state.selected_area,
@@ -236,16 +281,46 @@ pub fn HomePage() -> Element {
                 }
             }
 
-            Section { title: "游戏版本",
-                if let Some(v) = versions.read().as_ref() {
-                    p { style: "margin: 2px 0; font-size: 14px; color: {t.text};", "boot: {v.0}" }
-                    p { style: "margin: 2px 0; font-size: 14px; color: {t.text};", "game: {v.1}" }
-                } else {
-                    p { style: "color: {t.text_secondary}; font-size: 13px;", "未配置游戏目录，请到设置页填写游戏根目录。" }
+            // ── 状态仪表盘（2×2）────────────────────────────────────────
+            div {
+                style: "display: flex; flex-direction: row; gap: 12px;",
+                StatusCard { title: "游戏位置",
+                    if let Some(root) = &status_game_root {
+                        p { style: "margin: 0; font-size: 13px; color: {t.text}; overflow-wrap: anywhere;", "{root.display()}" }
+                        if game_exe_ok {
+                            p { style: "margin: 4px 0 0 0; font-size: 12px; color: {t.success};", "✓ 已找到 game/ffxiv_dx11.exe" }
+                        } else {
+                            p { style: "margin: 4px 0 0 0; font-size: 12px; color: {t.danger};", "✗ 未找到 game/ffxiv_dx11.exe" }
+                        }
+                    } else {
+                        p { style: "margin: 0; font-size: 13px; color: {t.text_secondary};", "未配置，请到设置页选择游戏根目录。" }
+                    }
                 }
+                StatusCard { title: "游戏版本",
+                    if let Some(v) = versions.read().as_ref() {
+                        p { style: "margin: 0; font-size: 13px; color: {t.text};", "game: {v.1}" }
+                        p { style: "margin: 4px 0 0 0; font-size: 12px; color: {t.text_secondary};", "boot: {v.0}" }
+                    } else {
+                        p { style: "margin: 0; font-size: 13px; color: {t.text_secondary};", "未配置" }
+                    }
+                }
+            }
+            div {
+                style: "display: flex; flex-direction: row; gap: 12px;",
+                StatusCard { title: "Dalamud",
+                    p { style: "margin: 0; font-size: 13px; color: {t.text};", "{dalamud_main}" }
+                    p { style: "margin: 4px 0 0 0; font-size: 12px; color: {t.text_secondary};", "{dalamud_sub}" }
+                }
+                StatusCard { title: "Wine",
+                    p { style: "margin: 0; font-size: 13px; color: {t.text};", "启动方式：{wine_startup}" }
+                    p { style: "margin: 4px 0 0 0; font-size: 12px; color: {t.text_secondary}; overflow-wrap: anywhere;", "{wine_sub}" }
+                }
+            }
 
+            // ── 游戏更新 ────────────────────────────────────────────────
+            Section { title: "游戏更新",
                 div {
-                    style: "display: flex; flex-direction: row; gap: 8px; margin-top: 12px; align-items: center;",
+                    style: "display: flex; flex-direction: row; gap: 8px; align-items: center;",
                     ActionButton { label: "检查更新", onclick: check_update }
                     if matches!(&*update_state.read(), UpdateState::NeedsPatch(_)) {
                         ActionButton { label: "更新游戏", onclick: run_update }
@@ -296,20 +371,23 @@ fn selected_area(state: &AppState) -> Option<eorzea_auth::SdoArea> {
     state.areas.read().iter().find(|a| a.area_id == id).cloned()
 }
 
-/// 带标签的设置行。
+/// 状态仪表盘小卡片（标题 + 内容，等宽弹性布局）。
 #[component]
-fn LabeledRow(label: &'static str, children: Element) -> Element {
+fn StatusCard(title: &'static str, children: Element) -> Element {
     let t = (use_context::<AppState>().theme)();
     rsx! {
         div {
-            style: "display: flex; flex-direction: row; align-items: center; gap: 12px;",
-            span { style: "width: 48px; font-size: 14px; color: {t.text_secondary};", "{label}" }
-            div { style: "flex: 1;", {children} }
+            style: "flex: 1; min-width: 0; background: {t.card_bg}; border: 1px solid {t.border}; border-radius: 8px; padding: 12px 16px;",
+            p { style: "margin: 0 0 6px 0; font-size: 12px; color: {t.text_secondary};", "{title}" }
+            {children}
         }
     }
 }
 
 /// 自定义下拉框（blitz 暂不支持原生 `select`，用按钮 + 展开列表实现）。
+///
+/// 注意：按钮用 `display: block` 撑满容器而不是 `width: 100%`——
+/// 后者在 content-box 下会叠加 padding/border 导致横向溢出。
 #[component]
 fn Dropdown(
     items: Vec<(String, String)>,
@@ -329,7 +407,7 @@ fn Dropdown(
         div {
             style: "position: relative;",
             button {
-                style: "width: 100%; padding: 8px 12px; border: 1px solid {t.input_border}; border-radius: 6px; background: transparent; color: {t.text}; font-size: 14px; text-align: left; cursor: pointer;",
+                style: "display: block; padding: 8px 12px; border: 1px solid {t.input_border}; border-radius: 6px; background: transparent; color: {t.text}; font-size: 14px; text-align: left; cursor: pointer;",
                 onclick: move |_| open.set(!open()),
                 "{current_label} ▾"
             }
@@ -339,7 +417,7 @@ fn Dropdown(
                     for (id, name) in items {
                         button {
                             key: "{id}",
-                            style: "display: block; width: 100%; padding: 8px 12px; border: none; border-radius: 4px; background: transparent; color: {t.text}; font-size: 14px; text-align: left; cursor: pointer;",
+                            style: "display: block; padding: 8px 12px; border: none; border-radius: 4px; background: transparent; color: {t.text}; font-size: 14px; text-align: left; cursor: pointer;",
                             onclick: move |_| {
                                 selected.set(Some(id.clone()));
                                 open.set(false);

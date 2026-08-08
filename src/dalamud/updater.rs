@@ -53,7 +53,7 @@ pub fn local_game_version(game_root: &Path) -> String {
 }
 
 /// 检测本机已安装的 Dalamud 版本（扫描 `Hooks/*/version.json`）。
-fn detect_local_install(root: &Path) -> Option<(String, PathBuf)> {
+pub fn detect_local_install(root: &Path) -> Option<(String, PathBuf)> {
     let hooks = root.join("Hooks");
     let entries = std::fs::read_dir(&hooks).ok()?;
     for entry in entries.flatten() {

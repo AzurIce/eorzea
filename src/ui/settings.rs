@@ -3,7 +3,7 @@
 use dioxus::prelude::*;
 use eorzea_lib::config::{self, WineStartupType};
 
-use super::login::{ActionButton, Section, TextInput};
+use super::login::{ActionButton, GhostButton, Section, TextInput};
 use super::AppState;
 
 #[component]
@@ -32,6 +32,23 @@ pub fn SettingsPage() -> Element {
         gamemode.set(s.gamemode);
     });
 
+    // ── 浏览游戏根目录（rfd 原生目录选择对话框，阻塞调用放 spawn_blocking）──
+    let browse_game_path = move |_: MouseEvent| {
+        spawn(async move {
+            let picked = tokio::task::spawn_blocking(|| {
+                rfd::FileDialog::new()
+                    .set_title("选择游戏根目录")
+                    .pick_folder()
+            })
+            .await;
+            match picked {
+                Ok(Some(path)) => game_path.set(path.display().to_string()),
+                Ok(None) => {}
+                Err(e) => state.status.set(format!("目录选择对话框失败: {e}")),
+            }
+        });
+    };
+
     let save = move |_: MouseEvent| {
         let mut s = state.settings.read().clone();
         s.game_path = string_to_path(&game_path.read());
@@ -57,9 +74,13 @@ pub fn SettingsPage() -> Element {
 
             Section { title: "游戏",
                 SettingsRow { label: "游戏根目录",
-                    TextInput {
-                        placeholder: "例如 /games/ffxiv（含 boot/、game/、sdo/）",
-                        value: game_path,
+                    div {
+                        style: "display: flex; flex-direction: row; gap: 8px; align-items: center;",
+                        TextInput {
+                            placeholder: "例如 /games/ffxiv（含 boot/、game/、sdo/）",
+                            value: game_path,
+                        }
+                        GhostButton { label: "浏览…", onclick: browse_game_path }
                     }
                 }
             }
@@ -129,7 +150,7 @@ fn SettingsRow(label: &'static str, children: Element) -> Element {
         div {
             style: "display: flex; flex-direction: row; align-items: center; gap: 12px; margin-bottom: 12px;",
             span { style: "width: 80px; font-size: 14px; color: {t.text_secondary}; flex-shrink: 0;", "{label}" }
-            div { style: "flex: 1;", {children} }
+            div { style: "flex: 1; min-width: 0;", {children} }
         }
     }
 }

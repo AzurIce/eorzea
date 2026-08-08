@@ -337,7 +337,7 @@ pub fn GhostButton(label: &'static str, onclick: EventHandler<MouseEvent>) -> El
     let t = (use_context::<AppState>().theme)();
     rsx! {
         button {
-            style: "padding: 8px 16px; border: 1px solid {t.border}; border-radius: 6px; background: transparent; color: {t.text_secondary}; font-size: 14px; cursor: pointer;",
+            style: "padding: 8px 16px; border: 1px solid {t.border}; border-radius: 6px; background: transparent; color: {t.text_secondary}; font-size: 14px; cursor: pointer; flex-shrink: 0;",
             onclick: move |e| onclick.call(e),
             "{label}"
         }
@@ -385,7 +385,7 @@ pub fn TextInput(placeholder: &'static str, value: Signal<String>) -> Element {
     let t = (use_context::<AppState>().theme)();
     rsx! {
         input {
-            style: "padding: 8px 12px; border: 1px solid {t.input_border}; border-radius: 6px; background: transparent; color: {t.text}; font-size: 14px; flex: 1;",
+            style: "padding: 8px 12px; border: 1px solid {t.input_border}; border-radius: 6px; background: transparent; color: {t.text}; font-size: 14px; flex: 1; min-width: 0;",
             placeholder: "{placeholder}",
             value: "{value}",
             oninput: move |e| value.set(e.value()),

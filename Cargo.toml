@@ -31,6 +31,8 @@ flate2 = "1"
 base64 = "0.22"
 toml = "0.8"
 md5 = "0.7"
+# 原生文件/目录选择对话框（Linux 走 xdg-desktop-portal，与 blitz-shell 的 rfd 统一 feature）
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 
 [[example]]
 name = "sdo_launch"
