@@ -3,6 +3,10 @@
 //! 页面：登录 / 主页 / 设置。所有耗时操作（登录、等扫码、检查更新、下载）
 //! 都在 dioxus `spawn` 的异步任务里执行（dioxus-native 内置 tokio runtime），
 //! 不阻塞 UI 线程。
+//!
+//! 视觉风格：shadcn/ui dark（zinc 色系）——页面底 #09090b，卡片 #0c0c0f +
+//! 1px 边框 #27272a，无阴影无渐变；圆角 6~8px；强调色为黑白对比
+//! （primary 白底黑字）；主文字 #fafafa，次要 #a1a1aa。
 
 mod home;
 mod login;
@@ -71,7 +75,7 @@ impl AppState {
     }
 }
 
-/// 根组件：标签栏 + 页面内容 + 状态栏。
+/// 根组件：侧边栏导航 + 页面内容 + 状态栏。
 pub fn app() -> Element {
     let mut state = AppState {
         tab: use_signal(|| Tab::Home),
@@ -114,42 +118,50 @@ pub fn app() -> Element {
     let tab = state.tab;
     rsx! {
         div {
-            style: "display: flex; flex-direction: column; height: 100vh; font-family: sans-serif; background: #f5f6f8; color: #222;",
+            style: "display: flex; flex-direction: row; height: 100vh; font-family: sans-serif; background: #09090b; color: #fafafa;",
 
-            // 标签栏
+            // 侧边栏导航
             div {
-                style: "display: flex; flex-direction: row; gap: 4px; padding: 8px; background: #2b3a4a;",
-                TabButton { label: "主页", target: Tab::Home, tab }
-                TabButton { label: "登录 / 账号", target: Tab::Login, tab }
-                TabButton { label: "设置", target: Tab::Settings, tab }
-            }
-
-            // 页面内容
-            div {
-                style: "flex: 1; overflow-y: auto; padding: 12px;",
-                match tab() {
-                    Tab::Login => rsx! { login::LoginPage {} },
-                    Tab::Home => rsx! { home::HomePage {} },
-                    Tab::Settings => rsx! { settings::SettingsPage {} },
+                style: "width: 190px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; padding: 16px 12px; border-right: 1px solid #27272a;",
+                div {
+                    style: "padding: 4px 12px 20px 12px; font-size: 15px; font-weight: 600; color: #fafafa;",
+                    "FFXIV 国服启动器"
                 }
+                NavButton { label: "主页", target: Tab::Home, tab }
+                NavButton { label: "登录 / 账号", target: Tab::Login, tab }
+                NavButton { label: "设置", target: Tab::Settings, tab }
             }
 
-            // 状态栏
+            // 右栏：页面内容 + 状态栏
             div {
-                style: "padding: 6px 12px; background: #e4e7eb; font-size: 13px; color: #444;",
-                "{state.status}"
+                style: "flex: 1; display: flex; flex-direction: column; min-width: 0;",
+                div {
+                    style: "flex: 1; overflow-y: auto; padding: 24px 28px;",
+                    match tab() {
+                        Tab::Login => rsx! { login::LoginPage {} },
+                        Tab::Home => rsx! { home::HomePage {} },
+                        Tab::Settings => rsx! { settings::SettingsPage {} },
+                    }
+                }
+
+                // 状态栏
+                div {
+                    style: "padding: 8px 28px; border-top: 1px solid #27272a; font-size: 12px; color: #a1a1aa;",
+                    "{state.status}"
+                }
             }
         }
     }
 }
 
 #[component]
-fn TabButton(label: &'static str, target: Tab, tab: Signal<Tab>) -> Element {
+fn NavButton(label: &'static str, target: Tab, tab: Signal<Tab>) -> Element {
     let active = tab() == target;
-    let bg = if active { "#4a6b8a" } else { "#3a4d60" };
+    let bg = if active { "#27272a" } else { "transparent" };
+    let fg = if active { "#fafafa" } else { "#a1a1aa" };
     rsx! {
         button {
-            style: "padding: 6px 18px; border: none; border-radius: 4px; background: {bg}; color: #fff; font-size: 14px; cursor: pointer;",
+            style: "display: block; width: 100%; padding: 8px 12px; border: none; border-radius: 6px; background: {bg}; color: {fg}; font-size: 14px; text-align: left; cursor: pointer;",
             onclick: move |_| tab.set(target),
             "{label}"
         }

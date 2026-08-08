@@ -147,12 +147,12 @@ pub fn LoginPage() -> Element {
 
     rsx! {
         div {
-            style: "display: flex; flex-direction: column; gap: 16px;",
+            style: "display: flex; flex-direction: column; gap: 24px;",
 
             // ── 账号列表 ────────────────────────────────────────────────
             Section { title: "已保存账号",
                 if accounts.is_empty() {
-                    p { style: "color: #888; font-size: 13px;", "暂无账号，请通过下方任意方式登录。" }
+                    p { style: "color: #a1a1aa; font-size: 13px;", "暂无账号，请通过下方任意方式登录。" }
                 }
                 for acc in accounts {
                     {
@@ -170,8 +170,8 @@ pub fn LoginPage() -> Element {
                         rsx! {
                             div {
                                 key: "{acc.snda_id}",
-                                style: "display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #e0e0e0;",
-                                span { style: "flex: 1; font-size: 14px;", "{display}" }
+                                style: "display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid #27272a;",
+                                span { style: "flex: 1; font-size: 14px; color: #fafafa;", "{display}" }
                                 if key.is_some() {
                                     SmallButton { label: "自动登录",
                                         onclick: move |_| {
@@ -202,7 +202,7 @@ pub fn LoginPage() -> Element {
                                         state.auth_cfg.set(cfg);
                                     }
                                 }
-                                SmallButton { label: "删除",
+                                DangerButton { label: "删除",
                                     onclick: move |_| {
                                         let mut cfg = state.auth_cfg.read().clone();
                                         cfg.remove(&snda_id2);
@@ -229,17 +229,20 @@ pub fn LoginPage() -> Element {
                         ActionButton { label: "获取二维码", onclick: start_qr }
                     },
                     QrState::Loading => rsx! {
-                        p { style: "color: #666;", "正在获取二维码…" }
+                        p { style: "color: #a1a1aa; font-size: 13px;", "正在获取二维码…" }
                     },
                     QrState::Waiting(b64) => rsx! {
                         div {
-                            style: "display: flex; flex-direction: column; align-items: center; gap: 8px;",
-                            img {
-                                src: "data:image/png;base64,{b64}",
-                                style: "width: 220px; height: 220px;",
+                            style: "display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 8px 0;",
+                            div {
+                                style: "background: #fff; border-radius: 8px; padding: 12px;",
+                                img {
+                                    src: "data:image/png;base64,{b64}",
+                                    style: "width: 220px; height: 220px;",
+                                }
                             }
-                            p { style: "color: #666; font-size: 13px;", "请使用叨鱼 App 扫码并确认（5 分钟内有效）" }
-                            ActionButton { label: "取消", onclick: cancel_qr }
+                            p { style: "color: #a1a1aa; font-size: 13px;", "请使用叨鱼 App 扫码并确认（5 分钟内有效）" }
+                            GhostButton { label: "取消", onclick: cancel_qr }
                         }
                     },
                     QrState::Failed(e) => rsx! {
@@ -266,16 +269,16 @@ pub fn LoginPage() -> Element {
                         }
                     },
                     PushState::Loading => rsx! {
-                        p { style: "color: #666;", "正在发送推送…" }
+                        p { style: "color: #a1a1aa; font-size: 13px;", "正在发送推送…" }
                     },
                     PushState::Waiting(serial) => rsx! {
                         div {
-                            style: "display: flex; flex-direction: column; align-items: center; gap: 8px;",
+                            style: "display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px 0;",
                             if let Some(serial) = serial {
-                                p { style: "font-size: 20px; font-weight: bold; letter-spacing: 4px;", "验证序号：{serial}" }
+                                p { style: "font-size: 20px; font-weight: 600; letter-spacing: 4px; color: #fafafa;", "验证序号：{serial}" }
                             }
-                            p { style: "color: #666; font-size: 13px;", "请在叨鱼 App 上核对序号并确认（30 秒内有效）" }
-                            ActionButton { label: "取消", onclick: cancel_push }
+                            p { style: "color: #a1a1aa; font-size: 13px;", "请在叨鱼 App 上核对序号并确认（30 秒内有效）" }
+                            GhostButton { label: "取消", onclick: cancel_push }
                         }
                     },
                 }
@@ -287,7 +290,7 @@ pub fn LoginPage() -> Element {
                     ErrorRow { message: "{e}" }
                 }
                 div {
-                    style: "display: flex; flex-direction: column; gap: 8px; max-width: 320px;",
+                    style: "display: flex; flex-direction: column; gap: 12px; max-width: 320px;",
                     TextInput { placeholder: "账号", value: pwd_account }
                     PasswordInput { placeholder: "密码", value: pwd_password }
                     ActionButton {
@@ -305,31 +308,55 @@ pub fn LoginPage() -> Element {
 pub fn Section(title: &'static str, children: Element) -> Element {
     rsx! {
         div {
-            style: "background: #fff; border-radius: 6px; padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.08);",
-            h3 { style: "margin: 0 0 8px 0; font-size: 15px; color: #2b3a4a;", "{title}" }
+            style: "background: #0c0c0f; border: 1px solid #27272a; border-radius: 8px; padding: 20px;",
+            h3 { style: "margin: 0 0 12px 0; font-size: 15px; font-weight: 500; color: #fafafa;", "{title}" }
             {children}
         }
     }
 }
 
-/// 主要操作按钮。
+/// 主要操作按钮（primary：白底黑字）。
 #[component]
 pub fn ActionButton(label: String, onclick: EventHandler<MouseEvent>) -> Element {
     rsx! {
         button {
-            style: "padding: 8px 20px; border: none; border-radius: 4px; background: #4a6b8a; color: #fff; font-size: 14px; cursor: pointer;",
+            style: "padding: 8px 16px; border: none; border-radius: 6px; background: #fafafa; color: #18181b; font-size: 14px; font-weight: 500; cursor: pointer;",
             onclick: move |e| onclick.call(e),
             "{label}"
         }
     }
 }
 
-/// 行内小按钮。
+/// 次要操作按钮（ghost：透明底 + 细边框）。
+#[component]
+pub fn GhostButton(label: &'static str, onclick: EventHandler<MouseEvent>) -> Element {
+    rsx! {
+        button {
+            style: "padding: 8px 16px; border: 1px solid #27272a; border-radius: 6px; background: transparent; color: #a1a1aa; font-size: 14px; cursor: pointer;",
+            onclick: move |e| onclick.call(e),
+            "{label}"
+        }
+    }
+}
+
+/// 行内小按钮（ghost）。
 #[component]
 fn SmallButton(label: &'static str, onclick: EventHandler<MouseEvent>) -> Element {
     rsx! {
         button {
-            style: "padding: 3px 10px; border: 1px solid #c8cdd4; border-radius: 4px; background: #fff; color: #444; font-size: 12px; cursor: pointer;",
+            style: "padding: 4px 10px; border: 1px solid #27272a; border-radius: 6px; background: transparent; color: #a1a1aa; font-size: 12px; cursor: pointer;",
+            onclick: move |e| onclick.call(e),
+            "{label}"
+        }
+    }
+}
+
+/// 危险操作小按钮（低饱和红）。
+#[component]
+fn DangerButton(label: &'static str, onclick: EventHandler<MouseEvent>) -> Element {
+    rsx! {
+        button {
+            style: "padding: 4px 10px; border: 1px solid #7f1d1d; border-radius: 6px; background: transparent; color: #ef4444; font-size: 12px; cursor: pointer;",
             onclick: move |e| onclick.call(e),
             "{label}"
         }
@@ -340,7 +367,7 @@ fn SmallButton(label: &'static str, onclick: EventHandler<MouseEvent>) -> Elemen
 #[component]
 pub fn ErrorRow(message: String) -> Element {
     rsx! {
-        p { style: "color: #b03030; font-size: 13px; margin: 4px 0;", "{message}" }
+        p { style: "color: #ef4444; font-size: 13px; margin: 4px 0;", "{message}" }
     }
 }
 
@@ -349,7 +376,7 @@ pub fn ErrorRow(message: String) -> Element {
 pub fn TextInput(placeholder: &'static str, value: Signal<String>) -> Element {
     rsx! {
         input {
-            style: "padding: 8px; border: 1px solid #c8cdd4; border-radius: 4px; font-size: 14px; flex: 1;",
+            style: "padding: 8px 12px; border: 1px solid #3f3f46; border-radius: 6px; background: transparent; color: #fafafa; font-size: 14px; flex: 1;",
             placeholder: "{placeholder}",
             value: "{value}",
             oninput: move |e| value.set(e.value()),
@@ -363,7 +390,7 @@ pub fn PasswordInput(placeholder: &'static str, value: Signal<String>) -> Elemen
     rsx! {
         input {
             r#type: "password",
-            style: "padding: 8px; border: 1px solid #c8cdd4; border-radius: 4px; font-size: 14px;",
+            style: "padding: 8px 12px; border: 1px solid #3f3f46; border-radius: 6px; background: transparent; color: #fafafa; font-size: 14px;",
             placeholder: "{placeholder}",
             value: "{value}",
             oninput: move |e| value.set(e.value()),

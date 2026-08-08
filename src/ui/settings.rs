@@ -52,7 +52,7 @@ pub fn SettingsPage() -> Element {
 
     rsx! {
         div {
-            style: "display: flex; flex-direction: column; gap: 16px;",
+            style: "display: flex; flex-direction: column; gap: 24px;",
 
             Section { title: "游戏",
                 SettingsRow { label: "游戏根目录",
@@ -75,12 +75,12 @@ pub fn SettingsPage() -> Element {
                         ] {
                             {
                                 let active = startup_type() == ty;
-                                let bg = if active { "#4a6b8a" } else { "#fff" };
-                                let fg = if active { "#fff" } else { "#444" };
+                                let bg = if active { "#27272a" } else { "transparent" };
+                                let fg = if active { "#fafafa" } else { "#a1a1aa" };
                                 rsx! {
                                     button {
                                         key: "{name}",
-                                        style: "padding: 6px 14px; border: 1px solid #c8cdd4; border-radius: 4px; background: {bg}; color: {fg}; font-size: 13px; cursor: pointer;",
+                                        style: "padding: 6px 14px; border: 1px solid #27272a; border-radius: 6px; background: {bg}; color: {fg}; font-size: 13px; cursor: pointer;",
                                         onclick: move |_| startup_type.set(ty),
                                         "{name}"
                                     }
@@ -105,7 +105,7 @@ pub fn SettingsPage() -> Element {
                 }
 
                 div {
-                    style: "display: flex; flex-direction: row; gap: 20px; margin-top: 8px; flex-wrap: wrap;",
+                    style: "display: flex; flex-direction: row; gap: 24px; margin-top: 4px; flex-wrap: wrap;",
                     Checkbox { label: "esync", checked: esync }
                     Checkbox { label: "fsync", checked: fsync }
                     Checkbox { label: "DXVK", checked: dxvk }
@@ -125,8 +125,8 @@ pub fn SettingsPage() -> Element {
 fn SettingsRow(label: &'static str, children: Element) -> Element {
     rsx! {
         div {
-            style: "display: flex; flex-direction: row; align-items: center; gap: 8px; margin-bottom: 8px;",
-            span { style: "width: 80px; font-size: 14px; color: #555; flex-shrink: 0;", "{label}" }
+            style: "display: flex; flex-direction: row; align-items: center; gap: 12px; margin-bottom: 12px;",
+            span { style: "width: 80px; font-size: 14px; color: #a1a1aa; flex-shrink: 0;", "{label}" }
             div { style: "flex: 1;", {children} }
         }
     }
@@ -137,9 +137,12 @@ fn SettingsRow(label: &'static str, children: Element) -> Element {
 fn Checkbox(label: &'static str, checked: Signal<bool>) -> Element {
     rsx! {
         label {
-            style: "display: flex; flex-direction: row; align-items: center; gap: 4px; font-size: 14px; cursor: pointer;",
+            style: "display: flex; flex-direction: row; align-items: center; gap: 6px; font-size: 14px; color: #fafafa; cursor: pointer;",
             input {
                 r#type: "checkbox",
+                // blitz 用 currentColor 作 accent-color：勾选=底色填充+白勾，
+                // 深色主题下要显式给深色，否则白底白勾不可见
+                style: "color: #18181b;",
                 checked: checked(),
                 onchange: move |e| checked.set(e.checked()),
             }

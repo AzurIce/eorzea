@@ -205,7 +205,6 @@ pub fn HomePage() -> Element {
         .iter()
         .map(|a| (a.area_id.clone(), a.area_name.clone()))
         .collect();
-
     let area_placeholder: &'static str = if state.areas.read().is_empty() {
         "大区列表加载中…"
     } else {
@@ -214,11 +213,11 @@ pub fn HomePage() -> Element {
 
     rsx! {
         div {
-            style: "display: flex; flex-direction: column; gap: 16px;",
+            style: "display: flex; flex-direction: column; gap: 24px;",
 
             Section { title: "启动设置",
                 div {
-                    style: "display: flex; flex-direction: column; gap: 10px;",
+                    style: "display: flex; flex-direction: column; gap: 12px;",
                     LabeledRow { label: "账号",
                         Dropdown {
                             items: account_items,
@@ -238,14 +237,14 @@ pub fn HomePage() -> Element {
 
             Section { title: "游戏版本",
                 if let Some(v) = versions.read().as_ref() {
-                    p { style: "margin: 2px 0; font-size: 14px;", "boot: {v.0}" }
-                    p { style: "margin: 2px 0; font-size: 14px;", "game: {v.1}" }
+                    p { style: "margin: 2px 0; font-size: 14px; color: #fafafa;", "boot: {v.0}" }
+                    p { style: "margin: 2px 0; font-size: 14px; color: #fafafa;", "game: {v.1}" }
                 } else {
-                    p { style: "color: #888; font-size: 13px;", "未配置游戏目录，请到设置页填写游戏根目录。" }
+                    p { style: "color: #a1a1aa; font-size: 13px;", "未配置游戏目录，请到设置页填写游戏根目录。" }
                 }
 
                 div {
-                    style: "display: flex; flex-direction: row; gap: 8px; margin-top: 8px; align-items: center;",
+                    style: "display: flex; flex-direction: row; gap: 8px; margin-top: 12px; align-items: center;",
                     ActionButton { label: "检查更新", onclick: check_update }
                     if matches!(&*update_state.read(), UpdateState::NeedsPatch(_)) {
                         ActionButton { label: "更新游戏", onclick: run_update }
@@ -254,35 +253,35 @@ pub fn HomePage() -> Element {
 
                 match &*update_state.read() {
                     UpdateState::Idle => rsx! {},
-                    UpdateState::Checking => rsx! { p { style: "color: #666;", "正在检查更新…" } },
-                    UpdateState::UpToDate => rsx! { p { style: "color: #2a7d3a;", "游戏已是最新。" } },
+                    UpdateState::Checking => rsx! { p { style: "color: #a1a1aa; font-size: 13px;", "正在检查更新…" } },
+                    UpdateState::UpToDate => rsx! { p { style: "color: #4ade80; font-size: 13px;", "游戏已是最新。" } },
                     UpdateState::NeedsPatch(n) => rsx! {
-                        p { style: "color: #b06030;", "发现 {n} 个补丁，点击「更新游戏」开始下载。" }
+                        p { style: "color: #fbbf24; font-size: 13px;", "发现 {n} 个补丁，点击「更新游戏」开始下载。" }
                     },
                     UpdateState::Downloading(done, total) => rsx! {
                         {
                             let pct = if *total > 0 { *done as f64 / *total as f64 * 100.0 } else { 0.0 };
                             rsx! {
                                 div {
-                                    style: "margin-top: 8px;",
-                                    p { style: "color: #666; font-size: 13px;", "下载补丁中… {done} / {total} 字节（{pct:.1}%）" }
+                                    style: "margin-top: 12px;",
+                                    p { style: "color: #a1a1aa; font-size: 13px;", "下载补丁中… {done} / {total} 字节（{pct:.1}%）" }
                                     div {
-                                        style: "height: 10px; background: #e0e0e0; border-radius: 5px; overflow: hidden;",
-                                        div { style: "height: 100%; width: {pct}%; background: #4a6b8a;" }
+                                        style: "height: 4px; background: #27272a; border-radius: 2px; overflow: hidden;",
+                                        div { style: "height: 100%; width: {pct}%; background: #fafafa;" }
                                     }
                                 }
                             }
                         }
                     },
-                    UpdateState::Installing => rsx! { p { style: "color: #666;", "安装中…" } },
-                    UpdateState::Done(msg) => rsx! { p { style: "color: #2a7d3a;", "{msg}" } },
+                    UpdateState::Installing => rsx! { p { style: "color: #a1a1aa; font-size: 13px;", "安装中…" } },
+                    UpdateState::Done(msg) => rsx! { p { style: "color: #4ade80; font-size: 13px;", "{msg}" } },
                     UpdateState::Failed(e) => rsx! { ErrorRow { message: "{e}" } },
                 }
             }
 
             // ── 启动游戏 ────────────────────────────────────────────────
             button {
-                style: "padding: 16px; border: none; border-radius: 8px; background: #2a7d3a; color: #fff; font-size: 20px; font-weight: bold; cursor: pointer;",
+                style: "padding: 16px; border: none; border-radius: 8px; background: #fafafa; color: #18181b; font-size: 18px; font-weight: 600; cursor: pointer;",
                 onclick: launch_game,
                 if launching() { "启动中…" } else { "启动游戏" }
             }
@@ -301,8 +300,8 @@ fn selected_area(state: &AppState) -> Option<xiv_launcher_auth::SdoArea> {
 fn LabeledRow(label: &'static str, children: Element) -> Element {
     rsx! {
         div {
-            style: "display: flex; flex-direction: row; align-items: center; gap: 8px;",
-            span { style: "width: 48px; font-size: 14px; color: #555;", "{label}" }
+            style: "display: flex; flex-direction: row; align-items: center; gap: 12px;",
+            span { style: "width: 48px; font-size: 14px; color: #a1a1aa;", "{label}" }
             div { style: "flex: 1;", {children} }
         }
     }
@@ -327,17 +326,17 @@ fn Dropdown(
         div {
             style: "position: relative;",
             button {
-                style: "width: 100%; padding: 8px; border: 1px solid #c8cdd4; border-radius: 4px; background: #fff; font-size: 14px; text-align: left; cursor: pointer;",
+                style: "width: 100%; padding: 8px 12px; border: 1px solid #3f3f46; border-radius: 6px; background: transparent; color: #fafafa; font-size: 14px; text-align: left; cursor: pointer;",
                 onclick: move |_| open.set(!open()),
                 "{current_label} ▾"
             }
             if open() {
                 div {
-                    style: "position: absolute; left: 0; right: 0; top: 100%; max-height: 240px; overflow-y: auto; background: #fff; border: 1px solid #c8cdd4; border-radius: 4px; z-index: 10; box-shadow: 0 2px 8px rgba(0,0,0,0.15);",
+                    style: "position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px; max-height: 240px; overflow-y: auto; background: #0c0c0f; border: 1px solid #27272a; border-radius: 6px; z-index: 10; padding: 4px;",
                     for (id, name) in items {
                         button {
                             key: "{id}",
-                            style: "display: block; width: 100%; padding: 8px; border: none; background: #fff; font-size: 14px; text-align: left; cursor: pointer;",
+                            style: "display: block; width: 100%; padding: 8px 12px; border: none; border-radius: 4px; background: transparent; color: #fafafa; font-size: 14px; text-align: left; cursor: pointer;",
                             onclick: move |_| {
                                 selected.set(Some(id.clone()));
                                 open.set(false);
