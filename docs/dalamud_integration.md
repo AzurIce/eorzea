@@ -1,7 +1,7 @@
-# xiv-launcher-rs 集成 Dalamud 调查报告
+# eorzea 集成 Dalamud 调查报告
 
 > 调查日期：2026-08-07  
-> 主要参考：`XIVLauncher.Core` 的 `cn` 分支及其 `lib/FFXIVQuickLauncher` 子模块；同时检查了本机由该实现安装的国服 Dalamud 14.0.4.4 发行目录，以及 `xiv-launcher-rs` 当前的启动、Wine、配置和补丁下载代码。
+> 主要参考：`XIVLauncher.Core` 的 `cn` 分支及其 `lib/FFXIVQuickLauncher` 子模块；同时检查了本机由该实现安装的国服 Dalamud 14.0.4.4 发行目录，以及 `eorzea` 当前的启动、Wine、配置和补丁下载代码。
 
 ## 摘要
 
@@ -27,7 +27,7 @@ Linux/macOS 上也不是把 Linux 版 .NET 注入 Linux 进程。FFXIV、Injecto
 概念链路如下：
 
 ```text
-xiv-launcher-rs
+eorzea
   -> Dalamud.Injector.exe launch ... -- <FFXIV 登录参数>
      -> 创建 ffxiv_dx11.exe（并按 load method 安排早期加载或注入）
         -> Dalamud.Boot.dll（旧称/概念称 Dalamud.Loader）进入游戏进程
@@ -78,7 +78,7 @@ Windows runner 的重要进程管理行为是：
 
 Wine 内部仍执行 Windows `CreateProcess`、DLL 注入和 Windows CoreCLR hosting。不能改用宿主 Linux 的 `dotnet` 或 `libcoreclr.so`：它们的 ABI、路径语义和进程边界都不匹配 Windows 游戏进程。
 
-Wine 还需要关键环境兼容项，尤其是 `WINEDLLOVERRIDES=msquic=,mscoree=n,b;...`。`mscoree=n,b` 允许使用所需的 CLR/Wine 行为；当前 `xiv-launcher-rs::build_launch_env()` 已覆盖这一项及 DXVK、esync/fsync、日志和自定义环境合并，可作为 Dalamud runner 的环境基础。
+Wine 还需要关键环境兼容项，尤其是 `WINEDLLOVERRIDES=msquic=,mscoree=n,b;...`。`mscoree=n,b` 允许使用所需的 CLR/Wine 行为；当前 `eorzea::build_launch_env()` 已覆盖这一项及 DXVK、esync/fsync、日志和自定义环境合并，可作为 Dalamud runner 的环境基础。
 
 ## 2. XIVLauncher 的集成组件
 
@@ -185,7 +185,7 @@ Dalamud.Injector.exe launch
 
 是否启用 Dalamud、load method、插件安全模式等 launcher 级选项在上层设置中决定，不能只靠 `DalamudSettings`。Rust 侧应把“launcher 是否启动 Dalamud”和“交给 Dalamud 的配置文件”分开。
 
-## 3. xiv-launcher-rs 的集成方案
+## 3. eorzea 的集成方案
 
 ### 3.1 建议模块边界
 
@@ -199,7 +199,7 @@ Dalamud.Injector.exe launch
 - `runner.rs`：共同 orchestration，按 `cfg(target_os)` 调用 Windows 或 Wine adapter。
 - `wine_runner.rs`：路径转换、prefix 环境、Wine PID 处理。
 
-不要把这些逻辑放进 `xiv-launcher-auth`：Dalamud 属于游戏启动/本地资产生命周期，与认证协议无关。
+不要把这些逻辑放进 `eorzea-auth`：Dalamud 属于游戏启动/本地资产生命周期，与认证协议无关。
 
 ### 3.2 release 下载与版本管理
 

@@ -1,4 +1,4 @@
-# xiv-launcher-auth 与 XIVLauncher.Core 差异追踪
+# eorzea-auth 与 XIVLauncher.Core 差异追踪
 
 > 本文件记录 Rust `auth` 子 crate 与上游 C# (`XIVLauncher.Core`) 实现之间的所有已知差异。
 > 当前聚焦 **SDO（中国服/盛趣）** 登录功能。`se`（国际服）为低优先级。
@@ -91,9 +91,9 @@
 - [x] **补丁列表解析**：`game_files/patch_list.rs` 实现 `PatchListParser`（跳过前 5 行、9 字段带 hash / 6 字段 boot），`PatchListEntry` 扩展为完整字段（`hash_type`/`hash_block_size`/`hashes[]`）
 - [x] **补丁下载管理**：`game_files/patch_manager.rs` 实现下载管线（并发 4 槽同 C# `MAX_DOWNLOADS_AT_ONCE`、SHA1 块校验同 `CheckPatchValidity`、已校验文件跳过、进度回调）；SHA1 块算法已用真实补丁验证通过
 - [x] **修复跨仓库补丁缓存名碰撞（2026-08-06）**：缓存名加入完整 URL 的 SHA1 身份，`ffxiv`、`ex1`-`ex5` 的同名补丁不再互相覆盖；安装前再次校验长度/逐块 SHA1，不匹配时禁止应用和写 `.ver`。旧的 basename + version 歧义缓存不会再被复用
-- [x] **xlcli 命令行**：`src/bin/xlcli.rs`（clap）— `areas` / `game status` / `game check` / `game update`（下载 + 应用）
-- [x] **xlcli auth**：多账号管理 — `auth login qr|password|auto` / `auth status` / `auth default <账号>` / `auth logout`；配置持久化到 `~/.xiv-launcher-rs/auth.toml`（`--config` 或 `XIV_LAUNCHER_RS_CONFIG` 覆盖）；`launch` 未指定账号时用默认账号自动登录
-- [x] **xlcli login/launch**：登录 + 启动游戏；扫码二维码通过终端图片协议直接显示（kitty graphics protocol / iTerm2 OSC 1337，`src/term_img.rs`），无协议时 fallback 保存 PNG
+- [x] **eoz 命令行**：`packages/eorzea-cli`（bin `eoz`，clap）— `areas` / `game status` / `game check` / `game update`（下载 + 应用）
+- [x] **eoz auth**：多账号管理 — `auth login qr|password|auto` / `auth status` / `auth default <账号>` / `auth logout`；配置持久化到 `~/.xiv-launcher-rs/auth.toml`（`--config` 或 `XIV_LAUNCHER_RS_CONFIG` 覆盖）；`launch` 未指定账号时用默认账号自动登录
+- [x] **eoz login/launch**：登录 + 启动游戏；扫码二维码通过终端图片协议直接显示（kitty graphics protocol / iTerm2 OSC 1337，`src/term_img.rs`），无协议时 fallback 保存 PNG
 - [x] **补丁应用**（ZiPatch）：`src/game_files/zpatch/` 完整移植 C# `ZiPatch` 解析与应用（FHDR/APLY/SQPK:T/F/A/D/E/H/I/X/ADIR/DELD/EOF），`RemotePatchInstaller` 流程（应用 → `SetVer` → `VerToBck`）；已用修复后的唯一缓存键重放 11 个补丁（877.50 MiB），版本检查通过且实际启动进入游戏
 - [ ] **Boot 版本检查**：国服无需实现（C# `CheckBootVersion` 对 CN 直接 `return Array.Empty`）
 - [x] **完整性校验**（`game verify`）：`game_files/verify.rs` 文件级校验（.ver 一致性、关键文件存在性、sqpack 魔数/header/数据块结构、movie）；注：C# `PatchVerifier` 依赖 ottercorp S3 的 `.patch.index`（国际服专用，国服无此服务），故不做逐文件 hash 校验
@@ -103,7 +103,7 @@
 ### P2-4 Wine 配置与启动环境 (`WineSettings.cs` / `CompatibilityTools.cs` → `src/wine.rs` + `src/config.rs`)
 
 - [x] **`WineSettings` 配置模型**：`startup_type`（Auto/Managed/Custom/System）、`custom_path`、`prefix`、esync/fsync/msync、`debug_vars`、自定义 `env`、DXVK 设置（enabled/hud/frame_limit）、gamemode — `src/config.rs`
-- [x] **配置持久化**：拆分存储 — `~/.xiv-launcher-rs/config.toml`（Wine 设置，TOML）+ `~/.xiv-launcher-rs/auth.toml`（账号，TOML）；旧 `settings.json`/`xiv-launcher-rs.toml` 自动迁移
+- [x] **配置持久化**：拆分存储 — `~/.xiv-launcher-rs/config.toml`（Wine 设置，TOML）+ `~/.xiv-launcher-rs/auth.toml`（账号，TOML）；旧 `settings.json`/`eorzea.toml` 自动迁移
 - [x] **`WineTool::resolve(&WineSettings)`**：配置 → 运行时解析（Auto = 自定义→托管→系统→下载；Managed/Custom/System 显式分派），`custom_path` 支持 wine64 文件或 bin 目录归一化
 - [x] **`WineTool::probe()`**：`wine64 --version` 校验可执行性
 - [x] **`build_launch_env()`**：对齐 `CompatibilityTools.RunInPrefix` 环境变量（`WINEDLLOVERRIDES`、`WINEESYNC/WINEFSYNC/WINEMSYNC`、`WINEDEBUG`、`DXVK_STATE_CACHE_PATH`/`DXVK_CONFIG_FILE`/`DXVK_HUD`/`DXVK_FRAME_RATE`、`LD_PRELOAD` gamemode、自定义 env 覆盖）
@@ -124,11 +124,11 @@
 ## P2-5 Dalamud 插件框架集成（新）
 
 - [x] **调查报告**：`docs/dalamud_integration.md`（加载机制、XIVLauncher 组件、Linux Wine 内注入、分阶段路线）
-- [x] **阶段 0 骨架**：`src/dalamud/`（model/updater/runner）— release 元数据获取（`VersionInfo` API）、版本门控（`SupportedGameVer == 游戏版本`）、本机安装检测、Injector argv 构造、Wine 路径转换（`winepath --windows`）、Injector JSON 解析；`xlcli dalamud status/launch`；`config.toml [dalamud]` section（flatten 兼容旧配置）
+- [x] **阶段 0 骨架**：`src/dalamud/`（model/updater/runner）— release 元数据获取（`VersionInfo` API）、版本门控（`SupportedGameVer == 游戏版本`）、本机安装检测、Injector argv 构造、Wine 路径转换（`winepath --windows`）、Injector JSON 解析；`eoz dalamud status/launch`；`config.toml [dalamud]` section（flatten 兼容旧配置）
 - [x] **release 下载安装（惰性）**：7z 下载（进度回调）+ 关键文件校验 + 原子安装（`Hooks/<AssemblyVersion>`）+ 写 `version.json`；`launch` 时版本匹配但未安装自动下载（无需独立 install 命令）；注：release 包不含 `hashes.json`（远端 `Hash` 用于校验安装后生成的 runtime hashes）
 - [ ] **Windows x64 .NET runtime 下载/组装**（`RuntimeVersion` 管理）
 - [ ] **Dalamud assets 获取**
-- [x] **launch backend 切换**：`launch_game` 支持 `dalamud` 配置时走 Injector（winepath 转换 + Injector 启动 + JSON 解析）；`Launcher::launch_with_options` 自动读 `[dalamud].enabled`（可被 CLI 覆盖）并安全降级；`xlcli launch --dalamud/--no-dalamud` 覆盖配置
+- [x] **launch backend 切换**：`launch_game` 支持 `dalamud` 配置时走 Injector（winepath 转换 + Injector 启动 + JSON 解析）；`Launcher::launch_with_options` 自动读 `[dalamud].enabled`（可被 CLI 覆盖）并安全降级；`eoz launch --dalamud/--no-dalamud` 覆盖配置
 - [ ] **阶段 2+**：Windows runner、Wine PID→Unix PID 映射、staging/beta、崩溃恢复（safe mode）
 
 ## P3 — 国际服 (SE) 补全（低优先级）

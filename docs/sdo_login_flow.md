@@ -1,7 +1,7 @@
 # SDO 登录流程详解
 
 > 本文档梳理国服（SDO/盛趣）登录涉及的**核心概念**（字段）、**API 清单**和各登录方式的**完整流程**。
-> 对应代码：`packages/xiv-launcher-auth/src/sdo.rs`；C# 参考：`SdoLauncher.cs`。
+> 对应代码：`packages/eorzea-auth/src/sdo.rs`；C# 参考：`SdoLauncher.cs`。
 > 标注 ✅ 的流程已通过真实登录验证。
 
 ## 一、核心概念：登录过程中的各个"东西"是什么
@@ -25,14 +25,14 @@
 
 | 字段 | 含义 | 说明 |
 |---|---|---|
-| `snda_id` | **盛趣账号 ID**（数字），账号的唯一标识 | 三种登录方式都能拿到；`xlcli auth` 用它作为账号 key |
+| `snda_id` | **盛趣账号 ID**（数字），账号的唯一标识 | 三种登录方式都能拿到；`eoz auth` 用它作为账号 key |
 | `username`（`input_user_id`） | 登录账号名（如手机号/邮箱），用于展示 | 扫码响应的 `inputUserId` 字段；密码登录即输入的用户名 |
 
 ### 自动登录（免密）相关
 
 | 字段 | 含义 | 特征前缀 | 说明 |
 |---|---|---|---|
-| `auto_login_session_key` | **免密登录密钥**，保存后下次可跳过登录直接进游戏 | `ULSed-` | 由 `codeKeyLogin`（扫码）/ `accountGroupLogin` / `pushMessageLogin`（推送）返回；`xlcli auth` 持久化到配置 |
+| `auto_login_session_key` | **免密登录密钥**，保存后下次可跳过登录直接进游戏 | `ULSed-` | 由 `codeKeyLogin`（扫码）/ `accountGroupLogin` / `pushMessageLogin`（推送）返回；`eoz auth` 持久化到配置 |
 | `auto_login_max_age` | session key 有效期（**秒**） | — | 实测 720 小时 = 30 天（`autoLoginKeepTime=30` 天） |
 | `code_key` | 二维码标识（扫码登录轮询用） | — | 从 `getCodeKey.json` 响应的 `Set-Cookie: CODEKEY=...` 提取 |
 
@@ -59,7 +59,7 @@
 
 ## 三、各登录方式完整流程
 
-### 1. 扫码登录 ✅（推荐，`xlcli auth login qr`）
+### 1. 扫码登录 ✅（推荐，`eoz auth login qr`）
 
 ```text
 getGuid.json ──▶ 得到 guid
@@ -82,7 +82,7 @@ ssoLogin.json ──▶ ticket（DEV.TestSID）
 - **session key 来源**：`codeKeyLogin` 响应直接带（实测 `ULSed64c...`）；`accountGroupLogin` 会再刷新一次（两者都保存，后者优先）
 - **tgt 更新**：`accountGroupLogin` 返回**新 tgt**，后续 `ssoLogin` 必须用新值
 
-### 2. 密码登录（`xlcli auth login password`）
+### 2. 密码登录（`eoz auth login password`）
 
 ```text
 getGuid.json ──▶ staticLogin.json（账号+密码）──▶ tgt + snda_id
@@ -103,7 +103,7 @@ pushMessageLogin.json ──▶ 已确认：snda_id + tgt + auto_login_session_k
 getPromotionInfo.json ──▶ ssoLogin.json ──▶ ticket
 ```
 
-### 4. 自动登录（`xlcli auth login auto` / `launch` 默认账号）
+### 4. 自动登录（`eoz auth login auto` / `launch` 默认账号）
 
 ```text
 getGuid.json ──▶ autoLogin.json（autoLoginSessionKey=保存的 key）
@@ -116,7 +116,7 @@ fastLogin.json（新 tgt 再刷新 snda_id/tgt）──▶ getPromotionInfo.json
 ```
 
 - **key 续期机制**（对应 C# `UpdateAutoLoginSessionKey`）：每次 `autoLogin` 服务端发放**新 key**，旧 key 立即作废；`autoLoginMaxAge` 是剩余期限（约 30 天）
-- **无限续期**：`xlcli launch` 自动登录成功后会把新 key 写回配置，因此只要定期启动就永不失效
+- **无限续期**：`eoz launch` 自动登录成功后会把新 key 写回配置，因此只要定期启动就永不失效
 - **fastLogin**：`autoLogin` 后调 `fastLogin.json` 再刷新 tgt/snda_id（对应 C# `LoginBySessionKey`）
 
 ## 四、字段流转总结
@@ -124,7 +124,7 @@ fastLogin.json（新 tgt 再刷新 snda_id/tgt）──▶ getPromotionInfo.json
 ```text
 getGuid          ──▶ guid（贯穿全程）
 getCodeKey       ──▶ code_key
-codeKeyLogin     ──▶ snda_id ──┬─▶ xlcli auth 账号 key（配置持久化）
+codeKeyLogin     ──▶ snda_id ──┬─▶ eoz auth 账号 key（配置持久化）
                      ├─▶ tgt ──┬─▶ getAccountGroup / accountGroupLogin（刷新）
                      │         └─▶ getPromotionInfo ──▶ ssoLogin ──▶ ticket（游戏启动）
                      ├─▶ auto_login_session_key ──▶ 配置保存 ──▶ autoLogin.json（下次免密）
@@ -143,12 +143,12 @@ codeKeyLogin     ──▶ snda_id ──┬─▶ xlcli auth 账号 key（配�
 | `-10250013` | 参数/票据无效（如 endPoint 路径错误、tgt 无效） |
 | `0` | 成功 |
 
-## 六、xlcli 层面对应
+## 六、eoz 层面对应
 
-| xlcli 命令 | 走上面哪个流程 |
+| eoz 命令 | 走上面哪个流程 |
 |---|---|
 | `auth login qr` | 流程 1（扫码 + 自动保存账号/session key） |
 | `auth login password` | 流程 2 |
 | `auth login auto --session-key <key>` | 流程 4 |
-| `auth status` / `auth default` / `auth logout` | 读取/修改 `~/.xiv-launcher-rs/xiv-launcher-rs.toml` 中的账号 |
+| `auth status` / `auth default` / `auth logout` | 读取/修改 `~/.xiv-launcher-rs/eorzea.toml` 中的账号 |
 | `launch`（不指定账号） | 用默认账号的 session key 走流程 4，成功即启动 |

@@ -3,7 +3,7 @@
 use base64::Engine;
 use dioxus::core::Task;
 use dioxus::prelude::*;
-use xiv_launcher_rs_lib::auth;
+use eorzea_lib::auth;
 
 use super::AppState;
 

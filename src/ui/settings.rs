@@ -1,7 +1,7 @@
 //! 设置页：游戏目录与 Wine 配置，保存写回 `config.toml`。
 
 use dioxus::prelude::*;
-use xiv_launcher_rs_lib::config::{self, WineStartupType};
+use eorzea_lib::config::{self, WineStartupType};
 
 use super::login::{ActionButton, Section, TextInput};
 use super::AppState;

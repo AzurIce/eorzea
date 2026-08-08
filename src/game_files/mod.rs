@@ -1,7 +1,7 @@
 //! 游戏文件管理：版本检查、补丁下载、完整性校验。
 //!
 //! 对应 C# `SdoLauncher.CheckGameUpdate()` + `PatchManager`。
-//! 与认证（`xiv-launcher-auth`）解耦——**全部免登录**：
+//! 与认证（`eorzea-auth`）解耦——**全部免登录**：
 //! 只需大区信息（补丁服务器地址）和游戏目录路径。
 //!
 //! # 已实现
@@ -25,7 +25,7 @@ pub mod zpatch;
 
 use std::path::Path;
 use tracing::{debug, info, instrument, warn};
-use xiv_launcher_auth::{PatchListEntry, SdoArea};
+use eorzea_auth::{PatchListEntry, SdoArea};
 
 use self::patch_manager::{
     download_patches, patch_cache_path, verify_patch_sha1, DownloadSummary, PatchDownloadError,

@@ -1,17 +1,17 @@
-//! # xiv-launcher-auth
+//! # eorzea-auth
 //!
-//! FFXIV 认证库，支持通过 feature gate 选择启用不同服务器的登录实现：
+//! Eorzea（FFXIV 国服启动器）认证库，支持通过 feature gate 选择启用不同服务器的登录实现：
 //!
 //! - **`sdo`**（默认启用）— 中国服（盛趣）登录，包含密码、推送、扫码、自动登录等流程
 //! - **`se`** — 国际服（Square Enix）OAuth 登录
 //!
 //! ```toml
 //! # 仅启用国服
-//! xiv-launcher-auth = { default-features = false, features = ["sdo"] }
+//! eorzea-auth = { default-features = false, features = ["sdo"] }
 //! # 仅启用国际服
-//! xiv-launcher-auth = { default-features = false, features = ["se"] }
+//! eorzea-auth = { default-features = false, features = ["se"] }
 //! # 两者都启用
-//! xiv-launcher-auth = { features = ["sdo", "se"] }
+//! eorzea-auth = { features = ["sdo", "se"] }
 //! ```
 
 pub mod crypto;

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use tracing::{debug, error, info, instrument, warn};
-use xiv_launcher_auth::SdoArea;
+use eorzea_auth::SdoArea;
 use crate::config::WineSettings;
 use crate::wine::{build_launch_env, WineTool};
 

@@ -1,5 +1,5 @@
 use std::io::{self, Write};
-use xiv_launcher_auth::sdo::SdoAuth;
+use eorzea_auth::sdo::SdoAuth;
 
 fn prompt(label: &str) -> String {
     print!("{}: ", label);
@@ -15,7 +15,7 @@ fn prompt_password(label: &str) -> String {
     rpassword::read_password().unwrap()
 }
 
-async fn do_sso_flow(auth: &SdoAuth, ctx: &xiv_launcher_auth::sdo::SdoContext, tgt: &str) -> Option<String> {
+async fn do_sso_flow(auth: &SdoAuth, ctx: &eorzea_auth::sdo::SdoContext, tgt: &str) -> Option<String> {
     println!("\n--- getPromotionInfo ---");
     if let Err(e) = auth.get_promotion_info(tgt).await {
         eprintln!("FAILED: {e}");
@@ -77,8 +77,8 @@ async fn main() {
 
     let auth = SdoAuth::new().expect("Failed to create SdoAuth client");
 
-    println!("Device ID: {}", xiv_launcher_auth::sdo_device::get_device_id());
-    println!("MAC ID:    {}", xiv_launcher_auth::sdo_device::get_mac_address_hash());
+    println!("Device ID: {}", eorzea_auth::sdo_device::get_device_id());
+    println!("MAC ID:    {}", eorzea_auth::sdo_device::get_mac_address_hash());
 
     println!("\n--- getGuid ---");
     let ctx = match auth.get_context().await {
@@ -132,7 +132,7 @@ async fn main() {
                         loop {
                             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                             match auth.slide_login_poll(&ctx, key).await {
-                                Ok(xiv_launcher_auth::sdo::PollResult::Success(data)) => {
+                                Ok(eorzea_auth::sdo::PollResult::Success(data)) => {
                                     println!("\nOK: Login confirmed!");
                                     if let Some(ref sk) = data.auto_login_session_key {
                                         println!("auto_login_session_key={}", sk);
@@ -142,7 +142,7 @@ async fn main() {
                                     }
                                     break;
                                 }
-                                Ok(xiv_launcher_auth::sdo::PollResult::Pending) => {
+                                Ok(eorzea_auth::sdo::PollResult::Pending) => {
                                     print!(".");
                                     io::stdout().flush().unwrap();
                                 }
@@ -170,7 +170,7 @@ async fn main() {
                     loop {
                         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                         match auth.qr_code_poll(&ctx, &result.code_key, 30).await {
-                            Ok(xiv_launcher_auth::sdo::PollResult::Success(data)) => {
+                            Ok(eorzea_auth::sdo::PollResult::Success(data)) => {
                                 println!("\nOK: QR scanned and confirmed!");
                                 println!("  snda_id={:?}", data.snda_id);
                                 println!("  tgt={:?}", data.tgt);
@@ -183,7 +183,7 @@ async fn main() {
                                 }
                                 break;
                             }
-                            Ok(xiv_launcher_auth::sdo::PollResult::Pending) => {
+                            Ok(eorzea_auth::sdo::PollResult::Pending) => {
                                 print!(".");
                                 io::stdout().flush().unwrap();
                             }

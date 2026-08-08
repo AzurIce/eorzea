@@ -1,6 +1,6 @@
 # FFXIV 中国服（SDO）登录 → 启动 完整链路
 
-> 本文档描述 `xiv-launcher-rs` 项目中，从用户输入凭据到游戏成功启动的完整流程。
+> 本文档描述 `eorzea` 项目中，从用户输入凭据到游戏成功启动的完整流程。
 
 ## 总览
 
@@ -360,7 +360,7 @@
 
 - `autoLogin.json` 用旧 key 换**新 key**（旧 key 立即作废）+ `autoLoginMaxAge`（剩余期限）
 - `fastLogin.json` 再用新 tgt 刷新 snda_id/tgt（对齐 C# `LoginBySessionKey`）
-- `xlcli launch` 自动登录成功后把新 key 写回配置 → 每次启动自动续期（约 30 天）
+- `eoz launch` 自动登录成功后把新 key 写回配置 → 每次启动自动续期（约 30 天）
 - key 过期（`-10515005`）时提示重新 `auth login qr`
 
 ---

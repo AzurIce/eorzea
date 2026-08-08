@@ -1,8 +1,8 @@
 //! 主页：账号/大区选择、本地版本、检查/更新游戏、启动游戏。
 
 use dioxus::prelude::*;
-use xiv_launcher_auth::PatchListEntry;
-use xiv_launcher_rs_lib::game_files::{CheckResult, GameFileManager};
+use eorzea_auth::PatchListEntry;
+use eorzea_lib::game_files::{CheckResult, GameFileManager};
 
 use super::login::{ActionButton, ErrorRow, Section};
 use super::AppState;
@@ -148,15 +148,15 @@ pub fn HomePage() -> Element {
                                     // 写回轮换后的 session key
                                     let mut cfg = state.auth_cfg.read().clone();
                                     cfg.upsert(
-                                        xiv_launcher_rs_lib::auth::Account {
+                                        eorzea_lib::auth::Account {
                                             snda_id: t.snda_id.clone(),
                                             username: t.username.clone(),
                                             auto_login_session_key: t.auto_login_session_key.clone(),
                                         },
                                         false,
                                     );
-                                    let _ = xiv_launcher_rs_lib::auth::save(
-                                        &xiv_launcher_rs_lib::auth::config_path(),
+                                    let _ = eorzea_lib::auth::save(
+                                        &eorzea_lib::auth::config_path(),
                                         &cfg,
                                     );
                                     state.auth_cfg.set(cfg);
@@ -291,7 +291,7 @@ pub fn HomePage() -> Element {
 }
 
 /// 当前选中大区的完整 `SdoArea`。
-fn selected_area(state: &AppState) -> Option<xiv_launcher_auth::SdoArea> {
+fn selected_area(state: &AppState) -> Option<eorzea_auth::SdoArea> {
     let id = state.selected_area.read().clone()?;
     state.areas.read().iter().find(|a| a.area_id == id).cloned()
 }

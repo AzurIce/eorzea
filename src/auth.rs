@@ -1,8 +1,8 @@
-//! xiv-launcher-rs 账号配置（`~/.xiv-launcher-rs/auth.toml`）。
+//! eorzea 账号配置（`~/.xiv-launcher-rs/auth.toml`）。
 //!
 //! 与 Wine 配置（`config.toml`，见 `settings.rs`）分开存储。
 //! 位置固定：`~/.xiv-launcher-rs/auth.toml`。
-//! 旧版 `xiv-launcher-rs.toml` 会在首次加载时自动迁移。
+//! 旧版 `eorzea.toml` 会在首次加载时自动迁移。
 //!
 //! ```toml
 //! default_account = "12345"
@@ -136,11 +136,11 @@ pub fn config_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("auth.toml"))
 }
 
-/// 旧版 `xiv-launcher-rs.toml` 路径（迁移用）。
+/// 旧版 `eorzea.toml` 路径（迁移用）。
 pub fn legacy_path() -> PathBuf {
     dirs::home_dir()
-        .map(|h| h.join(".xiv-launcher-rs/xiv-launcher-rs.toml"))
-        .unwrap_or_else(|| PathBuf::from("xiv-launcher-rs.toml"))
+        .map(|h| h.join(".xiv-launcher-rs/eorzea.toml"))
+        .unwrap_or_else(|| PathBuf::from("eorzea.toml"))
 }
 
 /// 加载配置（文件不存在时返回空配置，旧文件自动迁移）。
@@ -150,7 +150,7 @@ pub fn load(path: &Path) -> AuthConfig {
         if legacy.exists() && legacy != *path {
             let cfg = load_from_legacy(&legacy);
             if cfg != AuthConfig::default() {
-                info!(path = %legacy.display(), "migrating legacy xiv-launcher-rs.toml to auth.toml");
+                info!(path = %legacy.display(), "migrating legacy eorzea.toml to auth.toml");
                 let _ = save(path, &cfg);
                 return cfg;
             }

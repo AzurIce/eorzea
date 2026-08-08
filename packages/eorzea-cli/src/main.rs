@@ -1,13 +1,13 @@
-//! `xlcli` — XIV Launcher 命令行工具。
+//! `eoz` — Eorzea（FFXIV 国服启动器）命令行工具。
 //!
 //! 目前包含游戏文件管理子命令（免登录）：
 //!
 //! ```text
-//! xlcli areas                        # 列出所有大区
-//! xlcli game status   --game-path …  # 显示本地游戏版本
-//! xlcli game check    --game-path … --area …   # 检查更新（列出待下载补丁）
-//! xlcli game update   --game-path … --area …   # 下载补丁（暂存，未应用）
-//! xlcli game verify   --game-path …            # 完整性校验（未实现）
+//! eoz areas                        # 列出所有大区
+//! eoz game status   --game-path …  # 显示本地游戏版本
+//! eoz game check    --game-path … --area …   # 检查更新（列出待下载补丁）
+//! eoz game update   --game-path … --area …   # 下载补丁（暂存，未应用）
+//! eoz game verify   --game-path …            # 完整性校验（未实现）
 //! ```
 //!
 //! `--game-path` 指向游戏**根目录**（含 `boot/`、`game/`、`sdo/`）。
@@ -17,16 +17,16 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand};
-use xiv_launcher_auth::sdo::SdoAuth;
-use xiv_launcher_rs_lib::game_files::{version, GameFileManager};
-use xiv_launcher_rs_lib::launcher::{Launcher, LauncherError};
-use xiv_launcher_rs_lib::term_img;
+use eorzea_auth::sdo::SdoAuth;
+use eorzea_lib::game_files::{version, GameFileManager};
+use eorzea_lib::launcher::{Launcher, LauncherError};
+use eorzea_lib::term_img;
 
 #[derive(Parser)]
 #[command(
-    name = "xlcli",
+    name = "eoz",
     version,
-    about = "XIV Launcher 命令行工具",
+    about = "Eorzea 命令行工具",
     subcommand_required = true
 )]
 struct Cli {
@@ -63,7 +63,7 @@ enum Command {
         #[arg(long)]
         game_path: PathBuf,
 
-        /// 大区 ID（用 `xlcli areas` 查看）
+        /// 大区 ID（用 `eoz areas` 查看）
         #[arg(long)]
         area: String,
 
@@ -113,7 +113,7 @@ enum GameCommand {
         #[arg(long)]
         game_path: PathBuf,
 
-        /// 大区 ID（用 `xlcli areas` 查看）
+        /// 大区 ID（用 `eoz areas` 查看）
         #[arg(long)]
         area: String,
 
@@ -132,7 +132,7 @@ enum GameCommand {
         #[arg(long)]
         game_path: PathBuf,
 
-        /// 大区 ID（用 `xlcli areas` 查看）
+        /// 大区 ID（用 `eoz areas` 查看）
         #[arg(long)]
         area: String,
 
@@ -398,14 +398,14 @@ fn cmd_status(game_path: &std::path::Path) {
     }
 }
 
-async fn find_area(area_id: &str) -> Result<xiv_launcher_auth::SdoArea, String> {
+async fn find_area(area_id: &str) -> Result<eorzea_auth::SdoArea, String> {
     let areas = SdoAuth::fetch_server_list()
         .await
         .map_err(|e| format!("获取大区列表失败: {e}"))?;
     areas
         .into_iter()
         .find(|a| a.area_id == area_id)
-        .ok_or_else(|| format!("找不到大区 ID '{area_id}'，用 `xlcli areas` 查看"))
+        .ok_or_else(|| format!("找不到大区 ID '{area_id}'，用 `eoz areas` 查看"))
 }
 
 async fn cmd_check(
@@ -432,10 +432,10 @@ async fn cmd_check(
         .check_update(&area, game_path, repair, max_expansion)
         .await
     {
-        Ok(xiv_launcher_rs_lib::game_files::CheckResult::UpToDate { unique_id }) => {
+        Ok(eorzea_lib::game_files::CheckResult::UpToDate { unique_id }) => {
             println!("游戏已是最新版本。 (X-Patch-Unique-Id: {})", unique_id);
         }
-        Ok(xiv_launcher_rs_lib::game_files::CheckResult::NeedsPatch {
+        Ok(eorzea_lib::game_files::CheckResult::NeedsPatch {
             patches,
             unique_id,
         }) => {
@@ -451,7 +451,7 @@ async fn cmd_check(
             }
             println!("(X-Patch-Unique-Id: {})", unique_id);
         }
-        Ok(xiv_launcher_rs_lib::game_files::CheckResult::NeedsPatchBoot) => {
+        Ok(eorzea_lib::game_files::CheckResult::NeedsPatchBoot) => {
             println!("服务器指示 boot 需要更新（国服通常不会出现）。");
         }
         Err(e) => {
@@ -501,12 +501,12 @@ async fn cmd_update(
     };
 
     let patches = match check {
-        xiv_launcher_rs_lib::game_files::CheckResult::UpToDate { .. } => {
+        eorzea_lib::game_files::CheckResult::UpToDate { .. } => {
             println!("游戏已是最新版本，无需更新。");
             return;
         }
-        xiv_launcher_rs_lib::game_files::CheckResult::NeedsPatch { patches, .. } => patches,
-        xiv_launcher_rs_lib::game_files::CheckResult::NeedsPatchBoot => {
+        eorzea_lib::game_files::CheckResult::NeedsPatch { patches, .. } => patches,
+        eorzea_lib::game_files::CheckResult::NeedsPatchBoot => {
             eprintln!("boot 需要更新（国服通常不会出现）。");
             std::process::exit(1);
         }
@@ -580,7 +580,7 @@ async fn cmd_update(
 /// `game verify`：校验游戏文件完整性。
 /// `game verify`：校验游戏文件完整性 + 版本状态。
 async fn cmd_verify(game_path: &std::path::Path) {
-    use xiv_launcher_rs_lib::game_files::verify::{IssueSeverity, verify_game};
+    use eorzea_lib::game_files::verify::{IssueSeverity, verify_game};
 
     println!("=== 校验游戏文件完整性 ({}) ===", game_path.display());
     let issues = verify_game(game_path, 5);
@@ -628,7 +628,7 @@ async fn cmd_verify(game_path: &std::path::Path) {
     }
 
     if !missing.is_empty() || !corrupt.is_empty() {
-        println!("\n建议: 用 `xlcli game update` 重新下载修复。");
+        println!("\n建议: 用 `eoz game update` 重新下载修复。");
     }
 }
 
@@ -644,7 +644,7 @@ fn prompt(label: &str) -> String {
 async fn show_qr_code(
     launcher: &Launcher,
     qr_file: Option<PathBuf>,
-) -> Result<xiv_launcher_rs_lib::launcher::QrCodeSession, LauncherError> {
+) -> Result<eorzea_lib::launcher::QrCodeSession, LauncherError> {
     let qr = launcher.request_qr_code().await?;
 
     let path = qr_file.unwrap_or_else(|| {
@@ -672,7 +672,7 @@ async fn do_login(
     username: Option<&str>,
     session_key: Option<&str>,
     qr_file: Option<PathBuf>,
-) -> Result<xiv_launcher_rs_lib::launcher::LaunchToken, LauncherError> {
+) -> Result<eorzea_lib::launcher::LaunchToken, LauncherError> {
     let launcher = Launcher::new()?;
     println!("设备指纹: {}", launcher.device_id());
 
@@ -713,21 +713,21 @@ async fn cmd_auth_login(
     };
 
     // 保存账号
-    let cfg_path = xiv_launcher_rs_lib::auth::config_path();
-    let mut cfg = xiv_launcher_rs_lib::auth::load(&cfg_path);
+    let cfg_path = eorzea_lib::auth::config_path();
+    let mut cfg = eorzea_lib::auth::load(&cfg_path);
     let make_default = cfg.accounts.is_empty(); // 第一个账号自动设为默认
     let username = username
         .map(|s| s.to_string())
         .or_else(|| token.username.clone());
     cfg.upsert(
-        xiv_launcher_rs_lib::auth::Account {
+        eorzea_lib::auth::Account {
             snda_id: token.snda_id.clone(),
             username,
             auto_login_session_key: token.auto_login_session_key.clone(),
         },
         make_default,
     );
-    if let Err(e) = xiv_launcher_rs_lib::auth::save(&cfg_path, &cfg) {
+    if let Err(e) = eorzea_lib::auth::save(&cfg_path, &cfg) {
         eprintln!("保存配置失败: {e}");
         std::process::exit(1);
     }
@@ -748,12 +748,12 @@ async fn cmd_auth_login(
 
 /// `auth status`：显示已保存账号。
 fn cmd_auth_status() {
-    let cfg_path = xiv_launcher_rs_lib::auth::config_path();
-    let cfg = xiv_launcher_rs_lib::auth::load(&cfg_path);
+    let cfg_path = eorzea_lib::auth::config_path();
+    let cfg = eorzea_lib::auth::load(&cfg_path);
 
     println!("=== 已保存账号 ({}) ===", cfg_path.display());
     if cfg.accounts.is_empty() {
-        println!("（无）\n用 `xlcli auth login qr` 登录一个账号。");
+        println!("（无）\n用 `eoz auth login qr` 登录一个账号。");
         return;
     }
     for acc in &cfg.accounts {
@@ -771,14 +771,14 @@ fn cmd_auth_status() {
         );
     }
     if cfg.default_account.is_none() {
-        println!("（未设置默认账号，用 `xlcli auth default <账号>` 设置）");
+        println!("（未设置默认账号，用 `eoz auth default <账号>` 设置）");
     }
 }
 
 /// `auth default`：设置默认账号。
 fn cmd_auth_default(account: &str) {
-    let cfg_path = xiv_launcher_rs_lib::auth::config_path();
-    let mut cfg = xiv_launcher_rs_lib::auth::load(&cfg_path);
+    let cfg_path = eorzea_lib::auth::config_path();
+    let mut cfg = eorzea_lib::auth::load(&cfg_path);
 
     // 支持 snda_id 或 username 匹配；存储时 username 优先（可读），无则 snda_id
     let found = cfg.find_by_identifier(account).cloned();
@@ -788,14 +788,14 @@ fn cmd_auth_default(account: &str) {
             cfg.default_account = Some(
                 acc.username.clone().unwrap_or_else(|| acc.snda_id.clone()),
             );
-            if let Err(e) = xiv_launcher_rs_lib::auth::save(&cfg_path, &cfg) {
+            if let Err(e) = eorzea_lib::auth::save(&cfg_path, &cfg) {
                 eprintln!("保存配置失败: {e}");
                 std::process::exit(1);
             }
             println!("默认账号已设为: {} ({})", account, cfg_path.display());
         }
         None => {
-            eprintln!("找不到账号 '{account}'，用 `xlcli auth status` 查看已保存账号。");
+            eprintln!("找不到账号 '{account}'，用 `eoz auth status` 查看已保存账号。");
             std::process::exit(1);
         }
     }
@@ -803,8 +803,8 @@ fn cmd_auth_default(account: &str) {
 
 /// `auth logout`：删除账号（缺省删默认账号）。
 fn cmd_auth_logout(account: Option<&str>) {
-    let cfg_path = xiv_launcher_rs_lib::auth::config_path();
-    let mut cfg = xiv_launcher_rs_lib::auth::load(&cfg_path);
+    let cfg_path = eorzea_lib::auth::config_path();
+    let mut cfg = eorzea_lib::auth::load(&cfg_path);
 
     let target = match account {
         Some(a) => a.to_string(),
@@ -824,7 +824,7 @@ fn cmd_auth_logout(account: Option<&str>) {
         match by_name {
             Some(id) => {
                 cfg.remove(&id);
-                let _ = xiv_launcher_rs_lib::auth::save(&cfg_path, &cfg);
+                let _ = eorzea_lib::auth::save(&cfg_path, &cfg);
                 println!("已删除账号: {target} ({})", cfg_path.display());
             }
             None => {
@@ -833,7 +833,7 @@ fn cmd_auth_logout(account: Option<&str>) {
             }
         }
     } else {
-        if let Err(e) = xiv_launcher_rs_lib::auth::save(&cfg_path, &cfg) {
+        if let Err(e) = eorzea_lib::auth::save(&cfg_path, &cfg) {
             eprintln!("保存配置失败: {e}");
             std::process::exit(1);
         }
@@ -856,8 +856,8 @@ async fn cmd_launch(
     // 确定登录方式：
     // 1. --account 指定（或配置默认账号）且该账号有 session key → auto 登录
     // 2. --method 手动登录
-    let cfg_path = xiv_launcher_rs_lib::auth::config_path();
-    let cfg = xiv_launcher_rs_lib::auth::load(&cfg_path);
+    let cfg_path = eorzea_lib::auth::config_path();
+    let cfg = eorzea_lib::auth::load(&cfg_path);
 
     let token = if let Some(m) = method {
         let method_enum = match m {
@@ -893,15 +893,15 @@ async fn cmd_launch(
                                 // 立即更新配置，否则下次自动登录会过期
                                 if let Some(new_key) = &t.auto_login_session_key {
                                     let cfg_path =
-                                        xiv_launcher_rs_lib::auth::config_path();
-                                    let mut cfg = xiv_launcher_rs_lib::auth::load(&cfg_path);
+                                        eorzea_lib::auth::config_path();
+                                    let mut cfg = eorzea_lib::auth::load(&cfg_path);
                                     if let Some(acc) = cfg
                                         .accounts
                                         .iter_mut()
                                         .find(|a| a.snda_id == t.snda_id)
                                     {
                                         acc.auto_login_session_key = Some(new_key.clone());
-                                        if let Err(e) = xiv_launcher_rs_lib::auth::save(
+                                        if let Err(e) = eorzea_lib::auth::save(
                                             &cfg_path, &cfg,
                                         ) {
                                             eprintln!("更新 session key 失败: {e}");
@@ -919,25 +919,25 @@ async fn cmd_launch(
                             }
                             Err(e) => {
                                 eprintln!("自动登录失败（session key 可能过期）: {e}");
-                                eprintln!("请重新登录: `xlcli auth login qr` 或 `xlcli launch --method qr`");
+                                eprintln!("请重新登录: `eoz auth login qr` 或 `eoz launch --method qr`");
                                 std::process::exit(1);
                             }
                         }
                     }
                     Some(_) => {
                         eprintln!("账号 '{}' 没有保存 session key，无法自动登录。", a_display(&cfg, id));
-                        eprintln!("请用 `xlcli auth login qr` 重新登录，或 `xlcli launch --method qr`。");
+                        eprintln!("请用 `eoz auth login qr` 重新登录，或 `eoz launch --method qr`。");
                         std::process::exit(1);
                     }
                     None => {
-                        eprintln!("找不到账号 '{id}'，用 `xlcli auth status` 查看。");
+                        eprintln!("找不到账号 '{id}'，用 `eoz auth status` 查看。");
                         std::process::exit(1);
                     }
                 }
             }
             None => {
                 eprintln!("未指定账号且没有默认账号。");
-                eprintln!("请用 `xlcli auth login qr` 登录并设置默认，或 `xlcli launch --method qr` 手动登录。");
+                eprintln!("请用 `eoz auth login qr` 登录并设置默认，或 `eoz launch --method qr` 手动登录。");
                 std::process::exit(1);
             }
         }
@@ -966,13 +966,13 @@ async fn cmd_launch(
 
     let mut launcher = Launcher::new()
         .expect("failed to create Launcher")
-        .with_wine_settings(xiv_launcher_rs_lib::config::load_settings());
+        .with_wine_settings(eorzea_lib::config::load_settings());
     if let Some(w) = wine {
         launcher = launcher.with_wine_path(w);
     }
 
     // Dalamud 状态提示（是否启用 + 实际状态）
-    let ds = xiv_launcher_rs_lib::config::load_dalamud_settings();
+    let ds = eorzea_lib::config::load_dalamud_settings();
     let d_enabled = dalamud_override.unwrap_or(ds.enabled);
     if !d_enabled {
         println!("Dalamud: 禁用（config [dalamud].enabled=false，或用 --dalamud 启用）");
@@ -980,13 +980,13 @@ async fn cmd_launch(
         let install_root = ds
             .install_root
             .clone()
-            .unwrap_or_else(xiv_launcher_rs_lib::dalamud::updater::default_install_root);
+            .unwrap_or_else(eorzea_lib::dalamud::updater::default_install_root);
         let client = reqwest::Client::new();
-        let dstatus = xiv_launcher_rs_lib::dalamud::updater::status(
+        let dstatus = eorzea_lib::dalamud::updater::status(
             &client, &install_root, game_path, &ds.track,
         )
         .await;
-        use xiv_launcher_rs_lib::dalamud::InstallState;
+        use eorzea_lib::dalamud::InstallState;
         match dstatus.install_state {
             InstallState::Ready => {
                 println!(
@@ -1017,7 +1017,7 @@ async fn cmd_launch(
     println!("\n启动游戏 ({}) ...", area.area_name);
     match launcher
         .launch_with_options(
-            &xiv_launcher_rs_lib::config::load_settings(),
+            &eorzea_lib::config::load_settings(),
             dalamud_override,
             &token,
             area,
@@ -1041,7 +1041,7 @@ async fn cmd_launch(
 }
 
 /// 辅助：显示账号展示名（找不到时回退为传入的 id）。
-fn a_display(cfg: &xiv_launcher_rs_lib::auth::AuthConfig, id: &str) -> String {
+fn a_display(cfg: &eorzea_lib::auth::AuthConfig, id: &str) -> String {
     cfg.find(id)
         .map(|a| a.display_name().to_string())
         .unwrap_or_else(|| id.to_string())
@@ -1053,16 +1053,16 @@ async fn check_update_status(game_path: &std::path::Path) -> Result<String, Stri
     let area = find_area("1").await.map_err(|e| e)?;
 
     match mgr.check_update(&area, game_path, false, 5).await {
-        Ok(xiv_launcher_rs_lib::game_files::CheckResult::UpToDate { .. }) => Ok("✅ 游戏已是最新版本。".to_string()),
-        Ok(xiv_launcher_rs_lib::game_files::CheckResult::NeedsPatch { patches, .. }) => {
+        Ok(eorzea_lib::game_files::CheckResult::UpToDate { .. }) => Ok("✅ 游戏已是最新版本。".to_string()),
+        Ok(eorzea_lib::game_files::CheckResult::NeedsPatch { patches, .. }) => {
             let total: u64 = patches.iter().map(|p| p.length).sum();
             Ok(format!(
-                "⚠️ 游戏版本落后，有 {} 个补丁待更新（{}）。建议运行 `xlcli game update --area 1`。",
+                "⚠️ 游戏版本落后，有 {} 个补丁待更新（{}）。建议运行 `eoz game update --area 1`。",
                 patches.len(),
                 human_bytes(total)
             ))
         }
-        Ok(xiv_launcher_rs_lib::game_files::CheckResult::NeedsPatchBoot) => Ok("💡 boot 需要更新（国服通常不出现）。".to_string()),
+        Ok(eorzea_lib::game_files::CheckResult::NeedsPatchBoot) => Ok("💡 boot 需要更新（国服通常不出现）。".to_string()),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -1070,9 +1070,9 @@ async fn check_update_status(game_path: &std::path::Path) -> Result<String, Stri
 
 /// `dalamud status`：release 版本、本机安装、游戏版本兼容性。
 async fn cmd_dalamud_status(game_path: &std::path::Path) {
-    use xiv_launcher_rs_lib::dalamud::{InstallState, updater};
+    use eorzea_lib::dalamud::{InstallState, updater};
 
-    let settings = xiv_launcher_rs_lib::config::load_dalamud_settings();
+    let settings = eorzea_lib::config::load_dalamud_settings();
     let install_root = settings
         .install_root
         .clone()

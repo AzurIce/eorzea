@@ -18,10 +18,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use dioxus::prelude::*;
-use xiv_launcher_auth::SdoArea;
-use xiv_launcher_rs_lib::auth::{self, AuthConfig};
-use xiv_launcher_rs_lib::config::{self, WineSettings};
-use xiv_launcher_rs_lib::launcher::{LaunchToken, Launcher};
+use eorzea_auth::SdoArea;
+use eorzea_lib::auth::{self, AuthConfig};
+use eorzea_lib::config::{self, WineSettings};
+use eorzea_lib::launcher::{LaunchToken, Launcher};
 
 /// 顶部标签页。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +102,7 @@ pub fn app() -> Element {
                 Ok(l) => state.launcher.set(Some(Arc::new(l))),
                 Err(e) => state.status.set(format!("初始化失败: {e}")),
             }
-            match xiv_launcher_auth::sdo::SdoAuth::fetch_server_list().await {
+            match eorzea_auth::sdo::SdoAuth::fetch_server_list().await {
                 Ok(mut list) => {
                     list.sort_by_key(|a| a.area_order);
                     // 默认选中第一个大区

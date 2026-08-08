@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
-use xiv_launcher_auth::PatchListEntry;
+use eorzea_auth::PatchListEntry;
 
 /// 并发下载槽位数，与 C# `PatchManager.MAX_DOWNLOADS_AT_ONCE` 一致。
 pub const MAX_DOWNLOADS_AT_ONCE: usize = 4;

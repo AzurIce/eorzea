@@ -2,8 +2,8 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing::{error, info};
-use xiv_launcher_auth::sdo::SdoAuth;
-use xiv_launcher_rs_lib::launcher::Launcher;
+use eorzea_auth::sdo::SdoAuth;
+use eorzea_lib::launcher::Launcher;
 
 fn prompt(label: &str) -> String {
     print!("{}: ", label);

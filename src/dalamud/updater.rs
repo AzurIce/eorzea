@@ -28,7 +28,7 @@ pub async fn fetch_version_info(
     debug!(url = %url, "fetching Dalamud version info");
     let resp = client
         .get(&url)
-        .header("User-Agent", "xiv-launcher-rs")
+        .header("User-Agent", "eorzea")
         .send()
         .await
         .map_err(|e| DalamudError::Network(e.to_string()))?;
@@ -152,7 +152,7 @@ pub async fn download_release(
     let url = &version_info.download_url;
     let resp = client
         .get(url)
-        .header("User-Agent", "xiv-launcher-rs")
+        .header("User-Agent", "eorzea")
         .send()
         .await
         .map_err(|e| DalamudError::Network(e.to_string()))?;

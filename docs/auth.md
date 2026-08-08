@@ -1,6 +1,6 @@
 # Auth 实现差异与存疑记录
 
-> 本文档记录 Rust `xiv-launcher-auth` 与上游 C# (`XIVLauncher.Core`) 之间的已知差异。
+> 本文档记录 Rust `eorzea-auth` 与上游 C# (`XIVLauncher.Core`) 之间的已知差异。
 > 部分内容标注为 **"存疑"**，表示尚未通过实际登录验证是否会产生影响，留待启动功能实现后测试确认。
 
 ---

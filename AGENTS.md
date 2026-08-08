@@ -2,16 +2,16 @@
 
 ## Project Overview
 
-`xiv-launcher-rs` is a Rust reimplementation of the FFXIV launcher, porting auth and game-launch logic from `XIVLauncher.Core` (C#). The project uses a dioxus-native + Rust workspace:
+`eorzea` is a Rust reimplementation of the FFXIV launcher, porting auth and game-launch logic from `XIVLauncher.Core` (C#). The project uses a dioxus-native + Rust workspace:
 
 ```
-xiv-launcher-rs/              # workspace root (dioxus-native GUI crate)
+eorzea/              # workspace root (dioxus-native GUI crate)
 ├── packages/
-│   └── xiv-launcher-auth/    # auth library (feature-gated)
+│   ├── eorzea-auth/    # auth library (feature-gated)
+│   └── eorzea-cli/     # CLI（bin `eoz`：游戏文件管理/账号/启动）
 └── src/
-    ├── main.rs               # GUI 入口（dioxus-native launch）
-    ├── ui/                   # GUI 页面（mod.rs 根组件/共享状态，login/home/settings）
-    └── bin/xlcli.rs          # CLI（游戏文件管理/账号/启动）
+    ├── main.rs         # GUI 入口（dioxus-native launch）
+    └── ui/             # GUI 页面（mod.rs 根组件/共享状态，login/home/settings）
 ```
 
 GUI 相关：`src/ui/mod.rs` 是根组件与 `AppState`（标签页、auth.toml/config.toml 内存镜像、
@@ -35,11 +35,11 @@ GUI 相关：`src/ui/mod.rs` 是根组件与 `AppState`（标签页、auth.toml/
 
 3. **Follow existing style** — Match the formatting, naming, and error-handling patterns already present in the crate you are editing.
 
-4. **Test what you change** — Run `cargo check -p xiv-launcher-auth` (with appropriate features) after any change. If you add new functionality, add a test or verify it with an example binary.
+4. **Test what you change** — Run `cargo check -p eorzea-auth` (with appropriate features) after any change. If you add new functionality, add a test or verify it with an example binary.
 
 ## Feature Gates
 
-`xiv-launcher-auth` uses Cargo feature gates to separate server-region logic:
+`eorzea-auth` uses Cargo feature gates to separate server-region logic:
 
 | Feature | Default | Description |
 |---------|---------|-------------|
@@ -48,24 +48,24 @@ GUI 相关：`src/ui/mod.rs` 是根组件与 `AppState`（标签页、auth.toml/
 
 ```toml
 # Default build — SDO only
-cargo check -p xiv-launcher-auth
+cargo check -p eorzea-auth
 
 # SE only
-cargo check -p xiv-launcher-auth --no-default-features --features se
+cargo check -p eorzea-auth --no-default-features --features se
 
 # Both
-cargo check -p xiv-launcher-auth --features se
+cargo check -p eorzea-auth --features se
 ```
 
 Example binaries are also feature-gated:
 ```bash
-cargo run -p xiv-launcher-auth --example sdo_login          # requires feature "sdo" (default)
-cargo run -p xiv-launcher-auth --example se_login            # requires feature "se"
+cargo run -p eorzea-auth --example sdo_login          # requires feature "sdo" (default)
+cargo run -p eorzea-auth --example se_login            # requires feature "se"
 ```
 
 ## Architecture Notes
 
-### `packages/xiv-launcher-auth/`
+### `packages/eorzea-auth/`
 
 | File | Feature | Purpose |
 |------|---------|---------|

@@ -4,7 +4,7 @@
 //! - 9 字段行（游戏补丁）：`length ... versionId hashType hashBlockSize hashes url`
 //! - 6 字段行（boot 补丁，无 hash 信息）：`length ... versionId url`
 
-use xiv_launcher_auth::PatchListEntry;
+use eorzea_auth::PatchListEntry;
 
 /// 解析补丁列表文本。
 ///

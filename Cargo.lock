@@ -1981,6 +1981,69 @@ dependencies = [
 ]
 
 [[package]]
+name = "eorzea"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "clap",
+ "dioxus",
+ "dioxus-native",
+ "dirs",
+ "eorzea-auth",
+ "flate2",
+ "md5",
+ "reqwest",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "sha1",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "eorzea-auth"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "byteorder",
+ "hex",
+ "md-5",
+ "num_cpus",
+ "regex",
+ "reqwest",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sys-info",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "whoami",
+]
+
+[[package]]
+name = "eorzea-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dirs",
+ "eorzea",
+ "eorzea-auth",
+ "reqwest",
+ "rpassword",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7759,55 +7822,6 @@ checksum = "ec1cdab258fb55c0da61328dc52c8764709b249011b2cad0454c72f0bf10a1f6"
 dependencies = [
  "libc",
  "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "xiv-launcher-auth"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "byteorder",
- "hex",
- "md-5",
- "num_cpus",
- "regex",
- "reqwest",
- "rpassword",
- "serde",
- "serde_json",
- "sha1",
- "sys-info",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "whoami",
-]
-
-[[package]]
-name = "xiv-launcher-rs"
-version = "0.1.0"
-dependencies = [
- "base64",
- "clap",
- "dioxus",
- "dioxus-native",
- "dirs",
- "flate2",
- "md5",
- "reqwest",
- "rpassword",
- "serde",
- "serde_json",
- "sha1",
- "thiserror 2.0.18",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "xiv-launcher-auth",
 ]
 
 [[package]]

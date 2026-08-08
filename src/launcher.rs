@@ -1,6 +1,6 @@
 //! 完整的登录 → 启动链路封装。
 //!
-//! 将 `xiv-launcher-auth` 的认证能力和 `game.rs` / `wine.rs` 的启动能力
+//! 将 `eorzea-auth` 的认证能力和 `game.rs` / `wine.rs` 的启动能力
 //! 组合成高层 API，供 Tauri 前端或 CLI 示例直接调用。
 //!
 //! # 设计原则
@@ -14,8 +14,8 @@
 use std::path::Path;
 use std::time::Duration;
 use tracing::{debug, info, instrument, warn};
-use xiv_launcher_auth::sdo::{PollResult, SdoAuth, SdoContext};
-use xiv_launcher_auth::{AuthError, SdoArea, SdoLoginData};
+use eorzea_auth::sdo::{PollResult, SdoAuth, SdoContext};
+use eorzea_auth::{AuthError, SdoArea, SdoLoginData};
 
 use crate::game::{GameLaunchConfig, GameLaunchError, GameLaunchResult};
 
@@ -373,12 +373,12 @@ impl Launcher {
 
     /// 获取设备 ID（用于调试或展示）。
     pub fn device_id(&self) -> String {
-        xiv_launcher_auth::sdo_device::get_device_id()
+        eorzea_auth::sdo_device::get_device_id()
     }
 
     /// 获取 MAC ID（用于调试或展示）。
     pub fn mac_id(&self) -> String {
-        xiv_launcher_auth::sdo_device::get_mac_address_hash()
+        eorzea_auth::sdo_device::get_mac_address_hash()
     }
 
     // ── 一步登录（密码 / 自动登录）──────────────────────────────────────

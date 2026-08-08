@@ -2,8 +2,8 @@
 //!
 //! 用法：
 //! ```text
-//! cargo run -p xiv-launcher-rs --example wine_test
-//! cargo run -p xiv-launcher-rs --example wine_test -- /path/to/custom/wine64-or-bin-dir
+//! cargo run -p eorzea --example wine_test
+//! cargo run -p eorzea --example wine_test -- /path/to/custom/wine64-or-bin-dir
 //! ```
 //!
 //! 演示基于 `WineSettings` 的解析流程（不再直接调 `detect/ensure`）：
@@ -11,8 +11,8 @@
 
 use tracing::{error, info};
 
-use xiv_launcher_rs_lib::config::{WineSettings, WineStartupType};
-use xiv_launcher_rs_lib::wine::WineTool;
+use eorzea_lib::config::{WineSettings, WineStartupType};
+use eorzea_lib::wine::WineTool;
 
 #[tokio::main]
 async fn main() {
@@ -46,7 +46,7 @@ async fn main() {
 
             // 展示将传给子进程的环境变量
             info!("Launch env:");
-            for (k, v) in xiv_launcher_rs_lib::wine::build_launch_env(&settings, &tool) {
+            for (k, v) in eorzea_lib::wine::build_launch_env(&settings, &tool) {
                 info!("  {k}={v}");
             }
         }

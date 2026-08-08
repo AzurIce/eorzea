@@ -126,7 +126,7 @@ pub enum InstallState {
     Failed(String),
 }
 
-/// Dalamud 状态报告（`xlcli dalamud status` / GUI 展示用）。
+/// Dalamud 状态报告（`eoz dalamud status` / GUI 展示用）。
 #[derive(Debug, Clone)]
 pub struct DalamudStatus {
     pub install_state: InstallState,
