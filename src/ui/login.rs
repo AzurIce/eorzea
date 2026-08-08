@@ -28,6 +28,7 @@ enum PushState {
 #[component]
 pub fn LoginPage() -> Element {
     let mut state = use_context::<AppState>();
+    let t = (state.theme)();
 
     let mut qr_state = use_signal(|| QrState::Idle);
     let mut qr_task = use_signal(|| None::<Task>);
@@ -152,7 +153,7 @@ pub fn LoginPage() -> Element {
             // ── 账号列表 ────────────────────────────────────────────────
             Section { title: "已保存账号",
                 if accounts.is_empty() {
-                    p { style: "color: #a1a1aa; font-size: 13px;", "暂无账号，请通过下方任意方式登录。" }
+                    p { style: "color: {t.text_secondary}; font-size: 13px;", "暂无账号，请通过下方任意方式登录。" }
                 }
                 for acc in accounts {
                     {
@@ -170,8 +171,8 @@ pub fn LoginPage() -> Element {
                         rsx! {
                             div {
                                 key: "{acc.snda_id}",
-                                style: "display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid #27272a;",
-                                span { style: "flex: 1; font-size: 14px; color: #fafafa;", "{display}" }
+                                style: "display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid {t.border};",
+                                span { style: "flex: 1; font-size: 14px; color: {t.text};", "{display}" }
                                 if key.is_some() {
                                     SmallButton { label: "自动登录",
                                         onclick: move |_| {
@@ -229,19 +230,20 @@ pub fn LoginPage() -> Element {
                         ActionButton { label: "获取二维码", onclick: start_qr }
                     },
                     QrState::Loading => rsx! {
-                        p { style: "color: #a1a1aa; font-size: 13px;", "正在获取二维码…" }
+                        p { style: "color: {t.text_secondary}; font-size: 13px;", "正在获取二维码…" }
                     },
                     QrState::Waiting(b64) => rsx! {
                         div {
                             style: "display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 8px 0;",
                             div {
+                                // 二维码卡片两种主题下都保留白色衬底
                                 style: "background: #fff; border-radius: 8px; padding: 12px;",
                                 img {
                                     src: "data:image/png;base64,{b64}",
                                     style: "width: 220px; height: 220px;",
                                 }
                             }
-                            p { style: "color: #a1a1aa; font-size: 13px;", "请使用叨鱼 App 扫码并确认（5 分钟内有效）" }
+                            p { style: "color: {t.text_secondary}; font-size: 13px;", "请使用叨鱼 App 扫码并确认（5 分钟内有效）" }
                             GhostButton { label: "取消", onclick: cancel_qr }
                         }
                     },
@@ -269,15 +271,15 @@ pub fn LoginPage() -> Element {
                         }
                     },
                     PushState::Loading => rsx! {
-                        p { style: "color: #a1a1aa; font-size: 13px;", "正在发送推送…" }
+                        p { style: "color: {t.text_secondary}; font-size: 13px;", "正在发送推送…" }
                     },
                     PushState::Waiting(serial) => rsx! {
                         div {
                             style: "display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px 0;",
                             if let Some(serial) = serial {
-                                p { style: "font-size: 20px; font-weight: 600; letter-spacing: 4px; color: #fafafa;", "验证序号：{serial}" }
+                                p { style: "font-size: 20px; font-weight: 600; letter-spacing: 4px; color: {t.text};", "验证序号：{serial}" }
                             }
-                            p { style: "color: #a1a1aa; font-size: 13px;", "请在叨鱼 App 上核对序号并确认（30 秒内有效）" }
+                            p { style: "color: {t.text_secondary}; font-size: 13px;", "请在叨鱼 App 上核对序号并确认（30 秒内有效）" }
                             GhostButton { label: "取消", onclick: cancel_push }
                         }
                     },
@@ -306,21 +308,23 @@ pub fn LoginPage() -> Element {
 /// 卡片式分节容器。
 #[component]
 pub fn Section(title: &'static str, children: Element) -> Element {
+    let t = (use_context::<AppState>().theme)();
     rsx! {
         div {
-            style: "background: #0c0c0f; border: 1px solid #27272a; border-radius: 8px; padding: 20px;",
-            h3 { style: "margin: 0 0 12px 0; font-size: 15px; font-weight: 500; color: #fafafa;", "{title}" }
+            style: "background: {t.card_bg}; border: 1px solid {t.border}; border-radius: 8px; padding: 20px;",
+            h3 { style: "margin: 0 0 12px 0; font-size: 15px; font-weight: 500; color: {t.text};", "{title}" }
             {children}
         }
     }
 }
 
-/// 主要操作按钮（primary：白底黑字）。
+/// 主要操作按钮（primary：底色/文字反转）。
 #[component]
 pub fn ActionButton(label: String, onclick: EventHandler<MouseEvent>) -> Element {
+    let t = (use_context::<AppState>().theme)();
     rsx! {
         button {
-            style: "padding: 8px 16px; border: none; border-radius: 6px; background: #fafafa; color: #18181b; font-size: 14px; font-weight: 500; cursor: pointer;",
+            style: "padding: 8px 16px; border: none; border-radius: 6px; background: {t.primary_bg}; color: {t.primary_fg}; font-size: 14px; font-weight: 500; cursor: pointer;",
             onclick: move |e| onclick.call(e),
             "{label}"
         }
@@ -330,9 +334,10 @@ pub fn ActionButton(label: String, onclick: EventHandler<MouseEvent>) -> Element
 /// 次要操作按钮（ghost：透明底 + 细边框）。
 #[component]
 pub fn GhostButton(label: &'static str, onclick: EventHandler<MouseEvent>) -> Element {
+    let t = (use_context::<AppState>().theme)();
     rsx! {
         button {
-            style: "padding: 8px 16px; border: 1px solid #27272a; border-radius: 6px; background: transparent; color: #a1a1aa; font-size: 14px; cursor: pointer;",
+            style: "padding: 8px 16px; border: 1px solid {t.border}; border-radius: 6px; background: transparent; color: {t.text_secondary}; font-size: 14px; cursor: pointer;",
             onclick: move |e| onclick.call(e),
             "{label}"
         }
@@ -342,9 +347,10 @@ pub fn GhostButton(label: &'static str, onclick: EventHandler<MouseEvent>) -> El
 /// 行内小按钮（ghost）。
 #[component]
 fn SmallButton(label: &'static str, onclick: EventHandler<MouseEvent>) -> Element {
+    let t = (use_context::<AppState>().theme)();
     rsx! {
         button {
-            style: "padding: 4px 10px; border: 1px solid #27272a; border-radius: 6px; background: transparent; color: #a1a1aa; font-size: 12px; cursor: pointer;",
+            style: "padding: 4px 10px; border: 1px solid {t.border}; border-radius: 6px; background: transparent; color: {t.text_secondary}; font-size: 12px; cursor: pointer;",
             onclick: move |e| onclick.call(e),
             "{label}"
         }
@@ -354,9 +360,10 @@ fn SmallButton(label: &'static str, onclick: EventHandler<MouseEvent>) -> Elemen
 /// 危险操作小按钮（低饱和红）。
 #[component]
 fn DangerButton(label: &'static str, onclick: EventHandler<MouseEvent>) -> Element {
+    let t = (use_context::<AppState>().theme)();
     rsx! {
         button {
-            style: "padding: 4px 10px; border: 1px solid #7f1d1d; border-radius: 6px; background: transparent; color: #ef4444; font-size: 12px; cursor: pointer;",
+            style: "padding: 4px 10px; border: 1px solid {t.danger_border}; border-radius: 6px; background: transparent; color: {t.danger}; font-size: 12px; cursor: pointer;",
             onclick: move |e| onclick.call(e),
             "{label}"
         }
@@ -366,17 +373,19 @@ fn DangerButton(label: &'static str, onclick: EventHandler<MouseEvent>) -> Eleme
 /// 错误提示行。
 #[component]
 pub fn ErrorRow(message: String) -> Element {
+    let t = (use_context::<AppState>().theme)();
     rsx! {
-        p { style: "color: #ef4444; font-size: 13px; margin: 4px 0;", "{message}" }
+        p { style: "color: {t.danger}; font-size: 13px; margin: 4px 0;", "{message}" }
     }
 }
 
 /// 单行文本输入框（受控）。
 #[component]
 pub fn TextInput(placeholder: &'static str, value: Signal<String>) -> Element {
+    let t = (use_context::<AppState>().theme)();
     rsx! {
         input {
-            style: "padding: 8px 12px; border: 1px solid #3f3f46; border-radius: 6px; background: transparent; color: #fafafa; font-size: 14px; flex: 1;",
+            style: "padding: 8px 12px; border: 1px solid {t.input_border}; border-radius: 6px; background: transparent; color: {t.text}; font-size: 14px; flex: 1;",
             placeholder: "{placeholder}",
             value: "{value}",
             oninput: move |e| value.set(e.value()),
@@ -387,10 +396,11 @@ pub fn TextInput(placeholder: &'static str, value: Signal<String>) -> Element {
 /// 密码输入框（受控）。
 #[component]
 pub fn PasswordInput(placeholder: &'static str, value: Signal<String>) -> Element {
+    let t = (use_context::<AppState>().theme)();
     rsx! {
         input {
             r#type: "password",
-            style: "padding: 8px 12px; border: 1px solid #3f3f46; border-radius: 6px; background: transparent; color: #fafafa; font-size: 14px;",
+            style: "padding: 8px 12px; border: 1px solid {t.input_border}; border-radius: 6px; background: transparent; color: {t.text}; font-size: 14px;",
             placeholder: "{placeholder}",
             value: "{value}",
             oninput: move |e| value.set(e.value()),

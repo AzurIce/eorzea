@@ -4,13 +4,15 @@
 //! 都在 dioxus `spawn` 的异步任务里执行（dioxus-native 内置 tokio runtime），
 //! 不阻塞 UI 线程。
 //!
-//! 视觉风格：shadcn/ui dark（zinc 色系）——页面底 #09090b，卡片 #0c0c0f +
-//! 1px 边框 #27272a，无阴影无渐变；圆角 6~8px；强调色为黑白对比
-//! （primary 白底黑字）；主文字 #fafafa，次要 #a1a1aa。
+//! 视觉风格：shadcn/ui（zinc 色系）亮/暗双主题，语义色见 [`theme::Theme`]，
+//! 无阴影无渐变；圆角 6~8px；强调色为黑白对比（primary 按钮底色/文字反转）。
 
 mod home;
 mod login;
 mod settings;
+mod theme;
+
+pub use theme::Theme;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -49,6 +51,8 @@ pub struct AppState {
     pub status: Signal<String>,
     /// 登录/启动链路（设备指纹采集在启动时完成）。
     pub launcher: Signal<Option<Arc<Launcher>>>,
+    /// 当前主题（亮/暗，仅内存切换，不持久化）。
+    pub theme: Signal<Theme>,
 }
 
 impl AppState {
@@ -87,6 +91,7 @@ pub fn app() -> Element {
         selected_area: use_signal(|| None),
         status: use_signal(String::new),
         launcher: use_signal(|| None),
+        theme: use_signal(Theme::light),
     };
     use_context_provider(|| state);
 
@@ -116,20 +121,36 @@ pub fn app() -> Element {
     });
 
     let tab = state.tab;
+    let t = (state.theme)();
+    let toggle_label = if t.dark { "☀ 亮色" } else { "☾ 暗色" };
     rsx! {
+        // blitz 默认 UA 样式表带 `body { margin: 8px }`，窗口白底会从四周透出，
+        // 这里注入静态样式重置（blitz 会把 mutation 插入的 <style> 编译为 author 样式表）
+        style { "html, body {{ margin: 0; padding: 0; }}" }
         div {
-            style: "display: flex; flex-direction: row; height: 100vh; font-family: sans-serif; background: #09090b; color: #fafafa;",
+            style: "display: flex; flex-direction: row; width: 100vw; height: 100vh; font-family: sans-serif; background: {t.page_bg}; color: {t.text};",
 
             // 侧边栏导航
             div {
-                style: "width: 190px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; padding: 16px 12px; border-right: 1px solid #27272a;",
+                style: "width: 190px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; padding: 16px 12px; border-right: 1px solid {t.border};",
                 div {
-                    style: "padding: 4px 12px 20px 12px; font-size: 15px; font-weight: 600; color: #fafafa;",
+                    style: "padding: 4px 12px 20px 12px; font-size: 15px; font-weight: 600; color: {t.text};",
                     "FFXIV 国服启动器"
                 }
                 NavButton { label: "主页", target: Tab::Home, tab }
                 NavButton { label: "登录 / 账号", target: Tab::Login, tab }
                 NavButton { label: "设置", target: Tab::Settings, tab }
+
+                // 亮/暗主题切换（底部）
+                div { style: "flex: 1;" }
+                button {
+                    style: "padding: 8px 12px; border: 1px solid {t.border}; border-radius: 6px; background: transparent; color: {t.text_secondary}; font-size: 13px; text-align: left; cursor: pointer;",
+                    onclick: move |_| {
+                        let mut theme = state.theme;
+                        theme.set(if t.dark { Theme::light() } else { Theme::dark() });
+                    },
+                    "{toggle_label}"
+                }
             }
 
             // 右栏：页面内容 + 状态栏
@@ -146,7 +167,7 @@ pub fn app() -> Element {
 
                 // 状态栏
                 div {
-                    style: "padding: 8px 28px; border-top: 1px solid #27272a; font-size: 12px; color: #a1a1aa;",
+                    style: "padding: 8px 28px; border-top: 1px solid {t.border}; font-size: 12px; color: {t.text_secondary};",
                     "{state.status}"
                 }
             }
@@ -156,9 +177,10 @@ pub fn app() -> Element {
 
 #[component]
 fn NavButton(label: &'static str, target: Tab, tab: Signal<Tab>) -> Element {
+    let t = (use_context::<AppState>().theme)();
     let active = tab() == target;
-    let bg = if active { "#27272a" } else { "transparent" };
-    let fg = if active { "#fafafa" } else { "#a1a1aa" };
+    let bg = if active { t.active_bg } else { "transparent" };
+    let fg = if active { t.text } else { t.text_secondary };
     rsx! {
         button {
             style: "display: block; width: 100%; padding: 8px 12px; border: none; border-radius: 6px; background: {bg}; color: {fg}; font-size: 14px; text-align: left; cursor: pointer;",

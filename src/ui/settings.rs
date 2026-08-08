@@ -9,6 +9,7 @@ use super::AppState;
 #[component]
 pub fn SettingsPage() -> Element {
     let mut state = use_context::<AppState>();
+    let t = (state.theme)();
 
     // 草稿状态（进入页面时从当前设置初始化）
     let mut game_path = use_signal(String::new);
@@ -75,12 +76,12 @@ pub fn SettingsPage() -> Element {
                         ] {
                             {
                                 let active = startup_type() == ty;
-                                let bg = if active { "#27272a" } else { "transparent" };
-                                let fg = if active { "#fafafa" } else { "#a1a1aa" };
+                                let bg = if active { t.active_bg } else { "transparent" };
+                                let fg = if active { t.text } else { t.text_secondary };
                                 rsx! {
                                     button {
                                         key: "{name}",
-                                        style: "padding: 6px 14px; border: 1px solid #27272a; border-radius: 6px; background: {bg}; color: {fg}; font-size: 13px; cursor: pointer;",
+                                        style: "padding: 6px 14px; border: 1px solid {t.border}; border-radius: 6px; background: {bg}; color: {fg}; font-size: 13px; cursor: pointer;",
                                         onclick: move |_| startup_type.set(ty),
                                         "{name}"
                                     }
@@ -123,10 +124,11 @@ pub fn SettingsPage() -> Element {
 /// 带标签的设置行。
 #[component]
 fn SettingsRow(label: &'static str, children: Element) -> Element {
+    let t = (use_context::<AppState>().theme)();
     rsx! {
         div {
             style: "display: flex; flex-direction: row; align-items: center; gap: 12px; margin-bottom: 12px;",
-            span { style: "width: 80px; font-size: 14px; color: #a1a1aa; flex-shrink: 0;", "{label}" }
+            span { style: "width: 80px; font-size: 14px; color: {t.text_secondary}; flex-shrink: 0;", "{label}" }
             div { style: "flex: 1;", {children} }
         }
     }
@@ -135,14 +137,15 @@ fn SettingsRow(label: &'static str, children: Element) -> Element {
 /// 复选框。
 #[component]
 fn Checkbox(label: &'static str, checked: Signal<bool>) -> Element {
+    let t = (use_context::<AppState>().theme)();
     rsx! {
         label {
-            style: "display: flex; flex-direction: row; align-items: center; gap: 6px; font-size: 14px; color: #fafafa; cursor: pointer;",
+            style: "display: flex; flex-direction: row; align-items: center; gap: 6px; font-size: 14px; color: {t.text}; cursor: pointer;",
             input {
                 r#type: "checkbox",
                 // blitz 用 currentColor 作 accent-color：勾选=底色填充+白勾，
-                // 深色主题下要显式给深色，否则白底白勾不可见
-                style: "color: #18181b;",
+                // 要显式给深色，否则白底白勾不可见
+                style: "color: {t.checkbox_accent};",
                 checked: checked(),
                 onchange: move |e| checked.set(e.checked()),
             }
