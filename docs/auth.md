@@ -20,7 +20,9 @@ Rust 当前通过 `sdo_device.rs` 自行实现了设备指纹采集，C# 则依�
 | `mac_address_hash` | MD5(`"MachineId=<uuid>"`) | MD5(`"<uuid>"`) | ❌ 不一致 |
 | `mac_id` (raw) | `"MachineId=<uuid>"` | `"<uuid>"` | ❌ 不一致 |
 | `cpu_id_hash` | MD5(`"ProcessorId=<model>,...,<model>"`) — 所有 core 不去重 | MD5(`"<model>"`) — 去重后仅保留 1 个 | ❌ 不一致 |
-| `disk_serial_hash` | 动态识别根分区所在设备，读取 `SystemDriveSerialNumber=<serial>` | 硬编码 `/dev/sda`，fallback 到 udev `ID_SERIAL` | ❌ 不一致 |
+| `disk_serial_hash` | 动态识别根分区所在设备，读取 `SystemDriveSerialNumber=<serial>` | 动态识别根设备（`findmnt` 解析，含 btrfs 子卷）+ `lsblk -o SERIAL` + udev fallback | ⚠️ 输入格式仍不一致（无 `SystemDriveSerialNumber=` 前缀） |
+
+> **2026-08 修复**：disk serial 采集曾有 `lsblk --no` 参数歧义 bug + 硬编码 `/dev/sda`（NVMe/btrfs 根会失败），导致指纹漂移触发风控（-16027517）。已改为 `findmnt` 动态识别根设备（处理 `/dev/sda3[/@root]` 子卷格式）+ `lsblk -o SERIAL`。
 
 #### macOS
 

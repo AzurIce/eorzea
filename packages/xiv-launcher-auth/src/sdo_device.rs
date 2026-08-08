@@ -114,8 +114,10 @@ fn get_linux_cpu_info() -> std::io::Result<String> {
 }
 
 fn get_linux_disk_serial() -> std::io::Result<String> {
+    let dev = get_root_device().unwrap_or_else(|| "/dev/sda".to_string());
+    // 注意：`-o SERIAL`（`--no` 是歧义参数）
     let output = Command::new("lsblk")
-        .args(["--nodeps", "--no", "SERIAL", "/dev/sda"])
+        .args(["--nodeps", "-o", "SERIAL", &dev])
         .output()?;
     if output.status.success() {
         let serial = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -123,9 +125,9 @@ fn get_linux_disk_serial() -> std::io::Result<String> {
             return Ok(serial);
         }
     }
-    // Fallback: try udev
+    // Fallback: try udev on the same device
     let output = Command::new("udevadm")
-        .args(["info", "--query=property", "--name=/dev/sda"])
+        .args(["info", "--query=property", "--name", &dev])
         .output()?;
     let content = String::from_utf8_lossy(&output.stdout);
     for line in content.lines() {
@@ -136,6 +138,26 @@ fn get_linux_disk_serial() -> std::io::Result<String> {
         }
     }
     Err(std::io::Error::new(std::io::ErrorKind::NotFound, "disk serial not found"))
+}
+
+/// 识别根分区所在设备（去掉分区号与 btrfs 子卷后缀）：
+/// `/dev/nvme2n1p4` → `/dev/nvme2n1`，`/dev/sda3[/@root]` → `/dev/sda`。
+fn get_root_device() -> Option<String> {
+    let output = Command::new("findmnt").args(["-n", "-o", "SOURCE", "/"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let src = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // btrfs 子卷格式：`/dev/sda3[/@root]` → `/dev/sda3`
+    let dev_part = src.split('[').next()?.trim();
+    if let Some(dev) = dev_part.strip_prefix("/dev/") {
+        // 去尾部数字（分区号），再处理 nvme 的 `p` 分隔符
+        let base = dev.trim_end_matches(char::is_numeric).trim_end_matches('p');
+        if !base.is_empty() {
+            return Some(format!("/dev/{base}"));
+        }
+    }
+    None
 }
 
 // --- macOS ---
