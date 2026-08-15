@@ -8,9 +8,16 @@
 //! eoz game check    --game-path … --area …   # 检查更新（列出待下载补丁）
 //! eoz game update   --game-path … --area …   # 下载补丁（暂存，未应用）
 //! eoz game verify   --game-path …            # 完整性校验（未实现）
+//! eoz config list                            # 列出当前生效配置
+//! eoz config get game_path                   # 读取一个配置项
+//! eoz config set game_path /games/ffxiv      # 设置一个配置项
+//! eoz config set dalamud.enabled true
+//! eoz config unset dalamud.enabled
 //! ```
 //!
-//! `--game-path` 指向游戏**根目录**（含 `boot/`、`game/`、`sdo/`）。
+//! `--game-path` 指向游戏**根目录**（含 `boot/`、`game/`、`sdo/`）；
+//! 省略时读取 `config.toml` 顶层 `game_path`（GUI 设置页会写入）。
+//! `eoz config` 采用与 `git config` 类似的 get/set/unset/list/path 子命令。
 
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -45,6 +52,12 @@ enum Command {
         sub: GameCommand,
     },
 
+    /// 读写 config.toml（类似 git config）
+    Config {
+        #[command(subcommand)]
+        sub: ConfigCommand,
+    },
+
     /// Dalamud 状态与启动（插件框架集成）
     Dalamud {
         #[command(subcommand)]
@@ -59,9 +72,9 @@ enum Command {
 
     /// 登录并启动游戏
     Launch {
-        /// 游戏根目录（含 boot/、game/、sdo/）
+        /// 游戏根目录（含 boot/、game/、sdo/；缺省读取 config.toml 的 game_path）
         #[arg(long)]
-        game_path: PathBuf,
+        game_path: Option<PathBuf>,
 
         /// 大区 ID（用 `eoz areas` 查看）
         #[arg(long)]
@@ -102,16 +115,16 @@ enum Command {
 enum GameCommand {
     /// 显示游戏目录的本地版本
     Status {
-        /// 游戏根目录（含 boot/、game/、sdo/）
+        /// 游戏根目录（含 boot/、game/、sdo/；缺省读取 config.toml 的 game_path）
         #[arg(long)]
-        game_path: PathBuf,
+        game_path: Option<PathBuf>,
     },
 
     /// 检查更新：版本报告 → 补丁服务器 → 待下载补丁列表
     Check {
-        /// 游戏根目录
+        /// 游戏根目录（缺省读取 config.toml 的 game_path）
         #[arg(long)]
-        game_path: PathBuf,
+        game_path: Option<PathBuf>,
 
         /// 大区 ID（用 `eoz areas` 查看）
         #[arg(long)]
@@ -128,9 +141,9 @@ enum GameCommand {
 
     /// 下载待更新补丁到暂存目录（不应用）
     Update {
-        /// 游戏根目录
+        /// 游戏根目录（缺省读取 config.toml 的 game_path）
         #[arg(long)]
-        game_path: PathBuf,
+        game_path: Option<PathBuf>,
 
         /// 大区 ID（用 `eoz areas` 查看）
         #[arg(long)]
@@ -155,26 +168,55 @@ enum GameCommand {
 
     /// 校验游戏文件完整性（存在性 + sqpack 结构）
     Verify {
-        /// 游戏根目录
+        /// 游戏根目录（缺省读取 config.toml 的 game_path）
         #[arg(long)]
-        game_path: PathBuf,
+        game_path: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// 读取一个配置项（例如 game_path、dalamud.enabled、dxvk.hud）
+    Get {
+        /// 配置键（点分路径，env.<NAME> 可读写附加环境变量）
+        key: String,
+    },
+
+    /// 设置一个配置项并立即写回 config.toml
+    Set {
+        /// 配置键（点分路径）
+        key: String,
+        /// 值：布尔用 true/false，数字用十进制，其余为字符串
+        value: String,
+    },
+
+    /// 删除一个配置项，使其恢复默认值
+    Unset {
+        /// 配置键（点分路径）
+        key: String,
+    },
+
+    /// 列出当前生效配置（含默认值）
+    List {},
+
+    /// 显示配置文件路径
+    Path {},
 }
 
 #[derive(Subcommand)]
 enum DalamudCommand {
     /// 显示 Dalamud 状态：release 版本、本机安装、游戏版本兼容性
     Status {
-        /// 游戏根目录（读取本地游戏版本）
+        /// 游戏根目录（读取本地游戏版本；缺省读取 config.toml 的 game_path）
         #[arg(long)]
-        game_path: PathBuf,
+        game_path: Option<PathBuf>,
     },
 
     /// 通过 Dalamud Injector 启动游戏（版本不匹配时拒绝）
     Launch {
-        /// 游戏根目录
+        /// 游戏根目录（缺省读取 config.toml 的 game_path）
         #[arg(long)]
-        game_path: PathBuf,
+        game_path: Option<PathBuf>,
 
         /// 大区 ID
         #[arg(long)]
@@ -252,6 +294,21 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
+/// `--game-path` 缺省时从 config.toml 顶层 `game_path` 读取。
+fn game_path_or_config(game_path: Option<PathBuf>) -> PathBuf {
+    if let Some(path) = game_path {
+        return path;
+    }
+    match eorzea_lib::config::load_app_default().game_path {
+        Some(path) => path,
+        None => {
+            eprintln!("未指定 --game-path，且 config.toml 中没有 game_path。");
+            eprintln!("请用 `eoz game status --game-path <游戏根目录>` 或在 GUI 设置页保存游戏目录。");
+            std::process::exit(1);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -260,14 +317,19 @@ async fn main() {
 
     match cli.command {
         Command::Areas => cmd_areas().await,
+        Command::Config { sub } => cmd_config(sub),
         Command::Dalamud { sub } => match sub {
-            DalamudCommand::Status { game_path } => cmd_dalamud_status(&game_path).await,
+            DalamudCommand::Status { game_path } => {
+                let game_path = game_path_or_config(game_path);
+                cmd_dalamud_status(&game_path).await
+            }
             DalamudCommand::Launch {
                 game_path,
                 area,
                 dalamud,
                 no_dalamud,
             } => {
+                let game_path = game_path_or_config(game_path);
                 let override_enabled = if dalamud {
                     Some(true)
                 } else if no_dalamud {
@@ -275,8 +337,7 @@ async fn main() {
                 } else {
                     None
                 };
-                let _ = override_enabled;
-                cmd_dalamud_launch(&game_path, &area).await
+                cmd_dalamud_launch(&game_path, &area, override_enabled).await
             }
         },
         Command::Auth { sub } => match sub {
@@ -318,6 +379,7 @@ async fn main() {
             } else {
                 None
             };
+            let game_path = game_path_or_config(game_path);
             cmd_launch(
                 &game_path,
                 &area,
@@ -331,13 +393,19 @@ async fn main() {
             .await;
         }
         Command::Game { sub } => match sub {
-            GameCommand::Status { game_path } => cmd_status(&game_path),
+            GameCommand::Status { game_path } => {
+                let game_path = game_path_or_config(game_path);
+                cmd_status(&game_path)
+            }
             GameCommand::Check {
                 game_path,
                 area,
                 max_expansion,
                 repair,
-            } => cmd_check(&game_path, &area, max_expansion, repair).await,
+            } => {
+                let game_path = game_path_or_config(game_path);
+                cmd_check(&game_path, &area, max_expansion, repair).await
+            }
             GameCommand::Update {
                 game_path,
                 area,
@@ -346,6 +414,7 @@ async fn main() {
                 patch_dir,
                 concurrency,
             } => {
+                let game_path = game_path_or_config(game_path);
                 cmd_update(
                     &game_path,
                     &area,
@@ -356,7 +425,10 @@ async fn main() {
                 )
                 .await
             }
-            GameCommand::Verify { game_path } => cmd_verify(&game_path).await,
+            GameCommand::Verify { game_path } => {
+                let game_path = game_path_or_config(game_path);
+                cmd_verify(&game_path).await
+            }
         },
     }
 }
@@ -1008,6 +1080,12 @@ async fn cmd_launch(
             InstallState::OutOfDate => {
                 println!("⚠️ Dalamud: 已安装版本与游戏不匹配，安全降级为直接启动");
             }
+            InstallState::RuntimeMissing => {
+                println!("Dalamud: Windows .NET runtime 缺失（启动时自动下载）");
+            }
+            InstallState::AssetsMissing => {
+                println!("Dalamud: assets 缺失（启动时自动下载）");
+            }
             InstallState::Failed(msg) => {
                 println!("⚠️ Dalamud: 安装异常（{msg}），安全降级为直接启动");
             }
@@ -1112,6 +1190,12 @@ async fn cmd_dalamud_status(game_path: &std::path::Path) {
         InstallState::Missing => "ℹ️ 未安装（release 匹配游戏版本，可安装）".to_string(),
         InstallState::OutOfDate => "⚠️ 已安装但版本不匹配游戏".to_string(),
         InstallState::Unsupported => "⛔ release 尚未支持当前游戏版本（等待发布）".to_string(),
+        InstallState::RuntimeMissing => {
+            "ℹ️ Windows .NET runtime 尚未安装（启动时自动下载）".to_string()
+        }
+        InstallState::AssetsMissing => {
+            "ℹ️ Dalamud assets 尚未安装（启动时自动下载）".to_string()
+        }
         InstallState::Failed(msg) => format!("❌ 安装失败: {msg}"),
     };
     println!("  状态: {state_label}");
@@ -1123,7 +1207,11 @@ async fn cmd_dalamud_status(game_path: &std::path::Path) {
 
 /// `dalamud launch`：通过 Injector 启动游戏（版本门控）。
 /// `dalamud launch`：等价于 `launch --dalamud`（强制启用，自动安装/安全降级由 launcher 处理）。
-async fn cmd_dalamud_launch(game_path: &std::path::Path, area_id: &str) {
+async fn cmd_dalamud_launch(
+    game_path: &std::path::Path,
+    area_id: &str,
+    dalamud_override: Option<bool>,
+) {
     cmd_launch(
         game_path,
         area_id,
@@ -1132,8 +1220,351 @@ async fn cmd_dalamud_launch(game_path: &std::path::Path, area_id: &str) {
         None,
         None,
         None,
-        Some(true),
+        dalamud_override.or(Some(true)),
     )
     .await;
 }
 
+
+// ── eoz config：类似 git config 的 config.toml 读写 ─────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigValueKind {
+    String,
+    Bool,
+    Uint,
+    Table,
+}
+
+/// 允许通过 `eoz config` 读写的配置键。
+fn config_key_spec(key: &str) -> Option<ConfigValueKind> {
+    if let Some(env) = key.strip_prefix("env.") {
+        return (!env.is_empty()).then_some(ConfigValueKind::String);
+    }
+
+    Some(match key {
+        "game_path" | "startup_type" | "custom_path" | "prefix" | "debug_vars" | "dxvk.hud"
+        | "dalamud.load_method" | "dalamud.track" | "dalamud.beta_key"
+        | "dalamud.install_root" => ConfigValueKind::String,
+        "esync" | "fsync" | "msync" | "gamemode" | "dxvk.enabled" | "dalamud.enabled"
+        | "dalamud.no_plugins" | "dalamud.no_third_party_plugins"
+        | "dalamud.manage_runtime" => ConfigValueKind::Bool,
+        "dxvk.frame_limit" | "dalamud.delay_initialize_ms" => ConfigValueKind::Uint,
+        "dalamud" | "dxvk" | "env" => ConfigValueKind::Table,
+        _ => return None,
+    })
+}
+
+fn parse_bool(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn validate_string_enum(key: &str, value: &str) -> Result<(), String> {
+    let valid = match key {
+        "startup_type" => ["auto", "managed", "custom", "system"].contains(&value),
+        "dalamud.load_method" => ["entrypoint", "dllinject", "aclonly"].contains(&value),
+        _ => true,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "{key} 的值 {value:?} 无效（startup_type: auto/managed/custom/system；dalamud.load_method: entrypoint/dllinject/aclonly）"
+        ))
+    }
+}
+
+/// 把命令行字符串按 key 的类型转成 TOML value。
+fn parse_config_value(key: &str, raw: &str) -> Result<toml::Value, String> {
+    let kind = config_key_spec(key).ok_or_else(|| format!("未知配置键: {key}"))?;
+    match kind {
+        ConfigValueKind::Bool => parse_bool(raw)
+            .map(toml::Value::Boolean)
+            .ok_or_else(|| format!("{key} 需要布尔值（true/false），实际是 {raw:?}")),
+        ConfigValueKind::Uint => raw
+            .trim()
+            .parse::<u32>()
+            .map(|n| toml::Value::Integer(i64::from(n)))
+            .map_err(|e| format!("{key} 需要非负整数: {e}")),
+        ConfigValueKind::String => {
+            validate_string_enum(key, raw)?;
+            Ok(toml::Value::String(raw.to_string()))
+        }
+        ConfigValueKind::Table => {
+            let value = toml::from_str::<toml::Value>(raw)
+                .map_err(|e| format!("{key} 需要 TOML 表（例如 '{{ enabled = true }}'）: {e}"))?;
+            if value.is_table() {
+                Ok(value)
+            } else {
+                Err(format!("{key} 需要 TOML 表，实际是标量"))
+            }
+        }
+    }
+}
+
+fn set_config_path(root: &mut toml::Value, key: &str, value: toml::Value) -> Result<(), String> {
+    let parts: Vec<&str> = key.split('.').collect();
+    set_config_path_inner(root, &parts, value)
+}
+
+fn set_config_path_inner(
+    cur: &mut toml::Value,
+    parts: &[&str],
+    value: toml::Value,
+) -> Result<(), String> {
+    let Some((head, tail)) = parts.split_first() else {
+        return Err("配置键为空".into());
+    };
+    let table = cur
+        .as_table_mut()
+        .ok_or_else(|| format!("{head} 的父级不是 TOML 表"))?;
+    if tail.is_empty() {
+        table.insert((*head).to_string(), value);
+        Ok(())
+    } else {
+        let child = table
+            .entry((*head).to_string())
+            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+        set_config_path_inner(child, tail, value)
+    }
+}
+
+fn get_config_path<'a>(root: &'a toml::Value, key: &str) -> Option<&'a toml::Value> {
+    let mut cur = root;
+    for part in key.split('.') {
+        cur = cur.get(part)?;
+    }
+    Some(cur)
+}
+
+fn unset_config_path(root: &mut toml::Value, key: &str) -> Result<bool, String> {
+    let parts: Vec<&str> = key.split('.').collect();
+    unset_config_path_inner(root, &parts)
+}
+
+fn unset_config_path_inner(cur: &mut toml::Value, parts: &[&str]) -> Result<bool, String> {
+    let Some((head, tail)) = parts.split_first() else {
+        return Err("配置键为空".into());
+    };
+    let table = cur
+        .as_table_mut()
+        .ok_or_else(|| format!("{head} 的父级不是 TOML 表"))?;
+    if tail.is_empty() {
+        Ok(table.remove(*head).is_some())
+    } else {
+        match table.get_mut(*head) {
+            Some(child) => unset_config_path_inner(child, tail),
+            None => Ok(false),
+        }
+    }
+}
+
+fn display_config_value(value: &toml::Value) -> String {
+    match value {
+        toml::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// 当前生效配置（默认值 + 文件覆盖）转成 TOML Value。
+fn effective_config_document() -> Result<toml::Value, String> {
+    let app = eorzea_lib::config::load_app_default();
+    let text = toml::to_string_pretty(&app).map_err(|e| format!("序列化配置失败: {e}"))?;
+    toml::from_str(&text).map_err(|e| format!("解析配置失败: {e}"))
+}
+
+/// set/unset 前载入磁盘文档。先触发 legacy settings.json 迁移，避免只写一个
+/// key 时丢掉旧配置；文件解析失败时直接报错，不覆盖坏文件。
+fn load_config_document_for_write() -> Result<toml::Value, String> {
+    let _ = eorzea_lib::config::load_app_default();
+    let path = eorzea_lib::config::settings_path();
+    match std::fs::read_to_string(&path) {
+        Ok(text) => toml::from_str::<toml::Value>(&text)
+            .map_err(|e| format!("{} 解析失败（未修改文件）: {e}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok(toml::Value::Table(toml::map::Map::new()))
+        }
+        Err(e) => Err(format!("读取 {} 失败: {e}", path.display())),
+    }
+}
+
+fn save_config_document(doc: &toml::Value) -> Result<(), String> {
+    let path = eorzea_lib::config::settings_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建 {} 失败: {e}", parent.display()))?;
+    }
+    let text = toml::to_string_pretty(doc).map_err(|e| format!("序列化配置失败: {e}"))?;
+    std::fs::write(&path, text).map_err(|e| format!("写入 {} 失败: {e}", path.display()))
+}
+
+/// 写盘前用 AppConfig 完整反序列化一遍，类型/枚举错误在这里被拦下。
+fn validate_config_document(doc: &toml::Value) -> Result<(), String> {
+    let text = toml::to_string(doc).map_err(|e| format!("序列化配置失败: {e}"))?;
+    toml::from_str::<eorzea_lib::config::AppConfig>(&text)
+        .map(|_| ())
+        .map_err(|e| format!("配置校验失败（未写盘）: {e}"))
+}
+
+fn cmd_config(sub: ConfigCommand) {
+    match sub {
+        ConfigCommand::Get { key } => {
+            if config_key_spec(&key).is_none() {
+                eprintln!("未知配置键: {key}");
+                std::process::exit(1);
+            }
+            let doc = match effective_config_document() {
+                Ok(doc) => doc,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            match get_config_path(&doc, &key) {
+                Some(value) => println!("{}", display_config_value(value)),
+                None => {
+                    eprintln!("{key} 未设置");
+                    std::process::exit(1);
+                }
+            }
+        }
+        ConfigCommand::Set { key, value } => {
+            let parsed = match parse_config_value(&key, &value) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            let mut doc = match load_config_document_for_write() {
+                Ok(doc) => doc,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = set_config_path(&mut doc, &key, parsed) {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+            if let Err(e) = validate_config_document(&doc) {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+            if let Err(e) = save_config_document(&doc) {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+            println!("已设置 {key} = {value}");
+        }
+        ConfigCommand::Unset { key } => {
+            if config_key_spec(&key).is_none() {
+                eprintln!("未知配置键: {key}");
+                std::process::exit(1);
+            }
+            let mut doc = match load_config_document_for_write() {
+                Ok(doc) => doc,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            match unset_config_path(&mut doc, &key) {
+                Ok(true) => {
+                    if let Err(e) = validate_config_document(&doc) {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                    if let Err(e) = save_config_document(&doc) {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                    println!("已删除 {key}（恢复默认值）");
+                }
+                Ok(false) => {
+                    println!("{key} 原本就未设置");
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        ConfigCommand::List {} => match toml::to_string_pretty(&eorzea_lib::config::load_app_default()) {
+            Ok(text) => print!("{text}"),
+            Err(e) => {
+                eprintln!("序列化配置失败: {e}");
+                std::process::exit(1);
+            }
+        },
+        ConfigCommand::Path {} => println!("{}", eorzea_lib::config::settings_path().display()),
+    }
+}
+
+#[cfg(test)]
+mod config_command_tests {
+    use super::*;
+
+    #[test]
+    fn test_config_key_specs() {
+        assert_eq!(config_key_spec("game_path"), Some(ConfigValueKind::String));
+        assert_eq!(config_key_spec("dalamud.enabled"), Some(ConfigValueKind::Bool));
+        assert_eq!(
+            config_key_spec("dalamud.delay_initialize_ms"),
+            Some(ConfigValueKind::Uint)
+        );
+        assert_eq!(config_key_spec("env.FOO"), Some(ConfigValueKind::String));
+        assert_eq!(config_key_spec("dalamud"), Some(ConfigValueKind::Table));
+        assert_eq!(config_key_spec("dalamud.unknown"), None);
+    }
+
+    #[test]
+    fn test_parse_config_value() {
+        assert_eq!(parse_config_value("esync", "yes").unwrap(), toml::Value::Boolean(true));
+        assert_eq!(
+            parse_config_value("dalamud.delay_initialize_ms", "250").unwrap(),
+            toml::Value::Integer(250)
+        );
+        assert_eq!(
+            parse_config_value("game_path", "/games/ffxiv").unwrap(),
+            toml::Value::String("/games/ffxiv".into())
+        );
+        assert!(parse_config_value("startup_type", "wrong").is_err());
+    }
+
+    #[test]
+    fn test_display_config_value() {
+        assert_eq!(display_config_value(&toml::Value::Boolean(true)), "true");
+        assert_eq!(display_config_value(&toml::Value::Integer(60)), "60");
+    }
+
+    #[test]
+    fn test_set_get_unset_dotted_paths() {
+        let mut root = toml::Value::Table(toml::map::Map::new());
+        set_config_path(
+            &mut root,
+            "dalamud.enabled",
+            toml::Value::Boolean(true),
+        )
+        .unwrap();
+        set_config_path(
+            &mut root,
+            "env.WINEESYNC",
+            toml::Value::String("1".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            get_config_path(&root, "dalamud.enabled"),
+            Some(&toml::Value::Boolean(true))
+        );
+        assert_eq!(
+            get_config_path(&root, "env.WINEESYNC"),
+            Some(&toml::Value::String("1".into()))
+        );
+        assert!(unset_config_path(&mut root, "dalamud.enabled").unwrap());
+        assert!(get_config_path(&root, "dalamud.enabled").is_none());
+    }
+}

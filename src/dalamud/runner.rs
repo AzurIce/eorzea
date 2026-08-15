@@ -9,7 +9,9 @@ use std::path::Path;
 use std::process::Command;
 use tracing::{debug, info};
 
-use super::model::{build_injector_launch_args, DalamudLoadMethod, DalamudStartInfo, InjectorResult};
+use super::model::{
+    build_injector_launch_args, DalamudLoadMethod, DalamudStartInfo, InjectorResult,
+};
 use crate::wine::{WineError, WineTool};
 
 /// Injector 启动结果。
@@ -81,14 +83,20 @@ pub fn launch_through_injector(
     without_dalamud: bool,
     env: &[(String, String)],
 ) -> Result<InjectorLaunch, WineError> {
-    let injector_args =
-        build_injector_launch_args(start, load_method, game_args, without_dalamud);
+    let injector_args = build_injector_launch_args(start, load_method, game_args, without_dalamud);
 
     info!(injector = ?injector_exe, "launching game through Dalamud Injector");
     let mut cmd = Command::new(&wine.wine64_path);
     cmd.arg(injector_exe)
         .args(&injector_args)
-        .current_dir(start.working_directory.clone())
+        // start.working_directory 已转换为 Z:\...（Windows 语义），只能传给
+        // Injector；宿主进程的 current_dir 必须是 Unix 路径，否则 spawn 直接失败。
+        .current_dir(
+            injector_exe
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new(".")),
+        )
         .env("WINEPREFIX", &wine.prefix_path)
         .env("XL_WINEONLINUX", "true");
     for (k, v) in env {
@@ -101,6 +109,22 @@ pub fn launch_through_injector(
 
     let mut child = cmd.spawn().map_err(WineError::Io)?;
 
+    // stderr 必须持续排空：Injector 的诊断输出可能超过管道缓冲，
+    // 若无人读取会阻塞进程，导致永远等不到 stdout 里的 JSON。
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let reader = std::io::BufReader::new(stderr);
+            for line in reader.lines() {
+                match line {
+                    Ok(line) if !line.trim().is_empty() => debug!(line = %line, "injector stderr"),
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+
     // 读取 stdout 单行 JSON（参考 C#：最多等待 ~30s）
     let pid = read_injector_pid(&mut child)?;
 
@@ -111,36 +135,41 @@ pub fn launch_through_injector(
     })
 }
 
-/// 从 Injector stdout 读取并解析 `{pid, handle}` JSON（带超时）。
+/// 从 Injector stdout 读取并解析 `{pid, handle}` JSON（带总超时）。
+///
+/// 读取放在独立线程里，用 `recv_timeout` 驱动超时；如果直接在调用线程
+/// `read_line`，Injector 不输出换行时阻塞调用无法被 30s deadline 打断。
 fn read_injector_pid(child: &mut std::process::Child) -> Result<u32, WineError> {
     use std::io::BufRead;
+    use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
     let stdout = child
         .stdout
         .take()
         .ok_or_else(|| WineError::Probe("injector stdout unavailable".into()))?;
+    let (tx, rx) = mpsc::channel::<std::io::Result<String>>();
+    std::thread::spawn(move || {
+        let reader = std::io::BufReader::new(stdout);
+        for line in reader.lines() {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
 
-    let mut reader = std::io::BufReader::new(stdout);
     let deadline = Instant::now() + Duration::from_secs(30);
-    let mut buf = String::new();
-
     loop {
-        if Instant::now() > deadline {
+        let now = Instant::now();
+        if now >= deadline {
             let _ = child.kill();
             return Err(WineError::Probe(
                 "timed out waiting for Injector result".into(),
             ));
         }
-        buf.clear();
-        match reader.read_line(&mut buf) {
-            Ok(0) => {
-                return Err(WineError::Probe(
-                    "Injector exited without reporting a result".into(),
-                ));
-            }
-            Ok(_) => {
-                let line = buf.trim();
+        match rx.recv_timeout(deadline - now) {
+            Ok(Ok(line)) => {
+                let line = line.trim();
                 if line.is_empty() {
                     continue;
                 }
@@ -150,37 +179,13 @@ fn read_injector_pid(child: &mut std::process::Child) -> Result<u32, WineError> 
                 }
                 // 非 JSON 行（诊断输出）继续读
             }
-            Err(e) => return Err(WineError::Io(e)),
+            Ok(Err(e)) => return Err(WineError::Io(e)),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(WineError::Probe(
+                    "Injector exited without reporting a result".into(),
+                ));
+            }
         }
-    }
-}
-
-/// 构建完整游戏启动参数（供 Injector `--` 后使用）。
-///
-/// 复用 `game::build_sdo_launch_args`，返回逐参数列表（不拼接）。
-pub fn game_argv(args_str: &str) -> Vec<String> {
-    args_str
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect()
-}
-
-/// 错误转换：把 WineError 包装为启动错误信息。
-pub fn map_wine_error(e: WineError) -> String {
-    match e {
-        WineError::Probe(msg) => msg,
-        other => other.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_game_argv_split() {
-        let args = game_argv("-AppID=1 Dev.LobbyHost01=a.com DEV.TestSID=tok");
-        assert_eq!(args.len(), 3);
-        assert_eq!(args[0], "-AppID=1");
     }
 }

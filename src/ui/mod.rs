@@ -15,12 +15,14 @@ mod theme;
 pub use theme::Theme;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use dioxus::prelude::*;
 use eorzea_auth::SdoArea;
 use eorzea_lib::auth::{self, AuthConfig};
 use eorzea_lib::config::{self, WineSettings};
+use eorzea_lib::dalamud::model::DalamudSettings;
 use eorzea_lib::launcher::{LaunchToken, Launcher};
 
 /// 顶部标签页。
@@ -39,6 +41,10 @@ pub struct AppState {
     pub auth_cfg: Signal<AuthConfig>,
     /// `config.toml` 的内存镜像（设置页保存后写盘）。
     pub settings: Signal<WineSettings>,
+    /// 游戏根目录（config.toml 顶层 `game_path`）。
+    pub game_path: Signal<Option<PathBuf>>,
+    /// `[dalamud]` section 的内存镜像（设置页保存后写盘）。
+    pub dalamud_cfg: Signal<DalamudSettings>,
     /// 大区列表（按 area_order 排序）。
     pub areas: Signal<Vec<SdoArea>>,
     /// 本会话的登录 token（snda_id -> token），不落盘。
@@ -81,10 +87,20 @@ impl AppState {
 
 /// 根组件：侧边栏导航 + 页面内容 + 状态栏。
 pub fn app() -> Element {
+    let initial_config = config::load_app_default();
+    let initial_auth = auth::load(&auth::config_path());
+    // 首次启动直接落到登录页；已有账号和游戏目录时再进入主页。
+    let initial_tab = if initial_auth.accounts.is_empty() || initial_config.game_path.is_none() {
+        Tab::Login
+    } else {
+        Tab::Home
+    };
     let mut state = AppState {
-        tab: use_signal(|| Tab::Home),
-        auth_cfg: use_signal(|| auth::load(&auth::config_path())),
-        settings: use_signal(config::load_settings),
+        tab: use_signal(|| initial_tab),
+        auth_cfg: use_signal(|| initial_auth),
+        settings: use_signal(|| initial_config.settings.clone()),
+        game_path: use_signal(|| initial_config.game_path.clone()),
+        dalamud_cfg: use_signal(|| initial_config.dalamud.clone()),
         areas: use_signal(Vec::new),
         tokens: use_signal(HashMap::new),
         selected_account: use_signal(|| None),

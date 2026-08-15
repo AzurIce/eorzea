@@ -11,11 +11,11 @@
 //!
 //! QR 登录为**分步式**：先生成二维码展示，再在后台等待扫码结果。
 
+use eorzea_auth::sdo::{PollResult, SdoAuth, SdoContext};
+use eorzea_auth::{AuthError, SdoArea, SdoLoginData};
 use std::path::Path;
 use std::time::Duration;
 use tracing::{debug, info, instrument, warn};
-use eorzea_auth::sdo::{PollResult, SdoAuth, SdoContext};
-use eorzea_auth::{AuthError, SdoArea, SdoLoginData};
 
 use crate::game::{GameLaunchConfig, GameLaunchError, GameLaunchResult};
 
@@ -180,7 +180,14 @@ impl PushLoginSession {
         data: &SdoLoginData,
         snda_id: Option<&str>,
     ) -> Result<LaunchToken, LauncherError> {
-        finalize_login(&self.auth, &self.ctx, data, snda_id, Some(self.account.clone())).await
+        finalize_login(
+            &self.auth,
+            &self.ctx,
+            data,
+            snda_id,
+            Some(self.account.clone()),
+        )
+        .await
     }
 
     /// 阻塞等待用户在叨鱼 App 上确认。
@@ -423,10 +430,7 @@ impl Launcher {
 
     /// 使用自动登录 session key 登录，返回 `LaunchToken`。
     #[instrument(skip(self, session_key))]
-    pub async fn login_auto(
-        &self,
-        session_key: &str,
-    ) -> Result<LaunchToken, LauncherError> {
+    pub async fn login_auto(&self, session_key: &str) -> Result<LaunchToken, LauncherError> {
         let ctx = self.get_context().await?;
 
         let result = self
@@ -464,8 +468,7 @@ impl Launcher {
         Ok(token)
     }
 
-
-// ── 分步扫码登录 ──────────────────────────────────────────────────
+    // ── 分步扫码登录 ──────────────────────────────────────────────────
 
     /// 请求二维码，返回 [`QrCodeSession`]。
     ///
@@ -639,8 +642,9 @@ impl Launcher {
 
     /// 根据 `[dalamud]` 配置检测是否通过 Injector 启动。
     ///
-    /// 返回 `Some(DalamudLaunchConfig)` 仅当：启用 + 本机有安装 + 版本匹配。
-    /// 版本不匹配（release 尚未支持当前游戏）时**安全降级**为直接启动（不加载 Dalamud）。
+    /// 返回 `Some(DalamudLaunchConfig)` 仅当：启用 + 本机有安装 + 版本匹配 +
+    /// 必需的 Windows .NET runtime 可用。版本不匹配或依赖缺失时**安全降级**
+    /// 为直接启动（不加载 Dalamud）。
     async fn build_dalamud_config(
         game_path: &Path,
         override_enabled: Option<bool>,
@@ -655,19 +659,47 @@ impl Launcher {
             .install_root
             .clone()
             .unwrap_or_else(crate::dalamud::updater::default_install_root);
-        let client = reqwest::Client::new();
-        let st = crate::dalamud::updater::status(&client, &install_root, game_path, &settings.track).await;
 
-        use crate::dalamud::InstallState;
-        // 惰性安装：release 匹配游戏版本但本地未安装/版本旧时自动下载
-        let install_path = match &st.install_state {
-            InstallState::Ready => st.install_path.clone(),
-            InstallState::Missing => {
+        // `launch_with_options` 收的是 `ffxiv_dx11.exe` 完整路径；
+        // `updater::status` 需要游戏根目录。这里从 exe 的父目录推导，
+        // 避免把 exe 路径当根目录导致永远读出 BASE_GAME_VERSION。
+        let game_root = game_path
+            .parent()
+            .filter(|p| p.file_name().is_some_and(|n| n == "game"))
+            .and_then(|p| p.parent())
+            .unwrap_or(game_path);
+
+        let client = reqwest::Client::new();
+        let st =
+            crate::dalamud::updater::status(&client, &install_root, game_root, &settings.track)
+                .await;
+
+        // 网络不可用且本地也没有安装时，status 可能返回 Missing/OutOfDate；
+        // 这里统一按“有远端元数据 + 版本匹配”判断，并惰性补齐三个组件：
+        // release → Windows .NET runtime → assets。任一组件失败都安全降级。
+        let Some(remote) = st.remote.as_ref() else {
+            warn!("Dalamud release metadata unavailable, launching without Dalamud");
+            return Ok(None);
+        };
+        if remote.supported_game_ver != st.local_game_ver {
+            warn!(
+                supported = %remote.supported_game_ver,
+                local = %st.local_game_ver,
+                state = ?st.install_state,
+                "Dalamud version gate failed, launching without Dalamud"
+            );
+            return Ok(None);
+        }
+
+        let install_path = match st.install_path.as_ref() {
+            Some(p)
+                if p.join("Dalamud.Injector.exe").is_file()
+                    && crate::dalamud::updater::release_install_is_valid(p, &remote.hash) =>
+            {
+                p.clone()
+            }
+            _ => {
                 info!("Dalamud release matches game version, auto-installing");
-                let remote = st
-                    .remote
-                    .as_ref()
-                    .expect("Missing implies remote present");
                 match crate::dalamud::updater::download_release(
                     &client,
                     remote,
@@ -676,34 +708,57 @@ impl Launcher {
                 )
                 .await
                 {
-                    Ok(p) => Some(p),
+                    Ok(p) => p,
                     Err(e) => {
                         warn!(error = %e, "auto-install failed, launching without Dalamud");
                         return Ok(None);
                     }
                 }
             }
-            other => {
-                warn!(
-                    state = ?other,
-                    "Dalamud not ready, launching game without it (safe degrade)"
-                );
+        };
+
+        // 路径对齐上游目录布局：install_root 本身相当于 storage root，
+        // 不要再额外套一层 `install_root/dalamud/...`。
+        let runtime_required = remote.runtime_required || settings.manage_runtime;
+        let runtime_dir = if runtime_required {
+            match crate::dalamud::ensure_runtime(
+                &client,
+                &install_root,
+                &remote.runtime_version,
+                |_, _| {},
+            )
+            .await
+            {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    warn!(error = %e, "runtime setup failed, launching without Dalamud");
+                    return Ok(None);
+                }
+            }
+        } else {
+            crate::dalamud::updater::find_usable_runtime_dir(
+                &install_root,
+                Some(&remote.runtime_version),
+            )
+        };
+
+        let asset_dir = match crate::dalamud::ensure_assets(&client, &install_root, |_, _| {}).await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(error = %e, "assets setup failed, launching without Dalamud");
                 return Ok(None);
             }
         };
-        let install_path = match install_path {
-            Some(p) => p,
-            None => return Ok(None),
-        };
 
-        let d = install_root.join("dalamud");
         Ok(Some(GameLaunchConfigDalamud {
             injector_exe: install_path.join("Dalamud.Injector.exe"),
             install_dir: install_path,
-            config_path: d.join("config/dalamudConfig.json"),
-            log_path: d.join("logs/dalamud.log"),
-            plugin_dir: d.join("installedPlugins"),
-            asset_dir: d.join("assets"),
+            config_path: install_root.join("dalamudConfig.json"),
+            log_path: install_root.join("logs/dalamud.log"),
+            plugin_dir: install_root.join("installedPlugins"),
+            asset_dir,
+            runtime_dir,
             load_method: settings.load_method,
             delay_initialize_ms: settings.delay_initialize_ms,
             no_plugins: settings.no_plugins,

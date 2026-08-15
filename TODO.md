@@ -103,7 +103,7 @@
 ### P2-4 Wine 配置与启动环境 (`WineSettings.cs` / `CompatibilityTools.cs` → `src/wine.rs` + `src/config.rs`)
 
 - [x] **`WineSettings` 配置模型**：`startup_type`（Auto/Managed/Custom/System）、`custom_path`、`prefix`、esync/fsync/msync、`debug_vars`、自定义 `env`、DXVK 设置（enabled/hud/frame_limit）、gamemode — `src/config.rs`
-- [x] **配置持久化**：拆分存储 — `~/.xiv-launcher-rs/config.toml`（Wine 设置，TOML）+ `~/.xiv-launcher-rs/auth.toml`（账号，TOML）；旧 `settings.json`/`eorzea.toml` 自动迁移
+- [x] **配置持久化**：拆分存储 — `~/.xiv-launcher-rs/config.toml`（`AppConfig`：顶层 `game_path` + Wine 设置 + `[dalamud]`）+ `~/.xiv-launcher-rs/auth.toml`（账号，TOML）；旧 `settings.json`/`eorzea.toml` 自动迁移。`game_path` 与 Wine 无关，已从 `WineSettings` 上移到 `AppConfig`；CLI 的 `--game-path` 缺省时从 config 读取
 - [x] **`WineTool::resolve(&WineSettings)`**：配置 → 运行时解析（Auto = 自定义→托管→系统→下载；Managed/Custom/System 显式分派），`custom_path` 支持 wine64 文件或 bin 目录归一化
 - [x] **`WineTool::probe()`**：`wine64 --version` 校验可执行性
 - [x] **`build_launch_env()`**：对齐 `CompatibilityTools.RunInPrefix` 环境变量（`WINEDLLOVERRIDES`、`WINEESYNC/WINEFSYNC/WINEMSYNC`、`WINEDEBUG`、`DXVK_STATE_CACHE_PATH`/`DXVK_CONFIG_FILE`/`DXVK_HUD`/`DXVK_FRAME_RATE`、`LD_PRELOAD` gamemode、自定义 env 覆盖）
@@ -125,10 +125,11 @@
 
 - [x] **调查报告**：`docs/dalamud_integration.md`（加载机制、XIVLauncher 组件、Linux Wine 内注入、分阶段路线）
 - [x] **阶段 0 骨架**：`src/dalamud/`（model/updater/runner）— release 元数据获取（`VersionInfo` API）、版本门控（`SupportedGameVer == 游戏版本`）、本机安装检测、Injector argv 构造、Wine 路径转换（`winepath --windows`）、Injector JSON 解析；`eoz dalamud status/launch`；`config.toml [dalamud]` section（flatten 兼容旧配置）
-- [x] **release 下载安装（惰性）**：7z 下载（进度回调）+ 关键文件校验 + 原子安装（`Hooks/<AssemblyVersion>`）+ 写 `version.json`；`launch` 时版本匹配但未安装自动下载（无需独立 install 命令）；注：release 包不含 `hashes.json`（远端 `Hash` 用于校验安装后生成的 runtime hashes）
-- [ ] **Windows x64 .NET runtime 下载/组装**（`RuntimeVersion` 管理）
-- [ ] **Dalamud assets 获取**
+- [x] **release 下载安装（惰性）**：7z 下载（进度回调）+ 关键文件校验 + `hashes.json` 完整性校验（远端 `Hash` = manifest 文件 MD5、逐文件 MD5、UTF-16/UTF-8 manifest 解码、拒绝 `..`/绝对路径）+ 原子安装（`Hooks/<AssemblyVersion>`）+ 写 `version.json`；`launch` 时版本匹配但未安装自动下载（无需独立 install 命令）
+- [x] **Windows x64 .NET runtime 下载/组装**（`RuntimeVersion` 管理；NuGet/华为镜像，提取 native/lib 并组装 host/fxr；上游 Runtime/Hashes manifest 与 NuGet 实际文件不一致，未作为阻断条件）
+- [x] **Dalamud assets 获取**（Asset Meta 版本管理 + 单文件 SHA1 校验/镜像 fallback；上游 Noto 字体 hash 与镜像文件不一致，按 C# 行为接受镜像文件并告警）
 - [x] **launch backend 切换**：`launch_game` 支持 `dalamud` 配置时走 Injector（winepath 转换 + Injector 启动 + JSON 解析）；`Launcher::launch_with_options` 自动读 `[dalamud].enabled`（可被 CLI 覆盖）并安全降级；`eoz launch --dalamud/--no-dalamud` 覆盖配置
+- [x] **Dalamud 启动链路纠错**：`build_dalamud_config` 从 `ffxiv_dx11.exe` 路径正确推导游戏根目录（此前把 exe 当根目录导致版本恒不匹配）；路径对齐上游 storage root（`dalamudConfig.json`/`logs`/`installedPlugins`/`dalamudAssets`，不再嵌套 `dalamud/`）；runner 宿主 `current_dir` 用 Unix Injector 目录（此前误传 `Z:\...`）；Injector stderr 后台排空避免管道阻塞；检测 Windows .NET runtime（本项目或 `~/.xlcore_cn` 版本匹配 fallback）与配套 assets，缺失时安全降级；release 元数据不可用不再 panic；`eoz dalamud launch --no-dalamud` 不再被忽略
 - [ ] **阶段 2+**：Windows runner、Wine PID→Unix PID 映射、staging/beta、崩溃恢复（safe mode）
 
 ## P3 — 国际服 (SE) 补全（低优先级）
@@ -161,6 +162,15 @@
 - [ ] **`SdoArea` 反序列化测试**：用真实 serverlist_new.js 内容做 fixture 测试
 - [ ] **SE OAuth HTML 解析测试**：用 fixture HTML 验证 `_STORED_` 和 `login=auth,ok,...` 提取
 
+### P4-2.5 GUI UX 修正
+
+- [x] **首次启动默认登录页**：无账号或无 `game_path` 时默认 Tab 为登录页，而不是空主页
+- [x] **密码安全与重复提交**：密码登录成功后清空密码；登录/启动/检查更新增加 busy 防重入
+- [x] **删除账号二次确认**：避免误触立即删除本地账号配置
+- [x] **更新进度可读**：补丁下载进度显示 MiB/GiB 而非裸字节
+- [x] **主页 Dalamud 状态卡**：改为异步获取 release 元数据 + 安装/版本/runtime 状态，不再在 render 中同步读盘并显示误导性的“启动时自动校验/更新”
+- [x] **设置页补全**：新增 Dalamud section（enabled/load_method/track/delay/safe mode）与游戏路径即时校验、msync 开关；主页新增“本次启动加载 Dalamud”会话级开关
+
 ### P4-3 错误处理
 
 - [x] **`SdoLoginData` 补全 `AccountArray` / `SndaIdArray`**：扫码成功后返回的账号列表（字段早已存在，现由 `get_account_group` 实际消费）
@@ -183,6 +193,7 @@
 - [x] SE OAuth Login — 提交用户名/密码/OTP
 - [x] SE Register Session — 版本检查与补丁检测
 - [x] Feature gate (`sdo` default, `se` optional)
+- [x] 补全 `se_login` example（此前 Cargo.toml 已声明但文件缺失，导致 `cargo fmt --all` 报错）
 - [x] Cargo workspace 重构（根 crate = tauri，`packages/` 下子 crate）
 - [x] Rust doc 注释覆盖所有公开 API
 - [x] **`SdoLoginData.SndaId` 字段大小写修复**：`model.rs` 中 `snda_id` 和 `snda_id_array` 添加 `alias` 同时支持 `SndaId`/`sndaId` 两种大小写（C# 参考使用小写 `sndaId`）

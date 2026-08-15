@@ -82,8 +82,6 @@ pub struct WineSettings {
     pub dxvk: DxvkSettings,
     /// 启用 gamemode（`LD_PRELOAD+=libgamemodeauto.so.0`）
     pub gamemode: bool,
-    /// 游戏根目录（含 `boot/`、`game/`、`sdo/`；GUI 设置项，CLI 走 `--game-path` 参数）
-    pub game_path: Option<PathBuf>,
 }
 
 impl Default for WineSettings {
@@ -99,18 +97,21 @@ impl Default for WineSettings {
             env: BTreeMap::new(),
             dxvk: DxvkSettings::default(),
             gamemode: false,
-            game_path: None,
         }
     }
 }
 
-
-/// 整个 `config.toml` 的结构：Wine 设置（顶层）+ `[dalamud]` section。
+/// 整个 `config.toml` 的结构。
 ///
-/// `flatten` 保持 Wine 设置字段在顶层，兼容旧配置文件；保存时不会丢失 `[dalamud]`。
+/// 布局刻意保持扁平：
+/// - `game_path`：游戏根目录（与 Wine 无关，因此放在 AppConfig 顶层而不是 WineSettings 里）
+/// - 其余顶层字段：Wine 设置（`flatten`，兼容旧配置）
+/// - `[dalamud]`：Dalamud 设置 section
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
+    /// 游戏根目录（含 `boot/`、`game/`、`sdo/`）。
+    pub game_path: Option<PathBuf>,
     #[serde(default, flatten)]
     pub settings: WineSettings,
     #[serde(default)]
@@ -159,36 +160,41 @@ pub fn load_settings_from(path: &Path) -> WineSettings {
     load_app(path).settings
 }
 
-/// 加载默认位置（`~/.xiv-launcher-rs/config.toml`）的配置。
+/// 加载默认位置（`~/.xiv-launcher-rs/config.toml`）的整个 AppConfig。
 ///
 /// 若新文件不存在但旧版 `settings.json` 存在，自动迁移并保存。
-pub fn load_settings() -> WineSettings {
+pub fn load_app_default() -> AppConfig {
     let path = settings_path();
     if !path.exists() {
         let legacy = legacy_settings_path();
         if legacy.exists() {
-            let s = load_settings_from_json(&legacy);
-            if s != WineSettings::default() {
+            let app = load_legacy_app(&legacy);
+            if app != AppConfig::default() {
                 tracing::info!(path = %legacy.display(), "migrating legacy settings.json to config.toml");
-                let _ = save_settings(&s);
-                return s;
+                let _ = save_app(&path, &app);
+                return app;
             }
         }
     }
-    load_settings_from(&path)
+    load_app(&path)
 }
 
-/// 从旧版 JSON 格式（`settings.json`）加载。
-fn load_settings_from_json(path: &Path) -> WineSettings {
+/// 加载默认位置的 Wine 设置（兼容旧调用方）。
+pub fn load_settings() -> WineSettings {
+    load_app_default().settings
+}
+
+/// 从旧版 JSON 格式（`settings.json`）加载完整配置。
+fn load_legacy_app(path: &Path) -> AppConfig {
     match std::fs::read_to_string(path) {
         Ok(text) => match serde_json::from_str(&text) {
-            Ok(s) => s,
+            Ok(app) => app,
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = %e, "failed to parse legacy settings.json");
-                WineSettings::default()
+                AppConfig::default()
             }
         },
-        Err(_) => WineSettings::default(),
+        Err(_) => AppConfig::default(),
     }
 }
 
@@ -206,7 +212,7 @@ pub fn save_settings(settings: &WineSettings) -> Result<(), std::io::Error> {
 
 /// 读取默认位置的 `[dalamud]` 配置。
 pub fn load_dalamud_settings() -> DalamudSettings {
-    load_app(&settings_path()).dalamud
+    load_app_default().dalamud
 }
 
 /// 保存 `[dalamud]` 配置到默认位置（保留 Wine 设置）。
@@ -252,7 +258,6 @@ mod tests {
                 frame_limit: Some(60),
             },
             gamemode: true,
-            game_path: Some(PathBuf::from("/games/ffxiv")),
         };
 
         let toml_str = toml::to_string_pretty(&s).unwrap();
@@ -287,6 +292,21 @@ mod tests {
         assert_eq!(loaded, s);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_app_config_game_path_is_top_level_and_backwards_compatible() {
+        let toml_str = "game_path = \"/games/ffxiv\"\nstartup_type = \"system\"\n\n[dalamud]\nenabled = true\n";
+        let app: AppConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(app.game_path, Some(PathBuf::from("/games/ffxiv")));
+        assert_eq!(app.settings.startup_type, WineStartupType::System);
+        assert!(app.dalamud.enabled);
+
+        // 旧版 TOML 里 game_path 也是顶层（当时通过 flatten 写在 WineSettings 中），
+        // 新的 AppConfig 结构必须继续原样解析。
+        let roundtrip = toml::to_string_pretty(&app).unwrap();
+        let back: AppConfig = toml::from_str(&roundtrip).unwrap();
+        assert_eq!(back, app);
     }
 
     #[test]

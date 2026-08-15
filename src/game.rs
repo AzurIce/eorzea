@@ -1,8 +1,8 @@
-use std::path::PathBuf;
-use tracing::{debug, error, info, instrument, warn};
-use eorzea_auth::SdoArea;
 use crate::config::WineSettings;
 use crate::wine::{build_launch_env, WineTool};
+use eorzea_auth::SdoArea;
+use std::path::PathBuf;
+use tracing::{debug, error, info, instrument, warn};
 
 fn mask_sensitive(value: &str) -> String {
     if value.len() <= 8 {
@@ -52,6 +52,10 @@ pub struct DalamudLaunchConfig {
     pub plugin_dir: PathBuf,
     /// assets 目录。
     pub asset_dir: PathBuf,
+    /// Windows x64 .NET runtime 根目录（`host/fxr`、`shared/...`）。
+    ///
+    /// `None` 表示未托管 runtime，此时不设置 `DALAMUD_RUNTIME`。
+    pub runtime_dir: Option<PathBuf>,
     /// 加载方式（entrypoint / inject）。
     pub load_method: crate::dalamud::model::DalamudLoadMethod,
     pub delay_initialize_ms: u32,
@@ -83,40 +87,102 @@ pub fn default_game_log_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(format!("game-{ts}.log")))
 }
 
-/// 构建国服启动参数字符串。
+/// 构建国服启动参数列表（**逐参数**，不经过 shell 字符串拆分）。
 ///
 /// 参考 C# `SdoLauncher.LaunchGameSdo()` 的参数构造方式。
 #[instrument(skip(config))]
-pub fn build_sdo_launch_args(config: &GameLaunchConfig) -> String {
-    let mut args = Vec::new();
-
-    args.push(format!("-AppID={}", 100001900));
-    args.push(format!("-AreaID={}", config.area.area_id));
-    args.push(format!("Dev.LobbyHost01={}", config.area.area_lobby));
-    args.push("Dev.LobbyPort01=54994".to_string());
-    args.push(format!("Dev.GMServerHost={}", config.area.area_gm));
-    args.push(format!("Dev.SaveDataBankHost={}", config.area.area_config_upload));
-    args.push(format!("resetConfig={}", config.reset_config));
-    args.push(format!("DEV.MaxEntitledExpansionID={}", config.max_expansion));
-    args.push(format!("DEV.TestSID={}", config.session_id));
-    args.push(format!("XL.SndaId={}", config.snda_id));
-    // C# MainPage 传 areasInfo=""（空），游戏从服务器获取服务器列表
-    args.push("XL.LobbyHosts=".to_string());
-
-    // C# 总是传 XL.DcTraveler（无 DC 传送时为 0）
-    args.push(format!("XL.DcTraveler={}", config.dc_travel_port.unwrap_or(0)));
+pub fn build_sdo_launch_args_vec(config: &GameLaunchConfig) -> Vec<String> {
+    let mut args = vec![
+        format!("-AppID={}", 100001900),
+        format!("-AreaID={}", config.area.area_id),
+        format!("Dev.LobbyHost01={}", config.area.area_lobby),
+        "Dev.LobbyPort01=54994".to_string(),
+        format!("Dev.GMServerHost={}", config.area.area_gm),
+        format!("Dev.SaveDataBankHost={}", config.area.area_config_upload),
+        format!("resetConfig={}", config.reset_config),
+        format!("DEV.MaxEntitledExpansionID={}", config.max_expansion),
+        format!("DEV.TestSID={}", config.session_id),
+        format!("XL.SndaId={}", config.snda_id),
+        // C# MainPage 传 areasInfo=""（空），游戏从服务器获取服务器列表
+        "XL.LobbyHosts=".to_string(),
+        // C# 总是传 XL.DcTraveler（无 DC 传送时为 0）
+        format!("XL.DcTraveler={}", config.dc_travel_port.unwrap_or(0)),
+    ];
 
     if !config.additional_args.is_empty() {
-        args.push(config.additional_args.clone());
+        args.extend(parse_additional_args(&config.additional_args));
     }
 
-    let result = args.join(" ");
+    args
+}
+
+/// 构建国服启动参数字符串（仅用于展示/兼容旧调用方；启动请使用 [`build_sdo_launch_args_vec`]）。
+#[instrument(skip(config))]
+pub fn build_sdo_launch_args(config: &GameLaunchConfig) -> String {
+    let result = build_sdo_launch_args_vec(config).join(" ");
     let masked = result
         .replace(&config.session_id, &mask_sensitive(&config.session_id))
         .replace(&config.snda_id, &mask_sensitive(&config.snda_id));
     debug!("constructed launch args: {}", masked);
 
     result
+}
+
+/// 把 additional_args 拆成 argv，支持单/双引号和反斜杠转义。
+///
+/// 游戏参数值可能包含空格（如路径），不能用 `split_whitespace()`。
+fn parse_additional_args(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut token_started = false;
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                } else if c == '\\' && q == '"' {
+                    match chars.peek().copied() {
+                        Some(next) if next == '"' || next == '\\' => {
+                            current.push(next);
+                            chars.next();
+                        }
+                        _ => current.push(c),
+                    }
+                } else {
+                    current.push(c);
+                }
+            }
+            None => match c {
+                '"' | '\'' => {
+                    quote = Some(c);
+                    token_started = true;
+                }
+                '\\' => {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    }
+                    token_started = true;
+                }
+                c if c.is_whitespace() => {
+                    if token_started {
+                        out.push(std::mem::take(&mut current));
+                        token_started = false;
+                    }
+                }
+                _ => {
+                    current.push(c);
+                    token_started = true;
+                }
+            },
+        }
+    }
+    if token_started {
+        out.push(current);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -188,16 +254,15 @@ async fn download_ottercorp_dll() -> Result<std::path::PathBuf, GameLaunchError>
         return Ok(dll_path);
     }
 
-    info!(url = DLL_URL, "downloading sdologinentry64.dll from ottercorp");
+    info!(
+        url = DLL_URL,
+        "downloading sdologinentry64.dll from ottercorp"
+    );
     let client = reqwest::Client::new();
-    let response = client
-        .get(DLL_URL)
-        .send()
-        .await
-        .map_err(|e| {
-            error!(error = %e, "download request failed");
-            GameLaunchError::Wine(format!("Download failed: {e}"))
-        })?;
+    let response = client.get(DLL_URL).send().await.map_err(|e| {
+        error!(error = %e, "download request failed");
+        GameLaunchError::Wine(format!("Download failed: {e}"))
+    })?;
 
     let status = response.status();
     if !status.is_success() {
@@ -206,13 +271,10 @@ async fn download_ottercorp_dll() -> Result<std::path::PathBuf, GameLaunchError>
     }
     info!(status = %status, "download request successful");
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| {
-            error!(error = %e, "reading response bytes failed");
-            GameLaunchError::Wine(format!("Read failed: {e}"))
-        })?;
+    let bytes = response.bytes().await.map_err(|e| {
+        error!(error = %e, "reading response bytes failed");
+        GameLaunchError::Wine(format!("Read failed: {e}"))
+    })?;
 
     let len = bytes.len();
     info!(bytes = len, "downloaded DLL");
@@ -265,6 +327,7 @@ pub async fn launch_game(
     ensure_login_entry(&config.game_path).await?;
 
     let args = build_sdo_launch_args(config);
+    let arg_list = build_sdo_launch_args_vec(config);
     let game_path = &config.game_path;
     let working_dir = game_path
         .parent()
@@ -281,7 +344,7 @@ pub async fn launch_game(
     #[cfg(target_os = "windows")]
     {
         let mut cmd = Command::new(game_path);
-        cmd.args(args.split_whitespace()).current_dir(working_dir);
+        cmd.args(&arg_list).current_dir(working_dir);
         redirect_to_log(&mut cmd, &log_path);
         let child = cmd.spawn().map_err(|e| {
             error!(error = %e, "failed to spawn game process");
@@ -299,12 +362,10 @@ pub async fn launch_game(
 
     #[cfg(not(target_os = "windows"))]
     {
-        let tool = WineTool::resolve(wine)
-            .await
-            .map_err(|e| {
-                error!(error = %e, "failed to resolve Wine");
-                GameLaunchError::Wine(format!("{e}"))
-            })?;
+        let tool = WineTool::resolve(wine).await.map_err(|e| {
+            error!(error = %e, "failed to resolve Wine");
+            GameLaunchError::Wine(format!("{e}"))
+        })?;
 
         // 校验 wine 可执行（wine64 --version）
         if let Err(e) = tool.probe() {
@@ -314,18 +375,14 @@ pub async fn launch_game(
 
         // 需要 DXVK 时确保已安装
         if wine.dxvk.enabled {
-            tool.ensure_dxvk()
-                .await
-                .map_err(|e| {
-                    error!(error = %e, "DXVK setup failed");
-                    GameLaunchError::Wine(format!("DXVK setup failed: {e}"))
-                })?;
+            tool.ensure_dxvk().await.map_err(|e| {
+                error!(error = %e, "DXVK setup failed");
+                GameLaunchError::Wine(format!("DXVK setup failed: {e}"))
+            })?;
             info!("DXVK setup complete");
         }
 
-        let arg_list: Vec<String> = args.split_whitespace().map(|s| s.to_string()).collect();
-
-        let env = build_launch_env(wine, &tool);
+        let mut env = build_launch_env(wine, &tool);
 
         // 启用 Dalamud → 通过 Injector 创建游戏；否则直接 wine 运行
         if let Some(d) = &config.dalamud {
@@ -333,6 +390,30 @@ pub async fn launch_game(
                 crate::dalamud::runner::unix_to_wine_path(&tool, p)
                     .map_err(|e| GameLaunchError::Wine(format!("winepath failed: {e}")))
             };
+
+            // Injector 会在 game 进程内创建这些目录；但插件/配置目录缺失会导致
+            // 部分版本直接失败，这里预先创建，避免首启报错难以排查。
+            for dir in [
+                d.config_path.parent(),
+                d.log_path.parent(),
+                Some(d.plugin_dir.as_path()),
+                Some(d.asset_dir.as_path()),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                std::fs::create_dir_all(dir).map_err(GameLaunchError::Io)?;
+            }
+
+            // 托管了 Windows .NET runtime 时设置 DALAMUD_RUNTIME。
+            // 注意：这是 Windows 路径，必须经过 winepath；自定义 env 中的同名项
+            // 不做“用户比 launcher 更懂”的假设，统一由检测到的 runtime 覆盖。
+            if let Some(runtime_dir) = &d.runtime_dir {
+                let runtime_win = to_win(runtime_dir)?;
+                env.retain(|(k, _)| !k.eq_ignore_ascii_case("DALAMUD_RUNTIME"));
+                env.push(("DALAMUD_RUNTIME".to_string(), runtime_win));
+            }
+
             let start = crate::dalamud::model::DalamudStartInfo {
                 game_path: to_win(game_path)?,
                 working_directory: to_win(&d.install_dir)?,
@@ -359,7 +440,10 @@ pub async fn launch_game(
                 GameLaunchError::Wine(e.to_string())
             })?;
 
-            info!(wine_pid = launch.wine_pid, "game spawned through Dalamud Injector");
+            info!(
+                wine_pid = launch.wine_pid,
+                "game spawned through Dalamud Injector"
+            );
             return Ok(GameLaunchResult {
                 child: launch.injector,
                 command: format!("{:?} {:?} {}", tool.wine64_path, d.injector_exe, args),
@@ -463,6 +547,15 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_additional_args_preserves_quoted_spaces() {
+        assert_eq!(
+            parse_additional_args("-foo=bar -path=\"C:\\Games\\FFXIV\\game\" --opt='a b'"),
+            vec!["-foo=bar", "-path=C:\\Games\\FFXIV\\game", "--opt=a b"]
+        );
+        assert!(parse_additional_args("").is_empty());
+    }
+
+    #[test]
     fn test_build_lobby_hosts() {
         let areas = vec![
             make_area("1", "A", "lobby1.sdo.com", "gm1.sdo.com", "cfg1.sdo.com"),
@@ -496,7 +589,10 @@ mod tests {
         if let Some(home) = dirs::home_dir() {
             let cached = home.join(".xiv-launcher-rs/tools/sdologinentry64.dll");
             if cached.exists() {
-                assert!(is_ottercorp_dll(&cached), "cached ottercorp DLL not detected");
+                assert!(
+                    is_ottercorp_dll(&cached),
+                    "cached ottercorp DLL not detected"
+                );
             }
         }
 

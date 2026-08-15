@@ -36,9 +36,11 @@ pub fn LoginPage() -> Element {
     let mut push_task = use_signal(|| None::<Task>);
     let push_account = use_signal(String::new);
     let pwd_account = use_signal(String::new);
-    let pwd_password = use_signal(String::new);
+    let mut pwd_password = use_signal(String::new);
     let mut pwd_busy = use_signal(|| false);
     let mut pwd_error = use_signal(|| None::<String>);
+    // 删除账号前需要二次确认的 snda_id。
+    let mut confirm_delete = use_signal(|| None::<String>);
 
     // ── 扫码登录 ────────────────────────────────────────────────────────
     let start_qr = move |_: MouseEvent| {
@@ -118,6 +120,9 @@ pub fn LoginPage() -> Element {
 
     // ── 密码登录 ────────────────────────────────────────────────────────
     let start_password = move |_: MouseEvent| {
+        if pwd_busy() {
+            return;
+        }
         let account = pwd_account.read().trim().to_string();
         let password = pwd_password.read().clone();
         if account.is_empty() || password.is_empty() {
@@ -132,7 +137,11 @@ pub fn LoginPage() -> Element {
         pwd_error.set(None);
         spawn(async move {
             match launcher.login_password(&account, &password).await {
-                Ok(token) => state.on_login_success(token),
+                Ok(token) => {
+                    // 密码属于敏感输入，成功后立即清空，避免切回登录页时残留。
+                    pwd_password.set(String::new());
+                    state.on_login_success(token);
+                }
                 Err(e) => pwd_error.set(Some(format!("{e}"))),
             }
             pwd_busy.set(false);
@@ -160,7 +169,10 @@ pub fn LoginPage() -> Element {
                         let is_default = default_id.as_deref() == Some(acc.snda_id.as_str());
                         let snda_id = acc.snda_id.clone();
                         let snda_id2 = acc.snda_id.clone();
+                        let snda_id3 = acc.snda_id.clone();
                         let key = acc.auto_login_session_key.clone();
+                        let is_confirming_delete =
+                            confirm_delete.read().as_deref() == Some(acc.snda_id.as_str());
                         let mut display = acc.display_name().to_string();
                         if is_default {
                             display.push_str("（默认）");
@@ -203,18 +215,28 @@ pub fn LoginPage() -> Element {
                                         state.auth_cfg.set(cfg);
                                     }
                                 }
-                                DangerButton { label: "删除",
-                                    onclick: move |_| {
-                                        let mut cfg = state.auth_cfg.read().clone();
-                                        cfg.remove(&snda_id2);
-                                        if let Err(e) = auth::save(&auth::config_path(), &cfg) {
-                                            state.status.set(format!("保存账号配置失败: {e}"));
+                                if is_confirming_delete {
+                                    DangerButton { label: "确认删除",
+                                        onclick: move |_| {
+                                            let mut cfg = state.auth_cfg.read().clone();
+                                            cfg.remove(&snda_id2);
+                                            if let Err(e) = auth::save(&auth::config_path(), &cfg) {
+                                                state.status.set(format!("保存账号配置失败: {e}"));
+                                            }
+                                            state.auth_cfg.set(cfg);
+                                            state.tokens.write().remove(&snda_id2);
+                                            if state.selected_account.read().as_deref() == Some(snda_id2.as_str()) {
+                                                state.selected_account.set(None);
+                                            }
+                                            confirm_delete.set(None);
                                         }
-                                        state.auth_cfg.set(cfg);
-                                        state.tokens.write().remove(&snda_id2);
-                                        if state.selected_account.read().as_deref() == Some(snda_id2.as_str()) {
-                                            state.selected_account.set(None);
-                                        }
+                                    }
+                                    SmallButton { label: "取消",
+                                        onclick: move |_| confirm_delete.set(None)
+                                    }
+                                } else {
+                                    DangerButton { label: "删除",
+                                        onclick: move |_| confirm_delete.set(Some(snda_id3.clone()))
                                     }
                                 }
                             }

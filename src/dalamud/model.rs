@@ -51,7 +51,10 @@ pub struct DalamudSettings {
     pub no_plugins: bool,
     /// 禁用第三方插件
     pub no_third_party_plugins: bool,
-    /// 是否由 launcher 管理 Windows x64 .NET runtime
+    /// 是否由 launcher 管理 Windows x64 .NET runtime。
+    ///
+    /// release 声明 `RuntimeRequired` 时启动前会自动确保 runtime；
+    /// 此开关为 true 时即使 release 未强制也由 launcher 管理。
     pub manage_runtime: bool,
     /// 更新通道：`release` / `staging`（或自定义 track）
     pub track: String,
@@ -69,7 +72,7 @@ impl Default for DalamudSettings {
             delay_initialize_ms: 0,
             no_plugins: false,
             no_third_party_plugins: false,
-            manage_runtime: true,
+            manage_runtime: false,
             track: "release".to_string(),
             beta_key: None,
             install_root: None,
@@ -122,6 +125,10 @@ pub enum InstallState {
     OutOfDate,
     /// 游戏版本过旧（release 尚未支持当前游戏）
     Unsupported,
+    /// release 要求的 Windows x64 .NET runtime 尚未就绪
+    RuntimeMissing,
+    /// Dalamud assets 尚未就绪
+    AssetsMissing,
     /// 下载/解压失败
     Failed(String),
 }
@@ -187,7 +194,10 @@ pub fn build_injector_launch_args(
         format!("--dalamud-client-language={}", start.client_language),
     ];
     if start.delay_initialize_ms > 0 {
-        args.push(format!("--dalamud-delay-initialize={}", start.delay_initialize_ms));
+        args.push(format!(
+            "--dalamud-delay-initialize={}",
+            start.delay_initialize_ms
+        ));
     }
     if without_dalamud || load_method.without_dalamud() {
         args.push("--without-dalamud".to_string());
@@ -222,7 +232,8 @@ mod tests {
             no_third_party_plugins: false,
         };
         let game_args = vec!["-AppID=100001900".to_string()];
-        let args = build_injector_launch_args(&start, DalamudLoadMethod::EntryPoint, &game_args, false);
+        let args =
+            build_injector_launch_args(&start, DalamudLoadMethod::EntryPoint, &game_args, false);
         assert!(args.contains(&"--mode=entrypoint".to_string()));
         assert!(args.contains(&"--game=Z:\\Games\\ffxiv\\game\\ffxiv_dx11.exe".to_string()));
         assert!(args.contains(&"--".to_string()));
@@ -231,7 +242,10 @@ mod tests {
 
     #[test]
     fn test_load_method_modes() {
-        assert_eq!(DalamudLoadMethod::EntryPoint.to_injector_mode(), "entrypoint");
+        assert_eq!(
+            DalamudLoadMethod::EntryPoint.to_injector_mode(),
+            "entrypoint"
+        );
         assert_eq!(DalamudLoadMethod::DllInject.to_injector_mode(), "inject");
         assert!(DalamudLoadMethod::AclOnly.without_dalamud());
     }
