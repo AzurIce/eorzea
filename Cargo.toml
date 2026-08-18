@@ -5,8 +5,8 @@ members = ["packages/eorzea-auth", "packages/eorzea-cli"]
 name = "eorzea"
 version = "0.1.0"
 description = "FFXIV 国服启动器（Rust + dioxus-native GUI）"
-authors = ["you"]
-edition = "2021"
+authors = ["azurice"]
+edition = "2024"
 default-run = "eorzea"
 
 [lib]

@@ -76,9 +76,9 @@ enum Command {
         #[arg(long)]
         game_path: Option<PathBuf>,
 
-        /// 大区 ID（用 `eoz areas` 查看）
+        /// 大区 ID（用 `eoz areas` 查看；缺省读取 config.toml 的 area）
         #[arg(long)]
-        area: String,
+        area: Option<String>,
 
         /// 指定账号（snda_id 或 username，配置中已保存 session key 时直接自动登录）
         #[arg(long)]
@@ -126,9 +126,9 @@ enum GameCommand {
         #[arg(long)]
         game_path: Option<PathBuf>,
 
-        /// 大区 ID（用 `eoz areas` 查看）
+        /// 大区 ID（用 `eoz areas` 查看；缺省读取 config.toml 的 area）
         #[arg(long)]
-        area: String,
+        area: Option<String>,
 
         /// 版本报告包含的资料片数量（默认 5，对齐 C# Constants.MaxExpansion）
         #[arg(long, default_value_t = 5)]
@@ -145,9 +145,9 @@ enum GameCommand {
         #[arg(long)]
         game_path: Option<PathBuf>,
 
-        /// 大区 ID（用 `eoz areas` 查看）
+        /// 大区 ID（用 `eoz areas` 查看；缺省读取 config.toml 的 area）
         #[arg(long)]
-        area: String,
+        area: Option<String>,
 
         /// 版本报告包含的资料片数量
         #[arg(long, default_value_t = 5)]
@@ -218,9 +218,9 @@ enum DalamudCommand {
         #[arg(long)]
         game_path: Option<PathBuf>,
 
-        /// 大区 ID
+        /// 大区 ID（缺省读取 config.toml 的 area）
         #[arg(long)]
-        area: String,
+        area: Option<String>,
 
         /// 强制启用 Dalamud（覆盖 config.toml [dalamud].enabled）
         #[arg(long)]
@@ -309,9 +309,29 @@ fn game_path_or_config(game_path: Option<PathBuf>) -> PathBuf {
     }
 }
 
+/// `--area` 缺省时从 config.toml 顶层 `area` 读取。
+fn area_or_config(area: Option<String>) -> String {
+    if let Some(area) = area {
+        return area;
+    }
+    match eorzea_lib::config::load_app_default().area {
+        Some(area) => area,
+        None => {
+            eprintln!("未指定 --area，且 config.toml 中没有 area。");
+            eprintln!("请用 `eoz config set area <大区ID>` 或在命令中传入 --area。");
+            std::process::exit(1);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    // 日志级别：RUST_LOG 优先；默认显示本项目的 info（wine 解析/prefix/DXVK/Dalamud
+    // 等关键步骤）+ 其他 crate 的 warn。调试时可用 `RUST_LOG=debug eoz launch`。
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new("eorzea_lib=info,eorzea_auth=info,eorzea_cli=info,warn")
+    });
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let cli = Cli::parse();
 
@@ -330,6 +350,7 @@ async fn main() {
                 no_dalamud,
             } => {
                 let game_path = game_path_or_config(game_path);
+                let area = area_or_config(area);
                 let override_enabled = if dalamud {
                     Some(true)
                 } else if no_dalamud {
@@ -380,6 +401,7 @@ async fn main() {
                 None
             };
             let game_path = game_path_or_config(game_path);
+            let area = area_or_config(area);
             cmd_launch(
                 &game_path,
                 &area,
@@ -404,6 +426,7 @@ async fn main() {
                 repair,
             } => {
                 let game_path = game_path_or_config(game_path);
+                let area = area_or_config(area);
                 cmd_check(&game_path, &area, max_expansion, repair).await
             }
             GameCommand::Update {
@@ -415,6 +438,7 @@ async fn main() {
                 concurrency,
             } => {
                 let game_path = game_path_or_config(game_path);
+                let area = area_or_config(area);
                 cmd_update(
                     &game_path,
                     &area,
@@ -1112,7 +1136,13 @@ async fn cmd_launch(
             }
         }
         Err(e) => {
-            eprintln!("启动失败: {e}");
+            // 完整错误（含 Injector/wine stderr）已由上面的 ERROR 日志输出，
+            // 这里只打印首行摘要，避免整段重复刷屏。
+            let msg = e.to_string();
+            eprintln!("启动失败: {}", msg.lines().next().unwrap_or(msg.as_str()));
+            if msg.lines().nth(1).is_some() {
+                eprintln!("（详细输出见上方 ERROR 日志）");
+            }
             std::process::exit(1);
         }
     }
@@ -1128,7 +1158,8 @@ fn a_display(cfg: &eorzea_lib::auth::AuthConfig, id: &str) -> String {
 /// 检查游戏版本状态，返回可读的一行摘要。
 async fn check_update_status(game_path: &std::path::Path) -> Result<String, String> {
     let mgr = GameFileManager::new();
-    let area = find_area("1").await.map_err(|e| e)?;
+    let area_id = area_or_config(None);
+    let area = find_area(&area_id).await.map_err(|e| e)?;
 
     match mgr.check_update(&area, game_path, false, 5).await {
         Ok(eorzea_lib::game_files::CheckResult::UpToDate { .. }) => Ok("✅ 游戏已是最新版本。".to_string()),
@@ -1243,8 +1274,8 @@ fn config_key_spec(key: &str) -> Option<ConfigValueKind> {
     }
 
     Some(match key {
-        "game_path" | "startup_type" | "custom_path" | "prefix" | "debug_vars" | "dxvk.hud"
-        | "dalamud.load_method" | "dalamud.track" | "dalamud.beta_key"
+        "game_path" | "area" | "startup_type" | "custom_path" | "prefix" | "debug_vars"
+        | "dxvk.hud" | "dalamud.load_method" | "dalamud.track" | "dalamud.beta_key"
         | "dalamud.install_root" => ConfigValueKind::String,
         "esync" | "fsync" | "msync" | "gamemode" | "dxvk.enabled" | "dalamud.enabled"
         | "dalamud.no_plugins" | "dalamud.no_third_party_plugins"

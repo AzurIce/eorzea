@@ -96,8 +96,11 @@ pub fn SettingsPage() -> Element {
         d.no_plugins = dalamud_no_plugins();
         d.no_third_party_plugins = dalamud_no_third_party();
 
+        // 设置页目前没有 area 输入框，保存时保留 config.toml 中已有的 area。
+        let existing_area = config::load_app_default().area;
         let app = AppConfig {
             game_path: string_to_path(&game_path.read()),
+            area: existing_area,
             settings: s.clone(),
             dalamud: d.clone(),
         };

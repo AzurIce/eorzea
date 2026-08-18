@@ -120,14 +120,11 @@ impl WineTool {
                 Ok(Self::apply_prefix(tool, settings))
             }
             WineStartupType::Custom => {
-                let path = settings
-                    .custom_path
-                    .as_ref()
-                    .ok_or_else(|| {
-                        WineError::NotFound(
-                            "custom_path is required for WineStartupType::Custom".to_string(),
-                        )
-                    })?;
+                let path = settings.custom_path.as_ref().ok_or_else(|| {
+                    WineError::NotFound(
+                        "custom_path is required for WineStartupType::Custom".to_string(),
+                    )
+                })?;
                 let wine64 = Self::normalize_wine64_path(path)?;
                 info!(?wine64, "using custom wine");
                 let tool = Self {
@@ -191,6 +188,80 @@ impl WineTool {
         }
     }
 
+    /// 确保 prefix 存在且为 64 位。
+    ///
+    /// FFXIV 与 Dalamud 都需要 64 位 Windows 环境。若 prefix 不存在，用
+    /// `WINEARCH=win64` 创建；若已存在但为 32 位，直接删除重建。
+    #[tracing::instrument(skip(self))]
+    pub fn ensure_prefix(&self) -> Result<(), WineError> {
+        if !self.prefix_path.exists() {
+            info!(prefix = %self.prefix_path.display(), "creating 64-bit wine prefix");
+            return self.create_prefix_win64();
+        }
+
+        match self.detect_prefix_arch() {
+            Some("win64") => {
+                debug!(prefix = %self.prefix_path.display(), "prefix is 64-bit");
+                Ok(())
+            }
+            Some("win32") => {
+                warn!(prefix = %self.prefix_path.display(), "prefix is 32-bit, recreating as 64-bit");
+                std::fs::remove_dir_all(&self.prefix_path).map_err(WineError::Io)?;
+                self.create_prefix_win64()
+            }
+            arch => {
+                warn!(
+                    prefix = %self.prefix_path.display(),
+                    arch = ?arch,
+                    "cannot detect prefix architecture, recreating as 64-bit"
+                );
+                std::fs::remove_dir_all(&self.prefix_path).map_err(WineError::Io)?;
+                self.create_prefix_win64()
+            }
+        }
+    }
+
+    /// 读取 `system.reg` 头部的 `#arch=...` 判断 prefix 架构。
+    ///
+    /// 真实 wine 的 `system.reg` 以 `WINE REGISTRY Version 2` 和注释行开头，
+    /// `#arch=win64` 通常在第 3~4 行，因此扫描开头若干行而非只看第一行。
+    fn detect_prefix_arch(&self) -> Option<&'static str> {
+        let system_reg = self.prefix_path.join("system.reg");
+        let content = std::fs::read_to_string(system_reg).ok()?;
+        content.lines().take(8).find_map(|line| {
+            line.trim().strip_prefix("#arch=").map(|s| match s {
+                "win64" => "win64",
+                "win32" => "win32",
+                _ => "unknown",
+            })
+        })
+    }
+
+    /// 用 `WINEARCH=win64` 初始化 prefix。
+    fn create_prefix_win64(&self) -> Result<(), WineError> {
+        if let Some(parent) = self.prefix_path.parent() {
+            std::fs::create_dir_all(parent).map_err(WineError::Io)?;
+        }
+        let output = Command::new(&self.wine64_path)
+            .arg("wineboot")
+            .arg("--init")
+            .env("WINEPREFIX", &self.prefix_path)
+            .env("WINEARCH", "win64")
+            // 屏蔽 wine-mono 安装弹窗；Dalamud 使用自己的 Windows .NET runtime。
+            .env("WINEDLLOVERRIDES", "mscoree=n")
+            .output()
+            .map_err(WineError::Io)?;
+        if !output.status.success() {
+            return Err(WineError::Probe(format!(
+                "failed to create 64-bit prefix at {}: {}",
+                self.prefix_path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        info!(prefix = %self.prefix_path.display(), "64-bit prefix created");
+        Ok(())
+    }
+
     /// 运行 `wine64 --version` 校验可执行性，返回版本字符串。
     ///
     /// 在解析后调用，可提前暴露「不可执行 / 指向错误构建」等问题。
@@ -226,6 +297,11 @@ impl WineTool {
         env: &[(String, String)],
         log_file: Option<&Path>,
     ) -> Result<std::process::Child, std::io::Error> {
+        if let Err(e) = self.ensure_prefix() {
+            return Err(std::io::Error::other(format!(
+                "failed to ensure wine prefix: {e}"
+            )));
+        }
         info!(wine64_path = ?self.wine64_path, ?exe_path, "Starting game with wine");
         let mut cmd = Command::new(&self.wine64_path);
         cmd.arg(exe_path)
@@ -280,8 +356,7 @@ impl WineTool {
 
         // macOS 专用 wine 下载地址
         #[cfg(target_os = "macos")]
-        const WINE_URL: &str =
-            "https://s3.ffxiv.wang/xlcore/deps/wine/osx/xom-4.17.1/wine.tar.gz";
+        const WINE_URL: &str = "https://s3.ffxiv.wang/xlcore/deps/wine/osx/xom-4.17.1/wine.tar.gz";
         #[cfg(not(target_os = "macos"))]
         const WINE_URL: &str =
             "https://s3.ffxiv.wang/xlcore/deps/wine/ubuntu/wine-xiv-staging-fsync-git-ubuntu-8.5.r4.g4211bac7.tar.xz";
@@ -302,7 +377,10 @@ impl WineTool {
             WineError::Download(e.to_string())
         })?;
 
-        info!(bytes = bytes.len(), "Downloaded wine archive, extracting...");
+        info!(
+            bytes = bytes.len(),
+            "Downloaded wine archive, extracting..."
+        );
 
         // 创建目录
         std::fs::create_dir_all(&bin_dir).map_err(WineError::Io)?;
@@ -313,7 +391,12 @@ impl WineTool {
 
         // 使用 tar 命令解压（自动检测压缩格式）
         let status = Command::new("tar")
-            .args(&["-xf", tar_path.to_str().unwrap(), "-C", tools_dir.to_str().unwrap()])
+            .args(&[
+                "-xf",
+                tar_path.to_str().unwrap(),
+                "-C",
+                tools_dir.to_str().unwrap(),
+            ])
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .status()
@@ -342,9 +425,10 @@ impl WineTool {
 
         if !wine64_path.exists() {
             error!(?wine64_path, "wine64 not found after extraction");
-            return Err(WineError::Extract(
-                format!("wine64 not found after extraction at {:?}", wine64_path)
-            ));
+            return Err(WineError::Extract(format!(
+                "wine64 not found after extraction at {:?}",
+                wine64_path
+            )));
         }
 
         info!(?wine64_path, "Wine setup complete");
@@ -363,8 +447,10 @@ impl WineTool {
         let system32 = prefix.join("drive_c/windows/system32");
         let syswow64 = prefix.join("drive_c/windows/syswow64");
 
-        // 检查是否已安装
-        if system32.join("d3d11.dll").exists() {
+        // 检查是否已安装：不能只看 d3d11.dll 存在——wineboot 建的 builtin d3d11.dll
+        // 也在那里（prefix 重建后 DXVK 会被覆盖回 builtin），需配合标记文件判断。
+        let marker = prefix.join(".dxvk-installed");
+        if system32.join("d3d11.dll").exists() && marker.exists() {
             info!("DXVK already installed in prefix");
             return Ok(());
         }
@@ -374,7 +460,8 @@ impl WineTool {
         #[cfg(target_os = "macos")]
         const DXVK_URL: &str = "https://s3.ffxiv.wang/xlcore/deps/dxvk/osx/dxvk-macOS-async-v1.10.3-20230507-repack.tar.gz";
         #[cfg(not(target_os = "macos"))]
-        const DXVK_URL: &str = "https://s3.ffxiv.wang/xlcore/deps/dxvk/linux/dxvk-async-1.10.1.tar.gz";
+        const DXVK_URL: &str =
+            "https://s3.ffxiv.wang/xlcore/deps/dxvk/linux/dxvk-async-1.10.1.tar.gz";
 
         let client = reqwest::Client::new();
         let response = client.get(DXVK_URL).send().await.map_err(|e| {
@@ -391,7 +478,10 @@ impl WineTool {
             error!(error = %e, "Failed to read DXVK download response");
             WineError::Download(e.to_string())
         })?;
-        info!(bytes = bytes.len(), "Downloaded DXVK archive, extracting...");
+        info!(
+            bytes = bytes.len(),
+            "Downloaded DXVK archive, extracting..."
+        );
 
         let tools_dir = Self::tools_dir()?;
         let dxvk_tar = tools_dir.join("dxvk_download.tar.gz");
@@ -401,7 +491,12 @@ impl WineTool {
         std::fs::create_dir_all(&dxvk_dir).map_err(WineError::Io)?;
 
         let status = Command::new("tar")
-            .args(&["-xf", dxvk_tar.to_str().unwrap(), "-C", dxvk_dir.to_str().unwrap()])
+            .args(&[
+                "-xf",
+                dxvk_tar.to_str().unwrap(),
+                "-C",
+                dxvk_dir.to_str().unwrap(),
+            ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -418,12 +513,19 @@ impl WineTool {
         info!("Installing DXVK to wine prefix...");
         Self::install_dxvk_dlls(&dxvk_dir, &system32, &syswow64)?;
 
+        // 写入安装标记（下次 ensure 时据此区分 DXVK 与 wine builtin）
+        std::fs::write(&marker, b"dxvk-async-1.10.1\n").map_err(WineError::Io)?;
+
         info!("DXVK installed successfully");
         Ok(())
     }
 
     #[tracing::instrument]
-    fn install_dxvk_dlls(dxvk_dir: &Path, system32: &Path, syswow64: &Path) -> Result<(), WineError> {
+    fn install_dxvk_dlls(
+        dxvk_dir: &Path,
+        system32: &Path,
+        syswow64: &Path,
+    ) -> Result<(), WineError> {
         // DXVK 目录结构可能是 dxvk/x64 和 dxvk/x32
         // 或者解压后多了一层子目录
         let x64_dir = if dxvk_dir.join("x64").exists() {
@@ -551,6 +653,8 @@ pub fn build_launch_env(settings: &WineSettings, tool: &WineTool) -> Vec<(String
         "WINEPREFIX".to_string(),
         tool.prefix_path.display().to_string(),
     ));
+    // FFXIV 与 Dalamud 均为 64 位，强制 64-bit prefix 架构。
+    env.push(("WINEARCH".to_string(), "win64".to_string()));
 
     // DLL overrides：DXVK 开启时 d3d* = n，否则回退 wined3d = b
     let d3d = if settings.dxvk.enabled { "n" } else { "b" };
@@ -582,7 +686,10 @@ pub fn build_launch_env(settings: &WineSettings, tool: &WineTool) -> Vec<(String
     // DXVK
     if settings.dxvk.enabled {
         env.push(("DXVK_STATE_CACHE_PATH".to_string(), "C:\\".to_string()));
-        env.push(("DXVK_CONFIG_FILE".to_string(), "C:\\ffxiv_dx11.conf".to_string()));
+        env.push((
+            "DXVK_CONFIG_FILE".to_string(),
+            "C:\\ffxiv_dx11.conf".to_string(),
+        ));
         if let Some(hud) = &settings.dxvk.hud {
             env.push(("DXVK_HUD".to_string(), hud.clone()));
         }
@@ -644,6 +751,41 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_prefix_arch_real_system_reg() {
+        let dir = std::env::temp_dir().join(format!("xlrs-arch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 真实 wine system.reg 头部：#arch 在第 3~4 行
+        std::fs::write(
+            dir.join("system.reg"),
+            "WINE REGISTRY Version 2\n;; All keys relative to REGISTRY\\\\Machine\n\n#arch=win64\n",
+        )
+        .unwrap();
+        let tool = WineTool {
+            prefix_path: dir.clone(),
+            ..tool()
+        };
+        assert_eq!(tool.detect_prefix_arch(), Some("win64"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_detect_prefix_arch_win32() {
+        let dir = std::env::temp_dir().join(format!("xlrs-arch32-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("system.reg"),
+            "WINE REGISTRY Version 2\n\n#arch=win32\n",
+        )
+        .unwrap();
+        let tool = WineTool {
+            prefix_path: dir.clone(),
+            ..tool()
+        };
+        assert_eq!(tool.detect_prefix_arch(), Some("win32"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_normalize_wine64_path_file() {
         let dir = std::env::temp_dir().join(format!("xlrs-norm-file-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -689,7 +831,11 @@ mod tests {
         let env = env_map(&build_launch_env(&settings, &tool()));
 
         assert_eq!(env["WINEPREFIX"], "/fake/prefix");
-        assert_eq!(env["WINEDLLOVERRIDES"], "msquic=,mscoree=n,b;d3d9,d3d11,d3d10core,dxgi=n");
+        assert_eq!(env["WINEARCH"], "win64");
+        assert_eq!(
+            env["WINEDLLOVERRIDES"],
+            "msquic=,mscoree=n,b;d3d9,d3d11,d3d10core,dxgi=n"
+        );
         assert_eq!(env["DXVK_STATE_CACHE_PATH"], "C:\\");
         assert_eq!(env["DXVK_CONFIG_FILE"], "C:\\ffxiv_dx11.conf");
         // 默认未开启的项不应出现
@@ -724,7 +870,10 @@ mod tests {
         assert_eq!(env["WINEFSYNC"], "1");
         assert_eq!(env["WINEDEBUG"], "+seh");
         // DXVK 关闭 → wined3d = b，且无 DXVK_* 变量
-        assert_eq!(env["WINEDLLOVERRIDES"], "msquic=,mscoree=n,b;d3d9,d3d11,d3d10core,dxgi=b");
+        assert_eq!(
+            env["WINEDLLOVERRIDES"],
+            "msquic=,mscoree=n,b;d3d9,d3d11,d3d10core,dxgi=b"
+        );
         assert!(!env.contains_key("DXVK_HUD"));
         // 自定义 env 可覆盖 WINEPREFIX（最后应用）
         assert_eq!(env["WINEPREFIX"], "/override");

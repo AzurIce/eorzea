@@ -15,6 +15,6 @@ dirs = "5"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
 rpassword = "7"
 toml = "0.8"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 eorzea = { path = "../.." }
 eorzea-auth = { path = "../eorzea-auth" }

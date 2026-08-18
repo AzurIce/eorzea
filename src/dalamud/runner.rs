@@ -27,6 +27,7 @@ pub struct InjectorLaunch {
 ///
 /// 对应 C# `CompatibilityTools.UnixToWinePath()`。
 pub fn unix_to_wine_path(wine: &WineTool, unix_path: &Path) -> Result<String, WineError> {
+    wine.ensure_prefix()?;
     let output = Command::new(&wine.wine64_path)
         .args(["winepath", "--windows"])
         .arg(unix_path)
@@ -111,13 +112,24 @@ pub fn launch_through_injector(
 
     // stderr 必须持续排空：Injector 的诊断输出可能超过管道缓冲，
     // 若无人读取会阻塞进程，导致永远等不到 stdout 里的 JSON。
+    // 同时收集最近若干行，出错时回显给用户排障。
+    let stderr_lines: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     if let Some(stderr) = child.stderr.take() {
+        let buf = stderr_lines.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
             let reader = std::io::BufReader::new(stderr);
             for line in reader.lines() {
                 match line {
-                    Ok(line) if !line.trim().is_empty() => debug!(line = %line, "injector stderr"),
+                    Ok(line) if !line.trim().is_empty() => {
+                        debug!(line = %line, "injector stderr");
+                        let mut b = buf.lock().unwrap();
+                        if b.len() >= 50 {
+                            b.remove(0);
+                        }
+                        b.push(line);
+                    }
                     Ok(_) => {}
                     Err(_) => break,
                 }
@@ -126,7 +138,7 @@ pub fn launch_through_injector(
     }
 
     // 读取 stdout 单行 JSON（参考 C#：最多等待 ~30s）
-    let pid = read_injector_pid(&mut child)?;
+    let pid = read_injector_pid(&mut child, stderr_lines)?;
 
     debug!(wine_pid = pid, "Injector reported game process");
     Ok(InjectorLaunch {
@@ -139,7 +151,11 @@ pub fn launch_through_injector(
 ///
 /// 读取放在独立线程里，用 `recv_timeout` 驱动超时；如果直接在调用线程
 /// `read_line`，Injector 不输出换行时阻塞调用无法被 30s deadline 打断。
-fn read_injector_pid(child: &mut std::process::Child) -> Result<u32, WineError> {
+
+fn read_injector_pid(
+    child: &mut std::process::Child,
+    stderr_lines: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+) -> Result<u32, WineError> {
     use std::io::BufRead;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
@@ -158,14 +174,24 @@ fn read_injector_pid(child: &mut std::process::Child) -> Result<u32, WineError> 
         }
     });
 
+    let format_stderr = || {
+        let lines = stderr_lines.lock().unwrap();
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!("\nInjector stderr:\n{}", lines.join("\n"))
+        }
+    };
+
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let now = Instant::now();
         if now >= deadline {
             let _ = child.kill();
-            return Err(WineError::Probe(
-                "timed out waiting for Injector result".into(),
-            ));
+            return Err(WineError::Probe(format!(
+                "timed out waiting for Injector result{}",
+                format_stderr()
+            )));
         }
         match rx.recv_timeout(deadline - now) {
             Ok(Ok(line)) => {
@@ -182,9 +208,10 @@ fn read_injector_pid(child: &mut std::process::Child) -> Result<u32, WineError> 
             Ok(Err(e)) => return Err(WineError::Io(e)),
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(WineError::Probe(
-                    "Injector exited without reporting a result".into(),
-                ));
+                return Err(WineError::Probe(format!(
+                    "Injector exited without reporting a result{}",
+                    format_stderr()
+                )));
             }
         }
     }

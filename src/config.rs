@@ -112,6 +112,8 @@ impl Default for WineSettings {
 pub struct AppConfig {
     /// 游戏根目录（含 `boot/`、`game/`、`sdo/`）。
     pub game_path: Option<PathBuf>,
+    /// 默认大区 ID（如 `1`），CLI 未传 `--area` 时使用。
+    pub area: Option<String>,
     #[serde(default, flatten)]
     pub settings: WineSettings,
     #[serde(default)]
@@ -296,14 +298,19 @@ mod tests {
 
     #[test]
     fn test_app_config_game_path_is_top_level_and_backwards_compatible() {
-        let toml_str = "game_path = \"/games/ffxiv\"\nstartup_type = \"system\"\n\n[dalamud]\nenabled = true\n";
+        let toml_str = "game_path = \"/games/ffxiv\"\narea = \"1\"\nstartup_type = \"system\"\n\n[dalamud]\nenabled = true\n";
         let app: AppConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(app.game_path, Some(PathBuf::from("/games/ffxiv")));
+        assert_eq!(app.area, Some("1".to_string()));
         assert_eq!(app.settings.startup_type, WineStartupType::System);
         assert!(app.dalamud.enabled);
 
         // 旧版 TOML 里 game_path 也是顶层（当时通过 flatten 写在 WineSettings 中），
-        // 新的 AppConfig 结构必须继续原样解析。
+        // 新的 AppConfig 结构必须继续原样解析；area 缺省时为 None。
+        let legacy_toml = "game_path = \"/games/ffxiv\"\nstartup_type = \"system\"\n\n[dalamud]\nenabled = true\n";
+        let legacy_app: AppConfig = toml::from_str(legacy_toml).unwrap();
+        assert_eq!(legacy_app.area, None);
+
         let roundtrip = toml::to_string_pretty(&app).unwrap();
         let back: AppConfig = toml::from_str(&roundtrip).unwrap();
         assert_eq!(back, app);

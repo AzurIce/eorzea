@@ -405,13 +405,18 @@ pub async fn launch_game(
                 std::fs::create_dir_all(dir).map_err(GameLaunchError::Io)?;
             }
 
-            // 托管了 Windows .NET runtime 时设置 DALAMUD_RUNTIME。
+            // 托管了 Windows .NET runtime 时设置 DALAMUD_RUNTIME 与 DOTNET_ROOT。
             // 注意：这是 Windows 路径，必须经过 winepath；自定义 env 中的同名项
             // 不做“用户比 launcher 更懂”的假设，统一由检测到的 runtime 覆盖。
             if let Some(runtime_dir) = &d.runtime_dir {
                 let runtime_win = to_win(runtime_dir)?;
-                env.retain(|(k, _)| !k.eq_ignore_ascii_case("DALAMUD_RUNTIME"));
-                env.push(("DALAMUD_RUNTIME".to_string(), runtime_win));
+                env.retain(|(k, _)| {
+                    !k.eq_ignore_ascii_case("DALAMUD_RUNTIME")
+                        && !k.eq_ignore_ascii_case("DOTNET_ROOT")
+                });
+                env.push(("DALAMUD_RUNTIME".to_string(), runtime_win.clone()));
+                // 让 Injector.exe 的 .NET apphost 直接找到 hostfxr，不依赖 wine-mono。
+                env.push(("DOTNET_ROOT".to_string(), runtime_win));
             }
 
             let start = crate::dalamud::model::DalamudStartInfo {
