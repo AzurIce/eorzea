@@ -1,6 +1,6 @@
 //! Dalamud 集成模块。
 //!
-//! 职责边界（参考 `docs/dalamud_integration.md` 调查报告）：
+//! 职责边界（参考 `docs/notes/dalamud_integration.md` 调查报告）：
 //! - **获取**：release 元数据（`VersionInfo` API）、版本门控（`SupportedGameVer`）
 //! - **编排**：通过 `Dalamud.Injector.exe` 启动游戏（Linux 上在同一 Wine prefix 内）
 //! - **不重写**：注入器、CLR hosting（由官方发行包负责）

@@ -16,7 +16,7 @@
 
 > C# 参考：`SdoUtils.cs` — `GetMacAddress()`, `GetCPUId()`, `GetDiskSerialNumber()`, `GetDeviceId()`, `GetMD5()`
 >
-> **⚠️ 存疑**：Rust 与 C# 的 MD5 输入字符串格式存在系统性差异（C# `DeviceId` 库默认加 `Key=` 前缀，Rust 没有），导致同一台机器指纹不同。详见 [`docs/auth.md`](./docs/auth.md)。
+> **⚠️ 存疑**：Rust 与 C# 的 MD5 输入字符串格式存在系统性差异（C# `DeviceId` 库默认加 `Key=` 前缀，Rust 没有），导致同一台机器指纹不同。详见 [`docs/notes/auth.md`](./docs/notes/auth.md)。
 > 待启动功能实现后通过实际登录测试验证：若 SDO 服务端仅要求"稳定唯一"则无需修复；若触发风控（频繁要求验证码/拒绝密码登录），则需复刻 C# 的 `Key=Value` 格式。
 
 ### P0-2 SDO HTTP 请求细节 (`SdoLauncher.cs` → `GetSdoHttpRequestMessage`)
@@ -110,12 +110,14 @@
 - [x] **每次启动指定不同 wine**：`Launcher::with_wine_settings`（持久）+ `Launcher::launch_with_wine`（单次覆盖）
 - [x] **Wine 非 ASCII 游戏路径预检**：Linux/macOS 启动前拒绝包含非 ASCII 字符的完整游戏路径并返回明确错误，避免游戏内报误导性的 5003「帐号认证发生了错误」
 - [ ] **DXVK 变体选择**：当前固定 dxvk-async 1.10.1（CN 镜像）；上游已切换 dxvk-gplasync，未实现
-- [ ] **NixOS 适配**（详见 `docs/nixos.md`）：
+- [ ] **NixOS 适配**（详见 `docs/notes/nixos.md`）：
   - [ ] `Auto`/`Managed` 下 `probe()` 失败回退系统 wine 并给出 NixOS 提示
   - [ ] 托管 wine 跑不起来且 PATH 有 `steam-run` 时自动用 steam-run 包装（需 `unset TZ` 规避 nixpkgs#279893）
-  - [x] NixOS 用户上手指南已写入 `docs/nixos.md`（系统 wine / nix-ld / steam-run 手动包装三条路径）
+  - [x] NixOS 用户上手指南已写入 `docs/notes/nixos.md`（系统 wine / nix-ld / steam-run 手动包装三条路径）
 - [x] **wine/游戏日志重定向**：launch 时 wine/游戏输出写入 `~/.xiv-launcher-rs/logs/game-{ts}.log`，CLI 终端不再被污染；`GameLaunchResult.log_path` 暴露日志路径
 - [ ] **`WineSettings.log_file` 字段**：可配置日志路径（当前为默认路径，GUI 配置项待加）
+- [x] **prefix 架构检测修复**：`detect_prefix_arch` 之前只读 `system.reg` 第一行，而真实 wine 文件头是 `WINE REGISTRY Version 2`（`#arch=` 在第 3~4 行），导致每次启动都误判架构并**删除重建 prefix**（反复出现 "configuration in prefix is being updated"、DXVK 反复重装、Injector 启动时 dxgi.dll 丢失）；已改为扫描头部 8 行
+- [x] **DXVK 安装检测修复**：`ensure_dxvk` 之前只看 `d3d11.dll` 是否存在，而 wineboot 重建 prefix 后会放回 builtin d3d11.dll（DXVK 已被覆盖），导致误判"已安装"并在 `dxgi=n` override 下报 `dxgi.dll not found`；现改为 d3d11.dll + `.dxvk-installed` 标记文件双重判断
 - [ ] **prefix 引导 `EnsurePrefix()`**：C# 首次 `cmd /c dir %userprofile%/Documents` 初始化，未实现
 - [ ] **`wineserver` 管理**：C# 有 `wineserver` 路径处理，未实现
 
@@ -123,7 +125,7 @@
 
 ## P2-5 Dalamud 插件框架集成（新）
 
-- [x] **调查报告**：`docs/dalamud_integration.md`（加载机制、XIVLauncher 组件、Linux Wine 内注入、分阶段路线）
+- [x] **调查报告**：`docs/notes/dalamud_integration.md`（加载机制、XIVLauncher 组件、Linux Wine 内注入、分阶段路线）
 - [x] **阶段 0 骨架**：`src/dalamud/`（model/updater/runner）— release 元数据获取（`VersionInfo` API）、版本门控（`SupportedGameVer == 游戏版本`）、本机安装检测、Injector argv 构造、Wine 路径转换（`winepath --windows`）、Injector JSON 解析；`eoz dalamud status/launch`；`config.toml [dalamud]` section（flatten 兼容旧配置）
 - [x] **release 下载安装（惰性）**：7z 下载（进度回调）+ 关键文件校验 + `hashes.json` 完整性校验（远端 `Hash` = manifest 文件 MD5、逐文件 MD5、UTF-16/UTF-8 manifest 解码、拒绝 `..`/绝对路径）+ 原子安装（`Hooks/<AssemblyVersion>`）+ 写 `version.json`；`launch` 时版本匹配但未安装自动下载（无需独立 install 命令）
 - [x] **Windows x64 .NET runtime 下载/组装**（`RuntimeVersion` 管理；NuGet/华为镜像，提取 native/lib 并组装 host/fxr；上游 Runtime/Hashes manifest 与 NuGet 实际文件不一致，未作为阻断条件）

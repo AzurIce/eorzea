@@ -69,7 +69,7 @@
 //! - **AccountGroup**: 扫码成功后调用 [`SdoAuth::get_account_group`] 校验账号，再调用
 //!   [`SdoAuth::account_group_login`] 刷新 `tgt` 并获取 `auto_login_session_key`；
 //!   即使这两个调用失败，`codeKeyLogin` 响应自带的 `auto_login_session_key` 也可直接使用。
-//!   完整流程见 `docs/sdo_login_flow.md`。
+//!   完整流程见 `docs/notes/sdo_login_flow.md`。
 //!
 //! ## 4. 自动登录 (`LoginType::AutoLoginSession`)
 //!
@@ -130,7 +130,7 @@
 //! - **域名故障转移**: 目前需手动通过 `with_fallback_url()` 设置备用域名，不自动重试。
 //! - **日志脱敏**: 缺少 `MaskMiddleConverter` 对敏感字段的日志脱敏。
 //!
-//! 完整差异列表见仓库根目录 `TODO.md`；登录字段/流程速查见 `docs/sdo_login_flow.md`。
+//! 完整差异列表见仓库根目录 `TODO.md`；登录字段/流程速查见 `docs/notes/sdo_login_flow.md`。
 
 use crate::error::AuthError;
 use crate::model::*;

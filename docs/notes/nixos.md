@@ -1,6 +1,6 @@
 # NixOS 下的 Wine 方案与本启动器的适配
 
-> 调研时间：2026-08。前置阅读：`docs/wine_on_linux.md`。
+> 调研时间：2026-08。前置阅读：`docs/notes/wine_on_linux.md`。
 > 对应代码：`src/wine.rs`、`src/config.rs`（`WineSettings`）、`flake.nix`（devShell）。
 
 ## 问题本质
