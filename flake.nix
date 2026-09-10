@@ -108,6 +108,8 @@
           '';
         };
 
+        # 运行时系统库（仅 Linux；macOS 上 winit 走 AppKit、rfd 走系统框架、
+        # wine 用 xom/CrossOver 构建自带 dylib，均不需要 nix 提供的库）。
         # dioxus-native (winit + blitz/vello) 运行时库：wayland 客户端与键盘处理
         # 均为 dlopen 加载，需出现在 LD_LIBRARY_PATH（版本需 >= 1.24，
         # 否则系统 mesa vulkan ICD 缺 wl_fixes_interface 符号无法加载）。
@@ -137,6 +139,7 @@
           libpulseaudio # wine 声音（pulse/pipewire）
           alsa-lib # wine 声音（ALSA）
         ];
+        runtimeLibs = lib.optionals pkgs.stdenv.hostPlatform.isLinux (guiSystemLibs ++ wineLibs);
       in
       {
         packages = { };
@@ -148,11 +151,15 @@
               p7zip # Dalamud release 解压（.7z）
               pkg-config
             ];
-          buildInputs = guiSystemLibs ++ wineLibs;
-          shellHook = ''
+          buildInputs =
+            runtimeLibs
+            ++ lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
+              pkgs.apple-sdk # darwin 构建 dioxus-cli/openssl-sys 需要系统框架
+            ];
+          shellHook = lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
             # Make system libs discoverable at runtime (winit dlopens
             # libwayland-client/libxkbcommon; wine dlopens libunwind etc.)
-            export LD_LIBRARY_PATH="${lib.makeLibraryPath (guiSystemLibs ++ wineLibs)}:$LD_LIBRARY_PATH"
+            export LD_LIBRARY_PATH="${lib.makeLibraryPath runtimeLibs}:$LD_LIBRARY_PATH"
           '';
         };
       }

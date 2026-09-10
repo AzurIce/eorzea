@@ -98,8 +98,11 @@ pub fn launch_through_injector(
                 .filter(|p| !p.as_os_str().is_empty())
                 .unwrap_or_else(|| Path::new(".")),
         )
-        .env("WINEPREFIX", &wine.prefix_path)
-        .env("XL_WINEONLINUX", "true");
+        .env("WINEPREFIX", &wine.prefix_path);
+    #[cfg(target_os = "macos")]
+    cmd.env("XL_WINEONMAC", "true");
+    #[cfg(not(target_os = "macos"))]
+    cmd.env("XL_WINEONLINUX", "true");
     for (k, v) in env {
         cmd.env(k, v);
     }

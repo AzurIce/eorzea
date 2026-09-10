@@ -258,6 +258,25 @@ impl WineTool {
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
+
+        // 对齐 C# `EnsurePrefix()`：wineboot 返回后 prefix 更新（explorer/
+        // services）可能仍在后台进行，此时启动游戏（尤其经 Dalamud Injector
+        // 挂起后注入）会因 prefix 未就绪而失败。运行一个 dummy 命令强制
+        // 初始化完成。
+        let bootstrap = Command::new(&self.wine64_path)
+            .args(["cmd", "/c", "dir", "%userprofile%\\Documents"])
+            .env("WINEPREFIX", &self.prefix_path)
+            .env("WINEDLLOVERRIDES", "mscoree=n")
+            .output()
+            .map_err(WineError::Io)?;
+        if !bootstrap.status.success() {
+            warn!(
+                prefix = %self.prefix_path.display(),
+                stderr = %String::from_utf8_lossy(&bootstrap.stderr).trim(),
+                "prefix bootstrap command failed; prefix may not be fully initialized"
+            );
+        }
+
         info!(prefix = %self.prefix_path.display(), "64-bit prefix created");
         Ok(())
     }
@@ -698,17 +717,22 @@ pub fn build_launch_env(settings: &WineSettings, tool: &WineTool) -> Vec<(String
         }
     }
 
-    // gamemode
+    // gamemode（Linux-only：LD_PRELOAD 机制在 macOS 上不适用）
     if settings.gamemode {
-        let existing = std::env::var("LD_PRELOAD").unwrap_or_default();
-        let merged = if existing.is_empty() {
-            "libgamemodeauto.so.0".to_string()
-        } else if existing.contains("libgamemodeauto.so.0") {
-            existing
-        } else {
-            format!("{existing}:libgamemodeauto.so.0")
-        };
-        env.push(("LD_PRELOAD".to_string(), merged));
+        #[cfg(target_os = "linux")]
+        {
+            let existing = std::env::var("LD_PRELOAD").unwrap_or_default();
+            let merged = if existing.is_empty() {
+                "libgamemodeauto.so.0".to_string()
+            } else if existing.contains("libgamemodeauto.so.0") {
+                existing
+            } else {
+                format!("{existing}:libgamemodeauto.so.0")
+            };
+            env.push(("LD_PRELOAD".to_string(), merged));
+        }
+        #[cfg(not(target_os = "linux"))]
+        tracing::warn!("gamemode is only supported on Linux; ignoring");
     }
 
     // 自定义环境变量（最后应用，可覆盖以上所有）
@@ -832,6 +856,9 @@ mod tests {
 
         assert_eq!(env["WINEPREFIX"], "/fake/prefix");
         assert_eq!(env["WINEARCH"], "win64");
+        #[cfg(target_os = "macos")]
+        assert_eq!(env["WINEDLLOVERRIDES"], "msquic=,mscoree=n,b;d3d11=n;dxgi=n,b");
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(
             env["WINEDLLOVERRIDES"],
             "msquic=,mscoree=n,b;d3d9,d3d11,d3d10core,dxgi=n"
@@ -870,6 +897,9 @@ mod tests {
         assert_eq!(env["WINEFSYNC"], "1");
         assert_eq!(env["WINEDEBUG"], "+seh");
         // DXVK 关闭 → wined3d = b，且无 DXVK_* 变量
+        #[cfg(target_os = "macos")]
+        assert_eq!(env["WINEDLLOVERRIDES"], "msquic=,mscoree=n,b;d3d11=b;dxgi=n,b");
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(
             env["WINEDLLOVERRIDES"],
             "msquic=,mscoree=n,b;d3d9,d3d11,d3d10core,dxgi=b"
@@ -878,6 +908,7 @@ mod tests {
         // 自定义 env 可覆盖 WINEPREFIX（最后应用）
         assert_eq!(env["WINEPREFIX"], "/override");
         assert_eq!(env["MY_VAR"], "1");
+        #[cfg(target_os = "linux")]
         assert!(env["LD_PRELOAD"].contains("libgamemodeauto.so.0"));
     }
 
@@ -948,6 +979,9 @@ mod tests {
 
         let content = std::fs::read_to_string(&out_file).unwrap();
         assert!(content.contains(&format!("PREFIX={}", dir.join("myprefix").display())));
+        #[cfg(target_os = "macos")]
+        assert!(content.contains("OVERRIDES=msquic=,mscoree=n,b;d3d11=n;dxgi=n,b"));
+        #[cfg(not(target_os = "macos"))]
         assert!(content.contains("OVERRIDES=msquic=,mscoree=n,b;d3d9,d3d11,d3d10core,dxgi=n"));
         assert!(content.contains("ESYNC=1"));
         assert!(content.contains("FSYNC=1"));

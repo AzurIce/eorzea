@@ -15,13 +15,15 @@
 
 自动下载的 Wine 来自 CN 镜像（Linux 为 `wine-xiv-staging-fsync`，macOS 为 xom 构建），解压到 `~/.xiv-launcher-rs/tools/wine/`。
 
+macOS 前置条件：xom wine 为 x86_64 构建，Apple Silicon 需安装 Rosetta 2（`softwareupdate --install-rosetta`）；启用 Dalamud 时还需 `brew install p7zip`（解压 Dalamud release 的 .7z）。
+
 解析完成后会执行一次 `wine64 --version` 探针（probe），提前暴露不可执行/版本不对的问题。
 
 ## Prefix 管理
 
 - 默认 prefix 为 `~/.xiv-launcher-rs/prefix`，可用配置项 `prefix` 覆盖。
 - 每次启动前 `ensure_prefix()`：
-  - prefix 不存在 → 用 `WINEARCH=win64` 执行 `wineboot --init` 创建（设 `WINEDLLOVERRIDES=mscoree=n` 屏蔽 wine-mono 弹窗，Dalamud 使用自己托管的 .NET runtime）；
+  - prefix 不存在 → 用 `WINEARCH=win64` 执行 `wineboot --init` 创建（设 `WINEDLLOVERRIDES=mscoree=n` 屏蔽 wine-mono 弹窗，Dalamud 使用自己托管的 .NET runtime），随后运行 `cmd /c dir %userprofile%/Documents` 强制初始化完成（对齐 C# `EnsurePrefix()`；否则后台 services 未就绪时经 Dalamud Injector 启动会失败）；
   - 已存在 → 读取 `system.reg` 头部的 `#arch=` 行判断架构，是 `win32` 或无法识别时**删除重建**为 64 位。
 - FFXIV 与 Dalamud 都要求 64 位环境，因此架构检查是强制的。
 
@@ -46,7 +48,7 @@ FFXIV 是 DX11 游戏，wined3d 渲染错误且性能差，DXVK 默认开启（`
 | `WINEDEBUG` | `debug_vars` 配置（如 `+seh`、`-all`） |
 | `DXVK_STATE_CACHE_PATH` / `DXVK_CONFIG_FILE` | `C:\` / `C:\ffxiv_dx11.conf`（DXVK 开启时） |
 | `DXVK_HUD` / `DXVK_FRAME_RATE` | `dxvk.hud` / `dxvk.frame_limit` 配置 |
-| `LD_PRELOAD` | `gamemode` 开启时追加 `libgamemodeauto.so.0` |
+| `LD_PRELOAD` | `gamemode` 开启时追加 `libgamemodeauto.so.0`（仅 Linux；macOS 忽略并告警） |
 | `XL_WINEONLINUX` / `XL_WINEONMAC` | `true`（平台标记，供 Dalamud 等识别） |
 
 `config.toml` 的 `[env]` 表（`env.FOO = "bar"`）在最后应用，可覆盖以上任意项。启用 Dalamud 且托管了 .NET runtime 时，还会设置 `DALAMUD_RUNTIME` 与 `DOTNET_ROOT`（经 `winepath` 转换的 Windows 路径）。

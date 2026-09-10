@@ -118,8 +118,10 @@
 - [ ] **`WineSettings.log_file` 字段**：可配置日志路径（当前为默认路径，GUI 配置项待加）
 - [x] **prefix 架构检测修复**：`detect_prefix_arch` 之前只读 `system.reg` 第一行，而真实 wine 文件头是 `WINE REGISTRY Version 2`（`#arch=` 在第 3~4 行），导致每次启动都误判架构并**删除重建 prefix**（反复出现 "configuration in prefix is being updated"、DXVK 反复重装、Injector 启动时 dxgi.dll 丢失）；已改为扫描头部 8 行
 - [x] **DXVK 安装检测修复**：`ensure_dxvk` 之前只看 `d3d11.dll` 是否存在，而 wineboot 重建 prefix 后会放回 builtin d3d11.dll（DXVK 已被覆盖），导致误判"已安装"并在 `dxgi=n` override 下报 `dxgi.dll not found`；现改为 d3d11.dll + `.dxvk-installed` 标记文件双重判断
-- [ ] **prefix 引导 `EnsurePrefix()`**：C# 首次 `cmd /c dir %userprofile%/Documents` 初始化，未实现
+- [x] **prefix 引导 `EnsurePrefix()`**：对齐 C#，wineboot 后运行 `cmd /c dir %userprofile%/Documents` 强制 prefix 初始化完成；修复 macOS 上新建 prefix 后首次 Dalamud 注入启动因 prefix 未就绪失败（"Game exited prematurely"）的竞态（2026-09-10）
 - [ ] **`wineserver` 管理**：C# 有 `wineserver` 路径处理，未实现
+- [x] **macOS 兼容性修正（2026-09-09）**：`flake.nix` devShell 支持 darwin（Linux-only 运行时库/LD_LIBRARY_PATH 门控，darwin 用 apple-sdk）；`build_launch_env` 的 gamemode 改为 Linux-only（macOS 忽略并告警）；wine 测试断言按平台分派
+- [ ] **macOS 端到端验证**：xom wine + Rosetta 链路（下载 → prefix 初始化 → DXVK-macOS → 启动）代码就绪但未完整真机回归；偶发 Wine 死锁 `RtlpWaitForCriticalSection` 待排查
 
 ---
 
@@ -133,6 +135,8 @@
 - [x] **launch backend 切换**：`launch_game` 支持 `dalamud` 配置时走 Injector（winepath 转换 + Injector 启动 + JSON 解析）；`Launcher::launch_with_options` 自动读 `[dalamud].enabled`（可被 CLI 覆盖）并安全降级；`eoz launch --dalamud/--no-dalamud` 覆盖配置
 - [x] **Dalamud 启动链路纠错**：`build_dalamud_config` 从 `ffxiv_dx11.exe` 路径正确推导游戏根目录（此前把 exe 当根目录导致版本恒不匹配）；路径对齐上游 storage root（`dalamudConfig.json`/`logs`/`installedPlugins`/`dalamudAssets`，不再嵌套 `dalamud/`）；runner 宿主 `current_dir` 用 Unix Injector 目录（此前误传 `Z:\...`）；Injector stderr 后台排空避免管道阻塞；检测 Windows .NET runtime（本项目或 `~/.xlcore_cn` 版本匹配 fallback）与配套 assets，缺失时安全降级；release 元数据不可用不再 panic；`eoz dalamud launch --no-dalamud` 不再被忽略
 - [ ] **阶段 2+**：Windows runner、Wine PID→Unix PID 映射、staging/beta、崩溃恢复（safe mode）
+- [x] **Injector 平台标记修正（2026-09-09）**：`runner.rs` 启动 Injector 时按平台设置 `XL_WINEONMAC`/`XL_WINEONLINUX`（此前无条件 `XL_WINEONLINUX`）
+- [ ] **macOS Dalamud 注入验证**：~~xom wine（CrossOver + Rosetta 跑 x64）下 Injector 注入未做端到端验证~~ 已验证可用（2026-09-10，macOS 26 + xom-4.17.1，Dalamud 15.0.3.3 注入成功）；新建 prefix 后的首次注入曾因初始化竞态失败，已由 `EnsurePrefix` 引导命令修复
 
 ## P3 — 国际服 (SE) 补全（低优先级）
 
