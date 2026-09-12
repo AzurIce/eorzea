@@ -31,9 +31,15 @@ base64 = "0.22"
 toml = "0.8"
 md5 = "0.7"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# release 本体（.7z）纯 Rust 解压：LZMA2/BCJ/COPY/DELTA 内置，ppmd/deflate 可选。
+# 关掉默认 feature：aes256 会拉 getrandom 0.4，wasm32 目标下需要额外 backend 配置；
+# 本项目不需要解密归档。compress/util 仅测试与工具用（见 dev-dependencies）。
+sevenz-rust2 = { version = "0.22.2", default-features = false, features = ["ppmd", "deflate"] }
 
 [dev-dependencies]
 rpassword = "7"
+# 测试里用 ArchiveWriter 造 7z fixture（与上游同为 LZMA2），主依赖不需要 compress
+sevenz-rust2 = { version = "0.22.2", default-features = false, features = ["compress"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dioxus-native = "0.7"

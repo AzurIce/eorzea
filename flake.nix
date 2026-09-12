@@ -148,7 +148,6 @@
             with pkgs; [
               dioxusCli # dx 命令行（覆盖到 0.7.10，匹配 dioxus 0.7.10）
               gh
-              p7zip # Dalamud release 解压（.7z）
               pkg-config
             ];
           buildInputs =

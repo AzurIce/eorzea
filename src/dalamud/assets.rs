@@ -8,11 +8,14 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use sha1::{Digest, Sha1};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use super::updater::DalamudError;
 
 const ASSET_META_URL: &str = "https://aonyx.ffxiv.wang/Dalamud/Asset/Meta";
+
+/// 资产元数据请求的最大尝试次数（首次 + 重试）。
+const ASSET_META_ATTEMPTS: u32 = 3;
 
 const NOTO_FALLBACK_URLS: &[&str] = &[
     "https://mirrors.aliyun.com/CTAN/fonts/notocjksc/NotoSansCJKsc-Medium.otf",
@@ -43,6 +46,9 @@ struct AssetFile {
 ///
 /// 下载策略对齐 C#：逐个校验 SHA1，缺失/不匹配才下载；全部通过后写
 /// `asset.ver` 并清理旧版本目录。返回 Injector 应使用的具体版本目录。
+///
+/// 元数据拉取失败（离线/被限流）时退回**本地已安装**的 assets 目录：assets 是纯
+/// 资源，版本号只在需要更新时才有意义，不该因为一次网络抖动让整个 Dalamud 降级。
 pub async fn ensure_assets(
     client: &reqwest::Client,
     install_root: &Path,
@@ -54,7 +60,21 @@ pub async fn ensure_assets(
         source: e,
     })?;
 
-    let meta = fetch_asset_meta(client).await?;
+    let meta = match fetch_asset_meta(client).await {
+        Ok(meta) => meta,
+        Err(e) => {
+            if let Some(dir) = super::updater::find_usable_asset_dir(install_root) {
+                // 已处理的降级：用本机 assets 继续，记 info 别刷 WARN
+                info!(
+                    error = %e,
+                    dir = %dir.display(),
+                    "asset metadata unavailable, using installed Dalamud assets"
+                );
+                return Ok(dir);
+            }
+            return Err(e);
+        }
+    };
     let current_dir = base_dir.join(meta.version.to_string());
 
     // 版本一致且目录非空时直接复用，避免上游 Noto 字体 hash 元数据与镜像
@@ -94,7 +114,34 @@ pub async fn ensure_assets(
     Ok(current_dir)
 }
 
+/// 拉取资产元数据（瞬时失败重试：该 API 实测会偶发 connection error）。
 async fn fetch_asset_meta(client: &reqwest::Client) -> Result<AssetMeta, DalamudError> {
+    let mut last_error = None;
+    for attempt in 1..=ASSET_META_ATTEMPTS {
+        match fetch_asset_meta_once(client).await {
+            Ok(meta) => return Ok(meta),
+            Err(e) => {
+                // 4xx 重试无意义；其它错误退避后重试
+                if matches!(&e, DalamudError::Http { status, .. } if status.is_client_error()) {
+                    warn!(error = %e, "asset metadata request rejected");
+                    return Err(e);
+                }
+                debug!(attempt, error = %e, "failed to fetch asset metadata");
+                last_error = Some(e);
+                if attempt < ASSET_META_ATTEMPTS {
+                    // wasm 预览端不保证有 tokio 时间驱动，退避只在原生端做
+                    #[cfg(not(target_arch = "wasm32"))]
+                    tokio::time::sleep(std::time::Duration::from_millis(250 * u64::from(attempt)))
+                        .await;
+                }
+            }
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| DalamudError::Network("asset metadata request failed".to_string())))
+}
+
+async fn fetch_asset_meta_once(client: &reqwest::Client) -> Result<AssetMeta, DalamudError> {
     let resp = client
         .get(ASSET_META_URL)
         .header("User-Agent", "eorzea")

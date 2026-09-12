@@ -52,7 +52,7 @@ Wine 字段通过 `#[serde(flatten)]` 直接写在 TOML 顶层（兼容旧格式
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `dalamud.enabled` | bool | `false` | 启用 Dalamud（opt-in）。CLI 可用 `--dalamud` / `--no-dalamud` 单次覆盖 |
+| `dalamud.enabled` | bool | `false` | 启用 Dalamud（opt-in）。CLI 可用 `--dalamud` / `--no-dalamud` 单次覆盖。**启用即强制**：准备失败（元数据不可达、与游戏版本不匹配、下载/校验失败、runtime 或 assets 缺失）会直接报错且不启动游戏，需要显式 `--no-dalamud`（GUI 用主页「本次启动加载 Dalamud」开关）才能不带插件进游戏 |
 | `dalamud.load_method` | string | `"entrypoint"` | 加载方式：`entrypoint`（入口点改写，推荐）、`dllinject`（远程注入）、`aclonly`（只做兼容修复、不加载 Dalamud，排障用） |
 | `dalamud.delay_initialize_ms` | uint | `0` | 注入后延迟初始化毫秒数 |
 | `dalamud.no_plugins` | bool | `false` | safe mode：禁用全部插件 |

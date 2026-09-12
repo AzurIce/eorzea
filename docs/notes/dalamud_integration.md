@@ -211,6 +211,7 @@ Dalamud.Injector.exe launch
 2. 在登录/启动前并行预取 metadata，但在启动前强制 `SupportedGameVer == local game version`。游戏刚更新而 Dalamud 尚未发布时，必须明确提示并允许“禁用 Dalamud 启动”，绝不能加载旧版。
 3. 下载到临时文件/临时目录，限制响应大小，校验 `hashes.json` 及全部文件，拒绝绝对路径、`..` 和 symlink escape，最后原子 rename 为 `Hooks/<AssemblyVersion>`。
 4. zip 可用 Rust crate；CN release 当前可能为 7z，需选择纯 Rust 7z crate、受控外部 `7zz`，或服务端 zip。不能假定 zip-only。
+   - **已定方案（2026-09-12）**：用纯 Rust `sevenz-rust2`（LZMA2/BCJ/COPY/DELTA 内置，另开 `ppmd`/`deflate`），按**文件头**识别 7z/zip 后走 `src/dalamud/archive.rs` 的统一解压路径；不再探测或调用外部 `7z/7zz/7za`，因此 Linux/macOS 无需 `p7zip`、Windows 无需装 7-Zip。实测 CN release（13 MiB、70 项、LZMA2）约 2s 解压 69 MiB。
 5. 分别管理 runtime 和 assets；只有三者均完成才把安装标记为 ready。
 6. 保存 `version.json` 与 rollout bucket。bucket 应首次随机生成后持久化，而不是每次运行重新抽签，以免控制组抖动。
 7. 失败时保留已验证的旧版本供回滚，但旧版本仅能在 `SupportedGameVer` 仍匹配时使用。
@@ -271,7 +272,7 @@ track = "release"
 | 游戏版本与 Dalamud 不匹配 | 启动崩溃、内存结构错误 | 启动前严格比较 `SupportedGameVer`；不匹配时默认禁用/阻止加载 |
 | release API/CN CDN 属于外部服务 | 无法更新或通道变化 | endpoint 可配置；缓存已验证 metadata；清晰区分离线与不兼容 |
 | 上游仅 MD5 manifest，无签名 | 供应链校验强度有限 | HTTPS、限制重定向域、固定元数据 schema；未来支持签名/更强摘要；不要降低上游校验 |
-| 7z/zip 解压 | path traversal、磁盘占满、半安装 | 临时目录、安全路径校验、大小/文件数限制、原子提交 |
+| 7z/zip 解压 | path traversal、磁盘占满、半安装 | 临时目录、安全路径校验、大小/文件数限制、原子提交（已实现：`src/dalamud/archive.rs` 拒绝绝对路径/`..`/盘符，条目数与解压总量设上限，写入临时目录后原子 rename） |
 | Windows .NET Runtime 体积和版本绑定 | 首次下载大；错误 runtime 无法加载 | 按服务端 `RuntimeVersion` 管理 Windows x64 runtime；不要调用宿主 `dotnet` |
 | Wine CLR/调试兼容性 | Injector 或插件崩溃 | 使用已验证的 wine-xiv；Wine 9.0–10.7 注意 portable-PDB，10.8+ 已上游修复 |
 | Wine PID 与 Unix PID 不同 | 无法等待/终止/检测重复启动 | 完整版要求 unix-pid maps 或可靠映射；MVP 明确降级语义 |

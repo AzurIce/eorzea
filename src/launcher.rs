@@ -561,6 +561,10 @@ impl Launcher {
     }
 
     /// 启动游戏，可覆盖 Dalamud 启用状态（`Some(true/false)` 覆盖 `[dalamud].enabled`）。
+    ///
+    /// 会**先**准备 Dalamud（[`Self::prepare_dalamud`]）再交给 [`Self::launch_prepared`]。
+    /// 调用方若想避免一次性 SSO ticket 被 Dalamud 失败消耗，应在登录前自己调
+    /// `prepare_dalamud`，再调用 `launch_prepared`。
     pub async fn launch_with_options(
         &self,
         wine: &WineSettings,
@@ -571,7 +575,31 @@ impl Launcher {
         game_path: impl AsRef<Path>,
     ) -> Result<GameLaunchResult, LauncherError> {
         let game_path = game_path.as_ref().to_path_buf();
-        let dalamud = Self::build_dalamud_config(&game_path, dalamud_override).await?;
+        let dalamud = self
+            .prepare_dalamud(
+                Self::game_root_of(&game_path),
+                dalamud_override,
+                |_, _, _| {},
+            )
+            .await?;
+        self.launch_prepared(wine, dalamud, token, area, areas, &game_path)
+            .await
+    }
+
+    /// 用已经准备好的 Dalamud 配置启动游戏（不再做网络/磁盘检查）。
+    ///
+    /// 与 [`Self::launch_with_options`] 配合：`prepare_dalamud` → 登录 → 本函数，
+    /// 这样 Dalamud 准备失败发生在换取 ticket 之前。
+    pub async fn launch_prepared(
+        &self,
+        wine: &WineSettings,
+        dalamud: Option<GameLaunchConfigDalamud>,
+        token: &LaunchToken,
+        area: SdoArea,
+        areas: Vec<SdoArea>,
+        game_path: impl AsRef<Path>,
+    ) -> Result<GameLaunchResult, LauncherError> {
+        let game_path = game_path.as_ref().to_path_buf();
         let config = GameLaunchConfig {
             game_path: game_path.clone(),
             session_id: token.ticket.clone(),
@@ -640,18 +668,39 @@ impl Launcher {
         })
     }
 
-    /// 根据 `[dalamud]` 配置检测是否通过 Injector 启动。
+    /// 从 `game/ffxiv_dx11.exe` 推导游戏根目录（已经是根目录时原样返回）。
+    fn game_root_of(game_path: &Path) -> &Path {
+        game_path
+            .parent()
+            .filter(|p| p.file_name().is_some_and(|n| n == "game"))
+            .and_then(|p| p.parent())
+            .unwrap_or(game_path)
+    }
+
+    /// 准备 Dalamud：版本门控 + 惰性补齐 release / runtime / assets。
     ///
-    /// 返回 `Some(DalamudLaunchConfig)` 仅当：启用 + 本机有安装 + 版本匹配 +
-    /// 必需的 Windows .NET runtime 可用。版本不匹配或依赖缺失时**安全降级**
-    /// 为直接启动（不加载 Dalamud）。
-    async fn build_dalamud_config(
-        game_path: &Path,
-        override_enabled: Option<bool>,
+    /// `game_root` 是**游戏根目录**（含 `game/`、`boot/`）。
+    ///
+    /// 启用（配置 `[dalamud].enabled` 或 `enabled_override`）时**不做静默降级**：
+    /// 任何一步不满足（元数据不可达、版本门控不匹配、下载/解压/校验失败、runtime 或
+    /// assets 缺失）都返回 [`LauncherError::DalamudNotReady`]，由调用方决定是报错还是
+    /// 让用户显式改用 `--no-dalamud`。只有 `Ok(None)` 表示「本次不加载 Dalamud」。
+    ///
+    /// 调用方应在**登录/换取 ticket 之前**调用本函数：否则一次失败会让一次性
+    /// SSO ticket 白白作废，用户还得重新登录。
+    ///
+    /// `on_progress(phase, done, total)` 上报各组件进度：进入某阶段先发一次
+    /// `(phase, 0, 0)`，随后按已处理字节数回调（`total == 0` 表示长度未知）。
+    pub async fn prepare_dalamud(
+        &self,
+        game_root: &Path,
+        enabled_override: Option<bool>,
+        mut on_progress: impl FnMut(DalamudPhase, u64, u64),
     ) -> Result<Option<GameLaunchConfigDalamud>, LauncherError> {
         let settings = crate::config::load_dalamud_settings();
-        let enabled = override_enabled.unwrap_or(settings.enabled);
+        let enabled = enabled_override.unwrap_or(settings.enabled);
         if !enabled {
+            debug!("Dalamud disabled for this launch");
             return Ok(None);
         }
 
@@ -660,81 +709,63 @@ impl Launcher {
             .clone()
             .unwrap_or_else(crate::dalamud::updater::default_install_root);
 
-        // `launch_with_options` 收的是 `ffxiv_dx11.exe` 完整路径；
-        // `updater::status` 需要游戏根目录。这里从 exe 的父目录推导，
-        // 避免把 exe 路径当根目录导致永远读出 BASE_GAME_VERSION。
-        let game_root = game_path
-            .parent()
-            .filter(|p| p.file_name().is_some_and(|n| n == "game"))
-            .and_then(|p| p.parent())
-            .unwrap_or(game_path);
-
         let client = reqwest::Client::new();
         let st =
             crate::dalamud::updater::status(&client, &install_root, game_root, &settings.track)
                 .await;
 
-        // 网络不可用且本地也没有安装时，status 可能返回 Missing/OutOfDate；
-        // 这里统一按“有远端元数据 + 版本匹配”判断，并惰性补齐三个组件：
-        // release → Windows .NET runtime → assets。任一组件失败都安全降级。
         let Some(remote) = st.remote.as_ref() else {
-            warn!("Dalamud release metadata unavailable, launching without Dalamud");
-            return Ok(None);
+            return Err(LauncherError::DalamudNotReady(format!(
+                "无法获取 release 元数据（track={}），且本机没有可用的 version.json 记录",
+                settings.track
+            )));
         };
         if remote.supported_game_ver != st.local_game_ver {
-            warn!(
-                supported = %remote.supported_game_ver,
-                local = %st.local_game_ver,
-                state = ?st.install_state,
-                "Dalamud version gate failed, launching without Dalamud"
-            );
-            return Ok(None);
+            return Err(LauncherError::DalamudNotReady(format!(
+                "release {} 尚不支持当前游戏版本（支持 {}，本地 {}）{}",
+                remote.assembly_version,
+                remote.supported_game_ver,
+                st.local_game_ver,
+                if remote.supported_game_ver.as_str() < st.local_game_ver.as_str() {
+                    "；游戏刚更新时需等待 Dalamud 发版"
+                } else {
+                    ""
+                }
+            )));
         }
 
-        let install_path = match st.install_path.as_ref() {
-            Some(p)
-                if p.join("Dalamud.Injector.exe").is_file()
-                    && crate::dalamud::updater::release_install_is_valid(p, &remote.hash) =>
-            {
-                p.clone()
-            }
-            _ => {
-                info!("Dalamud release matches game version, auto-installing");
-                match crate::dalamud::updater::download_release(
-                    &client,
-                    remote,
-                    &install_root,
-                    |_, _| {},
-                )
-                .await
-                {
-                    Ok(p) => p,
-                    Err(e) => {
-                        warn!(error = %e, "auto-install failed, launching without Dalamud");
-                        return Ok(None);
-                    }
-                }
-            }
-        };
+        // 1. release 本体（下载/校验/解压）
+        on_progress(DalamudPhase::Release, 0, 0);
+        let install_path = crate::dalamud::updater::ensure_release(
+            &client,
+            &install_root,
+            remote,
+            |done, total| on_progress(DalamudPhase::Release, done, total),
+        )
+        .await
+        .map_err(|e| LauncherError::DalamudNotReady(format!("release 本体不可用：{e}")))?;
 
         // 路径对齐上游目录布局：install_root 本身相当于 storage root，
         // 不要再额外套一层 `install_root/dalamud/...`。
         let runtime_required = remote.runtime_required || settings.manage_runtime;
         let runtime_dir = if runtime_required {
-            match crate::dalamud::ensure_runtime(
-                &client,
-                &install_root,
-                &remote.runtime_version,
-                |_, _| {},
+            // 2. Windows x64 .NET runtime
+            on_progress(DalamudPhase::Runtime, 0, 0);
+            Some(
+                crate::dalamud::ensure_runtime(
+                    &client,
+                    &install_root,
+                    &remote.runtime_version,
+                    |done, total| on_progress(DalamudPhase::Runtime, done, total),
+                )
+                .await
+                .map_err(|e| {
+                    LauncherError::DalamudNotReady(format!(
+                        "Windows .NET runtime {} 不可用：{e}",
+                        remote.runtime_version
+                    ))
+                })?,
             )
-            .await
-            {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    warn!(error = %e, "runtime setup failed, launching without Dalamud");
-                    return Ok(None);
-                }
-            }
         } else {
             crate::dalamud::updater::find_usable_runtime_dir(
                 &install_root,
@@ -742,14 +773,19 @@ impl Launcher {
             )
         };
 
-        let asset_dir = match crate::dalamud::ensure_assets(&client, &install_root, |_, _| {}).await
-        {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(error = %e, "assets setup failed, launching without Dalamud");
-                return Ok(None);
-            }
-        };
+        // 3. assets（字体/DATA 级别资源）
+        on_progress(DalamudPhase::Assets, 0, 0);
+        let asset_dir = crate::dalamud::ensure_assets(&client, &install_root, |done, total| {
+            on_progress(DalamudPhase::Assets, done, total)
+        })
+        .await
+        .map_err(|e| LauncherError::DalamudNotReady(format!("assets 不可用：{e}")))?;
+
+        info!(
+            version = %remote.assembly_version,
+            install = %install_path.display(),
+            "Dalamud ready"
+        );
 
         Ok(Some(GameLaunchConfigDalamud {
             injector_exe: install_path.join("Dalamud.Injector.exe"),
@@ -773,11 +809,37 @@ impl Default for Launcher {
     }
 }
 
+/// Dalamud 准备的阶段（[`Launcher::prepare_dalamud`] 的进度回调）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DalamudPhase {
+    /// release 本体：下载归档 → 解压 → 逐文件校验 → 原子安装
+    Release,
+    /// 托管的 Windows x64 .NET runtime
+    Runtime,
+    /// Dalamud assets（字体/UI 资源）
+    Assets,
+}
+
+impl DalamudPhase {
+    /// 面向用户的阶段名。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Release => "release 本体",
+            Self::Runtime => "Windows .NET runtime",
+            Self::Assets => "Dalamud assets",
+        }
+    }
+}
+
 /// Launcher 层错误。
 #[derive(Debug, thiserror::Error)]
 pub enum LauncherError {
     #[error("Auth error: {0}")]
     Auth(String),
+    /// Dalamud 已启用但未能就绪。**不会静默降级**：调用方应报错并让用户
+    /// 显式选择（`--no-dalamud` / GUI 本次开关 / 关闭配置）后再启动。
+    #[error("Dalamud 已启用但未能就绪：{0}")]
+    DalamudNotReady(String),
     #[error("Game launch error: {0}")]
     Game(#[from] GameLaunchError),
 }
@@ -826,5 +888,45 @@ mod tests {
     fn test_mask_sensitive() {
         assert_eq!(mask_sensitive("short"), "***");
         assert_eq!(mask_sensitive("ULS21-abcdef123456"), "ULS***3456");
+    }
+
+    /// 显式关闭（`--no-dalamud` / GUI 本次开关）时不做任何网络/磁盘检查。
+    #[tokio::test]
+    async fn test_prepare_dalamud_disabled_returns_none() {
+        let launcher = Launcher::new().expect("failed to create Launcher");
+        let out = launcher
+            .prepare_dalamud(
+                Path::new("Z:/definitely/not/a/game"),
+                Some(false),
+                |_, _, _| {},
+            )
+            .await
+            .expect("禁用时不应报错");
+        assert!(out.is_none());
+    }
+
+    /// 真实网络集成测试：启用 Dalamud 但游戏版本不匹配时必须**报错**而不是静默降级。
+    ///
+    /// 用 BASE_GAME_VERSION（2012.01.01）当本地游戏版本，任何 release 都不可能匹配。
+    /// 默认 ignored（要读本机 config 的 install_root + 可能联网）：
+    /// `cargo test -p eorzea prepare_dalamud_strict -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn prepare_dalamud_strict_version_gate() {
+        let dir = std::env::temp_dir().join(format!("xl-rs-dalamud-gate-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("game")).unwrap();
+        // 不写 ffxivgame.ver → read_ver 回退 BASE_GAME_VERSION
+        let launcher = Launcher::new().expect("failed to create Launcher");
+        let err = launcher
+            .prepare_dalamud(&dir, Some(true), |_, _, _| {})
+            .await
+            .expect_err("版本不匹配必须报错");
+        let msg = err.to_string();
+        assert!(
+            matches!(err, LauncherError::DalamudNotReady(_)),
+            "unexpected error: {msg}"
+        );
+        println!("{msg}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

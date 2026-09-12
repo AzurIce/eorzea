@@ -15,7 +15,7 @@
 
 自动下载的 Wine 来自 CN 镜像（Linux 为 `wine-xiv-staging-fsync`，macOS 为 xom 构建），解压到 `~/.eorzea/tools/wine/`。
 
-macOS 前置条件：xom wine 为 x86_64 构建，Apple Silicon 需安装 Rosetta 2（`softwareupdate --install-rosetta`）；启用 Dalamud 时还需 `brew install p7zip`（解压 Dalamud release 的 .7z）。
+macOS 前置条件：xom wine 为 x86_64 构建，Apple Silicon 需安装 Rosetta 2（`softwareupdate --install-rosetta`）。启用 Dalamud 不需要额外安装 `p7zip`：release 的 `.7z` 由内置的纯 Rust 解压负责。
 
 解析完成后会执行一次 `wine64 --version` 探针（probe），提前暴露不可执行/版本不对的问题。
 

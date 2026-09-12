@@ -181,6 +181,35 @@ pub fn HomePage() -> Element {
         };
         launching.set(true);
         spawn(async move {
+            // Dalamud 准备放在自动登录**之前**：启用时失败不静默降级（状态栏报错、
+            // 不启动游戏），也避免一次失败就消耗掉一次性 session key。
+            let dalamud_on = dalamud_this_launch();
+            let dalamud_cfg = match launcher
+                .prepare_dalamud(&root, Some(dalamud_on), |phase, done, total| {
+                    // GUI 不画进度条，但状态栏要能看出在下什么、下到哪了
+                    let label = phase.label();
+                    if total > 0 {
+                        state.status.set(format!(
+                            "正在准备 {label}… {} / {}",
+                            human_bytes(done),
+                            human_bytes(total)
+                        ));
+                    } else {
+                        state.status.set(format!("正在准备 {label}…"));
+                    }
+                })
+                .await
+            {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    state
+                        .status
+                        .set(format!("{e}（可关闭主页的「本次启动加载 Dalamud」后重试）"));
+                    launching.set(false);
+                    return;
+                }
+            };
+
             // 本会话没有 token 时先尝试自动登录（key 会轮换，需写回）
             let existing = state.tokens.read().get(&snda_id).cloned();
             let token = match existing {
@@ -236,14 +265,7 @@ pub fn HomePage() -> Element {
                 let wine = state.settings.read().clone();
                 state.status.set("正在启动游戏…".into());
                 match launcher
-                    .launch_with_options(
-                        &wine,
-                        Some(dalamud_this_launch()),
-                        &token,
-                        area,
-                        areas,
-                        &exe,
-                    )
+                    .launch_prepared(&wine, dalamud_cfg, &token, area, areas, &exe)
                     .await
                 {
                     Ok(result) => state
@@ -301,18 +323,22 @@ pub fn HomePage() -> Element {
                         "已安装 {}",
                         st.local_assembly_version.as_deref().unwrap_or("未知版本")
                     ),
-                    format!("版本匹配（{}），启动时加载", st.local_game_ver),
+                    if st.remote_from_cache {
+                        format!(
+                            "版本匹配（{}），启动时加载；远端元数据不可用，按本地记录判定",
+                            st.local_game_ver
+                        )
+                    } else {
+                        format!("版本匹配（{}），启动时加载", st.local_game_ver)
+                    },
                     t.success,
                 ),
                 InstallState::Missing => (
                     "未安装".to_string(),
-                    format!(
-                        "启动时自动安装 release {}",
-                        st.remote
-                            .as_ref()
-                            .map(|r| r.assembly_version.as_str())
-                            .unwrap_or("?")
-                    ),
+                    match st.remote.as_ref() {
+                        Some(r) => format!("启动时自动安装 release {}", r.assembly_version),
+                        None => "release 元数据不可用，需要联网才能安装".to_string(),
+                    },
                     t.warning,
                 ),
                 InstallState::OutOfDate => (
@@ -354,7 +380,7 @@ pub fn HomePage() -> Element {
             },
             None => (
                 "无法获取状态".to_string(),
-                "release 信息不可用，启动时将安全降级为不加载".to_string(),
+                "release 信息不可用，启动时将报错（可关闭本次加载开关）".to_string(),
                 t.warning,
             ),
         }

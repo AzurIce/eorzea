@@ -365,7 +365,7 @@ pub fn SettingsPage() -> Element {
                         }
                         p {
                             style: "font-size: 12px; color: {t.text_secondary}; margin-top: 4px;",
-                            "首次启用时启动游戏会按需下载 release；若游戏版本尚未被 release 支持，将自动降级为不加载 Dalamud。"
+                            "首次启用时启动游戏会按需下载 release；若准备失败（包括 release 尚未支持当前游戏版本）会直接报错、不启动游戏——可用主页的「本次启动加载 Dalamud」开关本次跳过。"
                         }
                     }
                 }

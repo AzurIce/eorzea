@@ -139,6 +139,8 @@ pub struct DalamudStatus {
     pub install_state: InstallState,
     /// release API 元数据（如可获取）
     pub remote: Option<DalamudVersionInfo>,
+    /// `remote` 是否来自本地安装的 `version.json`（本次远端请求失败）
+    pub remote_from_cache: bool,
     /// 本机已安装的 AssemblyVersion（Hooks 目录名）
     pub local_assembly_version: Option<String>,
     /// 本机安装目录
