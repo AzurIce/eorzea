@@ -142,11 +142,7 @@ fn check_sqpack_file(
 }
 
 /// 检查一个 sqpack 仓库目录（如 `game/sqpack/ffxiv`、`game/sqpack/ex1`）。
-fn check_sqpack_repo(
-    repo_dir: &Path,
-    relative: &str,
-    issues: &mut Vec<GameFileIssue>,
-) {
+fn check_sqpack_repo(repo_dir: &Path, relative: &str, issues: &mut Vec<GameFileIssue>) {
     let entries = match std::fs::read_dir(repo_dir) {
         Ok(e) => e,
         Err(_) => {
@@ -167,14 +163,23 @@ fn check_sqpack_repo(
             // 形如 010000.win32.dat0 / .dat1 / .dat2 ...
             let suffix = &name[idx + ".win32.dat".len()..];
             let is_first = suffix.parse::<u32>().map(|n| n == 0).unwrap_or(false);
-            check_sqpack_file(&entry.path(), &format!("{relative}/{name}"), is_first, issues);
+            check_sqpack_file(
+                &entry.path(),
+                &format!("{relative}/{name}"),
+                is_first,
+                issues,
+            );
             dat_count += 1;
         } else if name.contains(".win32.index") {
             check_sqpack_file(&entry.path(), &format!("{relative}/{name}"), true, issues);
         }
     }
 
-    debug!(repo = relative, dat_files = dat_count, "sqpack repo checked");
+    debug!(
+        repo = relative,
+        dat_files = dat_count,
+        "sqpack repo checked"
+    );
 }
 
 /// 执行游戏文件完整性校验，返回问题列表。
@@ -321,18 +326,27 @@ mod tests {
 
         let issues = verify_game(&root, 1);
         // 主程序缺失
-        assert!(issues.iter().any(|i| i.path.contains("ffxiv_dx11.exe")
-            && i.severity == IssueSeverity::Missing));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.path.contains("ffxiv_dx11.exe") && i.severity == IssueSeverity::Missing)
+        );
         // sqpack 仓库缺失
-        assert!(issues
-            .iter()
-            .any(|i| i.path.contains("sqpack/ffxiv") && i.severity == IssueSeverity::Missing));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.path.contains("sqpack/ffxiv") && i.severity == IssueSeverity::Missing)
+        );
         // 损坏的 dat（魔数错）
         std::fs::create_dir_all(root.join("game/sqpack/ffxiv")).unwrap();
         std::fs::write(root.join("game/sqpack/ffxiv/000000.win32.dat0"), b"garbage").unwrap();
         let issues2 = verify_game(&root, 1);
-        assert!(issues2.iter().any(|i| i.path.contains("000000.win32.dat0")
-            && i.severity == IssueSeverity::Corrupt));
+        assert!(
+            issues2
+                .iter()
+                .any(|i| i.path.contains("000000.win32.dat0")
+                    && i.severity == IssueSeverity::Corrupt)
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

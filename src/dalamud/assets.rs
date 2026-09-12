@@ -317,7 +317,11 @@ mod tests {
                 .trim()
                 .parse::<u32>()
                 .unwrap(),
-            path.file_name().unwrap().to_string_lossy().parse::<u32>().unwrap()
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .parse::<u32>()
+                .unwrap()
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

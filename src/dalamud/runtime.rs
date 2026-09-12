@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use tracing::{debug, info, warn};
 
-use super::updater::{runtime_dir_matches, DalamudError};
+use super::updater::{DalamudError, runtime_dir_matches};
 
 const HUAWEI_NUGET_BASE: &str =
     "https://repo.huaweicloud.com/artifactory/api/nuget/v3/nuget-remote";
@@ -156,9 +156,8 @@ async fn download_nupkg(
             }
         }
     }
-    Err(last_error.unwrap_or_else(|| {
-        DalamudError::Network("runtime package mirrors exhausted".into())
-    }))
+    Err(last_error
+        .unwrap_or_else(|| DalamudError::Network("runtime package mirrors exhausted".into())))
 }
 
 async fn download_to_file(
@@ -247,9 +246,7 @@ fn extract_zip_prefix(zip_path: &Path, dest: &Path, prefix: &str) -> Result<(), 
         let name = entry.name().replace('\\', "/");
         let name_lower = name.to_ascii_lowercase();
         let prefix_with_slash = format!("{prefix}/");
-        if entry.is_dir()
-            || (name_lower != prefix && !name_lower.starts_with(&prefix_with_slash))
-        {
+        if entry.is_dir() || (name_lower != prefix && !name_lower.starts_with(&prefix_with_slash)) {
             continue;
         }
         let rel = name[prefix.len()..].trim_start_matches('/');
@@ -258,9 +255,12 @@ fn extract_zip_prefix(zip_path: &Path, dest: &Path, prefix: &str) -> Result<(), 
         }
         let rel_path = Path::new(rel);
         if rel_path.is_absolute()
-            || rel_path
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir))
+            || rel_path.components().any(|c| {
+                matches!(
+                    c,
+                    std::path::Component::ParentDir | std::path::Component::RootDir
+                )
+            })
         {
             return Err(DalamudError::Integrity(format!(
                 "unsafe runtime zip entry: {name}"
@@ -324,23 +324,29 @@ mod tests {
         let zip_path = dir.join("ok.nupkg");
         let file = std::fs::File::create(&zip_path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        zip.start_file("runtimes/win-x64/native/hostfxr.dll", zip::write::SimpleFileOptions::default())
-            .unwrap();
+        zip.start_file(
+            "runtimes/win-x64/native/hostfxr.dll",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
         zip.write_all(b"hostfxr").unwrap();
-        zip.start_file("runtimes/win-x64/lib/net10.0/Core.dll", zip::write::SimpleFileOptions::default())
-            .unwrap();
+        zip.start_file(
+            "runtimes/win-x64/lib/net10.0/Core.dll",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
         zip.write_all(b"core").unwrap();
-        zip.start_file("unrelated/file.txt", zip::write::SimpleFileOptions::default())
-            .unwrap();
+        zip.start_file(
+            "unrelated/file.txt",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
         zip.write_all(b"skip").unwrap();
         zip.finish().unwrap();
 
         let out = dir.join("out");
         extract_zip_prefix(&zip_path, &out, "runtimes/win-x64/native/").unwrap();
-        assert_eq!(
-            std::fs::read(out.join("hostfxr.dll")).unwrap(),
-            b"hostfxr"
-        );
+        assert_eq!(std::fs::read(out.join("hostfxr.dll")).unwrap(), b"hostfxr");
         assert!(!out.join("unrelated").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -352,8 +358,11 @@ mod tests {
         let zip_path = dir.join("bad.nupkg");
         let file = std::fs::File::create(&zip_path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        zip.start_file("runtimes/win-x64/native/../evil.dll", zip::write::SimpleFileOptions::default())
-            .unwrap();
+        zip.start_file(
+            "runtimes/win-x64/native/../evil.dll",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
         zip.write_all(b"evil").unwrap();
         zip.finish().unwrap();
 
@@ -371,11 +380,10 @@ mod tests {
     async fn ensure_runtime_real() {
         let dir = std::env::temp_dir().join(format!("xl-rs-runtime-real-{}", std::process::id()));
         let client = reqwest::Client::new();
-        let path = ensure_runtime(&client, &dir, "10.0.1", |_, _| {}).await.unwrap();
+        let path = ensure_runtime(&client, &dir, "10.0.1", |_, _| {})
+            .await
+            .unwrap();
         assert!(runtime_layout_ok(&path, "10.0.1"));
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-
-
 }

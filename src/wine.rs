@@ -377,8 +377,7 @@ impl WineTool {
         #[cfg(target_os = "macos")]
         const WINE_URL: &str = "https://s3.ffxiv.wang/xlcore/deps/wine/osx/xom-4.17.1/wine.tar.gz";
         #[cfg(not(target_os = "macos"))]
-        const WINE_URL: &str =
-            "https://s3.ffxiv.wang/xlcore/deps/wine/ubuntu/wine-xiv-staging-fsync-git-ubuntu-8.5.r4.g4211bac7.tar.xz";
+        const WINE_URL: &str = "https://s3.ffxiv.wang/xlcore/deps/wine/ubuntu/wine-xiv-staging-fsync-git-ubuntu-8.5.r4.g4211bac7.tar.xz";
 
         let client = reqwest::Client::new();
         let response = client.get(WINE_URL).send().await.map_err(|e| {
@@ -857,7 +856,10 @@ mod tests {
         assert_eq!(env["WINEPREFIX"], "/fake/prefix");
         assert_eq!(env["WINEARCH"], "win64");
         #[cfg(target_os = "macos")]
-        assert_eq!(env["WINEDLLOVERRIDES"], "msquic=,mscoree=n,b;d3d11=n;dxgi=n,b");
+        assert_eq!(
+            env["WINEDLLOVERRIDES"],
+            "msquic=,mscoree=n,b;d3d11=n;dxgi=n,b"
+        );
         #[cfg(not(target_os = "macos"))]
         assert_eq!(
             env["WINEDLLOVERRIDES"],
@@ -898,7 +900,10 @@ mod tests {
         assert_eq!(env["WINEDEBUG"], "+seh");
         // DXVK 关闭 → wined3d = b，且无 DXVK_* 变量
         #[cfg(target_os = "macos")]
-        assert_eq!(env["WINEDLLOVERRIDES"], "msquic=,mscoree=n,b;d3d11=b;dxgi=n,b");
+        assert_eq!(
+            env["WINEDLLOVERRIDES"],
+            "msquic=,mscoree=n,b;d3d11=b;dxgi=n,b"
+        );
         #[cfg(not(target_os = "macos"))]
         assert_eq!(
             env["WINEDLLOVERRIDES"],

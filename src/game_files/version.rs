@@ -135,8 +135,7 @@ mod tests {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         // 带进程号：Windows 的 Temp 目录持久存在，固定名会撞上上次运行
         // 留下的文件，让"missing 返回 base"类断言随机失败。
-        std::env::temp_dir()
-            .join(format!("xl-rs-test-{}-{}", std::process::id(), n))
+        std::env::temp_dir().join(format!("xl-rs-test-{}-{}", std::process::id(), n))
     }
 
     #[test]

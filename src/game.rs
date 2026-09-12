@@ -1,6 +1,6 @@
 use crate::config::WineSettings;
 #[cfg(not(target_os = "windows"))]
-use crate::wine::{build_launch_env, WineTool};
+use crate::wine::{WineTool, build_launch_env};
 use eorzea_auth::SdoArea;
 use std::path::PathBuf;
 use tracing::{debug, error, info, instrument, warn};
@@ -676,14 +676,18 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_validate_wine_game_path() {
-        assert!(validate_wine_game_path(std::path::Path::new(
-            "/home/user/Games/ffxiv/game/ffxiv_dx11.exe"
-        ))
-        .is_ok());
-        assert!(validate_wine_game_path(std::path::Path::new(
-            "/home/user/Games/最终幻想XIV/game/ffxiv_dx11.exe"
-        ))
-        .is_err());
+        assert!(
+            validate_wine_game_path(std::path::Path::new(
+                "/home/user/Games/ffxiv/game/ffxiv_dx11.exe"
+            ))
+            .is_ok()
+        );
+        assert!(
+            validate_wine_game_path(std::path::Path::new(
+                "/home/user/Games/最终幻想XIV/game/ffxiv_dx11.exe"
+            ))
+            .is_err()
+        );
     }
 }
 

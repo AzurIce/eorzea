@@ -11,7 +11,7 @@ use std::process::Command;
 use tracing::{debug, info};
 
 use super::model::{
-    build_injector_launch_args, DalamudLoadMethod, DalamudStartInfo, InjectorResult,
+    DalamudLoadMethod, DalamudStartInfo, InjectorResult, build_injector_launch_args,
 };
 use crate::wine::{WineError, WineTool};
 

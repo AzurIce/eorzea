@@ -1,9 +1,9 @@
+use eorzea_auth::sdo::SdoAuth;
+use eorzea_lib::launcher::Launcher;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing::{error, info};
-use eorzea_auth::sdo::SdoAuth;
-use eorzea_lib::launcher::Launcher;
 
 fn prompt(label: &str) -> String {
     print!("{}: ", label);
@@ -56,10 +56,17 @@ async fn main() {
         }
         "2" => {
             // 请求二维码
-            let qr = launcher.request_qr_code().await.expect("request_qr_code failed");
+            let qr = launcher
+                .request_qr_code()
+                .await
+                .expect("request_qr_code failed");
             let qr_path = "/tmp/xiv_qr.png";
             std::fs::write(qr_path, qr.image_data()).unwrap();
-            println!("\nQR image saved to {} ({} bytes)", qr_path, qr.image_data().len());
+            println!(
+                "\nQR image saved to {} ({} bytes)",
+                qr_path,
+                qr.image_data().len()
+            );
             println!("Please scan with Daoyu APP...\n");
 
             // 等待扫码（300秒超时）

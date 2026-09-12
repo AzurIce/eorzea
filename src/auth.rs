@@ -15,8 +15,8 @@
 //!
 //! 账号唯一标识为 `snda_id`（扫码/密码/自动登录都能拿到）。
 
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
 /// 账号记录。
@@ -77,7 +77,11 @@ impl AuthConfig {
 
     /// 更新（或新增）账号记录，并可选设为默认。
     pub fn upsert(&mut self, account: Account, make_default: bool) {
-        match self.accounts.iter_mut().find(|a| a.snda_id == account.snda_id) {
+        match self
+            .accounts
+            .iter_mut()
+            .find(|a| a.snda_id == account.snda_id)
+        {
             Some(existing) => {
                 if account.username.is_some() {
                     existing.username = account.username.clone();
@@ -234,7 +238,14 @@ mod tests {
     #[test]
     fn test_default_account_matches_username_or_snda_id() {
         let mut cfg = AuthConfig::default();
-        cfg.upsert(Account { snda_id: "1".into(), username: Some("user1".into()), auto_login_session_key: Some("k1".into()) }, true);
+        cfg.upsert(
+            Account {
+                snda_id: "1".into(),
+                username: Some("user1".into()),
+                auto_login_session_key: Some("k1".into()),
+            },
+            true,
+        );
         // 老配置兼容：default 存 snda_id 也能找到
         cfg.default_account = Some("1".into());
         assert_eq!(cfg.default_account().unwrap().display_name(), "user1");
@@ -243,19 +254,43 @@ mod tests {
     #[test]
     fn test_upsert_existing_keeps_default() {
         let mut cfg = AuthConfig::default();
-        cfg.upsert(Account { snda_id: "1".into(), username: Some("a".into()), auto_login_session_key: Some("k1".into()) }, true);
-        cfg.upsert(Account { snda_id: "1".into(), username: None, auto_login_session_key: Some("k2".into()) }, false);
+        cfg.upsert(
+            Account {
+                snda_id: "1".into(),
+                username: Some("a".into()),
+                auto_login_session_key: Some("k1".into()),
+            },
+            true,
+        );
+        cfg.upsert(
+            Account {
+                snda_id: "1".into(),
+                username: None,
+                auto_login_session_key: Some("k2".into()),
+            },
+            false,
+        );
         assert_eq!(cfg.accounts.len(), 1);
         // default 存 username（首次设为默认时）
         assert_eq!(cfg.default_account.as_deref(), Some("a"));
-        assert_eq!(cfg.accounts[0].auto_login_session_key.as_deref(), Some("k2"));
+        assert_eq!(
+            cfg.accounts[0].auto_login_session_key.as_deref(),
+            Some("k2")
+        );
         assert_eq!(cfg.accounts[0].username.as_deref(), Some("a")); // 保留旧 username
     }
 
     #[test]
     fn test_remove_default() {
         let mut cfg = AuthConfig::default();
-        cfg.upsert(Account { snda_id: "1".into(), username: None, auto_login_session_key: None }, true);
+        cfg.upsert(
+            Account {
+                snda_id: "1".into(),
+                username: None,
+                auto_login_session_key: None,
+            },
+            true,
+        );
         assert!(cfg.remove("1"));
         assert!(cfg.default_account.is_none());
         assert!(!cfg.remove("1"));

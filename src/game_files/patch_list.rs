@@ -24,7 +24,12 @@ pub fn parse_patch_list(text: &str) -> Result<Vec<PatchListEntry>, PatchListPars
 
     let mut output = Vec::new();
 
-    for (i, line) in lines.iter().enumerate().take(lines.len() - 2).skip(START_OFFSET) {
+    for (i, line) in lines
+        .iter()
+        .enumerate()
+        .take(lines.len() - 2)
+        .skip(START_OFFSET)
+    {
         let line = line.trim_end_matches('\r');
         if line.is_empty() {
             continue;
@@ -48,13 +53,14 @@ pub fn parse_patch_list(text: &str) -> Result<Vec<PatchListEntry>, PatchListPars
 
         // 9 字段 = 游戏补丁（带 hash），6 字段 = boot 补丁（无 hash）
         if fields.len() == 9 {
-            let hash_block_size = fields[6]
-                .parse::<u64>()
-                .map_err(|e| PatchListParseError::BadBlockSize {
-                    line: i + 1,
-                    value: fields[6].to_string(),
-                    source: e,
-                })?;
+            let hash_block_size =
+                fields[6]
+                    .parse::<u64>()
+                    .map_err(|e| PatchListParseError::BadBlockSize {
+                        line: i + 1,
+                        value: fields[6].to_string(),
+                        source: e,
+                    })?;
             let hashes = fields[7].split(',').map(|s| s.to_string()).collect();
             output.push(PatchListEntry {
                 version,
@@ -74,9 +80,7 @@ pub fn parse_patch_list(text: &str) -> Result<Vec<PatchListEntry>, PatchListPars
                 length,
             });
         } else {
-            return Err(PatchListParseError::FieldCount {
-                line: i + 1,
-            });
+            return Err(PatchListParseError::FieldCount { line: i + 1 });
         }
     }
 

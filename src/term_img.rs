@@ -17,12 +17,14 @@ use tracing::debug;
 
 /// 检测终端是否支持 kitty graphics protocol。
 pub fn kitty_supported() -> bool {
-    std::env::var_os("KITTY_WINDOW_ID").is_some() || std::env::var("TERM").ok().as_deref() == Some("kitty")
+    std::env::var_os("KITTY_WINDOW_ID").is_some()
+        || std::env::var("TERM").ok().as_deref() == Some("kitty")
 }
 
 /// 检测终端是否支持 iTerm2 内联图片（OSC 1337）。
 pub fn iterm_supported() -> bool {
-    std::env::var_os("ITERM_SESSION_ID").is_some() || std::env::var("TERM_PROGRAM").ok().as_deref() == Some("iTerm.app")
+    std::env::var_os("ITERM_SESSION_ID").is_some()
+        || std::env::var("TERM_PROGRAM").ok().as_deref() == Some("iTerm.app")
 }
 
 /// 从 PNG 字节解析尺寸（IHDR 头，宽高为大端 u32）。

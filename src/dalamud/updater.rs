@@ -64,7 +64,10 @@ pub(super) fn runtime_dir_matches(root: &Path, expected_version: Option<&str>) -
     }
     match expected_version {
         Some(version) => {
-            root.join("host/fxr").join(version).join("hostfxr.dll").is_file()
+            root.join("host/fxr")
+                .join(version)
+                .join("hostfxr.dll")
+                .is_file()
                 && root
                     .join("shared/Microsoft.NETCore.App")
                     .join(version)
@@ -306,13 +309,13 @@ fn verify_release_hashes(
 }
 
 /// 已安装 release 是否通过上游完整性校验。
-pub(crate) fn release_install_is_valid(
-    install_dir: &Path,
-    expected_manifest_hash: &str,
-) -> bool {
+pub(crate) fn release_install_is_valid(install_dir: &Path, expected_manifest_hash: &str) -> bool {
     for required in ["Dalamud.Injector.exe", "Dalamud.dll", "ImGuiScene.dll"] {
         if !install_dir.join(required).is_file() {
-            warn!(file = required, "installed Dalamud release missing required file");
+            warn!(
+                file = required,
+                "installed Dalamud release missing required file"
+            );
             return false;
         }
     }

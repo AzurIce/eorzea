@@ -23,14 +23,14 @@ pub mod verify;
 pub mod version;
 pub mod zpatch;
 
+use eorzea_auth::{PatchListEntry, SdoArea};
 use std::path::Path;
 use tracing::{debug, info, instrument, warn};
-use eorzea_auth::{PatchListEntry, SdoArea};
 
 use self::patch_manager::{
-    download_patches, patch_cache_path, verify_patch_sha1, DownloadSummary, PatchDownloadError,
+    DownloadSummary, PatchDownloadError, download_patches, patch_cache_path, verify_patch_sha1,
 };
-use self::version::{build_version_report, read_local_versions, LocalVersions};
+use self::version::{LocalVersions, build_version_report, read_local_versions};
 use self::zpatch::ZiPatchError;
 
 /// SDO 补丁检查 User-Agent（C# `Constants.PatcherUserAgent`，国服硬编码）。
@@ -222,13 +222,10 @@ impl GameFileManager {
             .map(|s| s.to_string())
             .ok_or_else(|| GameFileError::MissingUniqueId { url: url.clone() })?;
 
-        let text = response
-            .text()
-            .await
-            .map_err(|e| GameFileError::Body {
-                url: url.clone(),
-                source: e,
-            })?;
+        let text = response.text().await.map_err(|e| GameFileError::Body {
+            url: url.clone(),
+            source: e,
+        })?;
 
         // 空响应体 → 已是最新
         if text.trim().is_empty() {
@@ -237,8 +234,8 @@ impl GameFileManager {
         }
 
         // 解析 TSV 补丁列表
-        let patches = patch_list::parse_patch_list(&text)
-            .map_err(|e| GameFileError::Parse { source: e })?;
+        let patches =
+            patch_list::parse_patch_list(&text).map_err(|e| GameFileError::Parse { source: e })?;
 
         debug!(count = patches.len(), "game patching is needed");
         Ok(CheckResult::NeedsPatch { patches, unique_id })
@@ -254,9 +251,15 @@ impl GameFileManager {
         concurrency: usize,
         mut on_progress: impl FnMut(u64, u64),
     ) -> Result<DownloadSummary, GameFileError> {
-        download_patches(&self.client, patches, patch_dir, concurrency, &mut on_progress)
-            .await
-            .map_err(GameFileError::Download)
+        download_patches(
+            &self.client,
+            patches,
+            patch_dir,
+            concurrency,
+            &mut on_progress,
+        )
+        .await
+        .map_err(GameFileError::Download)
     }
 
     /// 按顺序应用已下载的补丁到游戏目录。
@@ -415,10 +418,8 @@ mod tests {
 
     #[tokio::test]
     async fn install_rejects_mismatched_cached_patch_without_advancing_version() {
-        let root = std::env::temp_dir().join(format!(
-            "xl-rs-install-identity-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("xl-rs-install-identity-{}", std::process::id()));
         let patch_dir = root.join("patches");
         let game_root = root.join("game-root");
         std::fs::create_dir_all(&patch_dir).unwrap();

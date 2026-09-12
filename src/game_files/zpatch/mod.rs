@@ -147,7 +147,10 @@ pub enum SqpkCommand {
 #[derive(Debug)]
 pub enum ZiPatchChunk {
     FileHeader(FileHeaderChunk),
-    ApplyOption { option_kind: u32, value: bool },
+    ApplyOption {
+        option_kind: u32,
+        value: bool,
+    },
     Sqpk(SqpkCommand),
     AddDirectory(String),
     DeleteDirectory(String),
@@ -164,17 +167,15 @@ impl fmt::Display for ZiPatchChunk {
                 write!(f, "APLY:{}:{}", option_kind, value)
             }
             ZiPatchChunk::Sqpk(cmd) => match cmd {
-                SqpkCommand::TargetInfo { platform } => write!(f, "SQPK:T:{}", platform.file_suffix()),
+                SqpkCommand::TargetInfo { platform } => {
+                    write!(f, "SQPK:T:{}", platform.file_suffix())
+                }
                 SqpkCommand::File {
                     operation,
                     file_offset,
                     target_path,
                     ..
-                } => write!(
-                    f,
-                    "SQPK:F:{:?}:{file_offset}:{target_path}",
-                    operation
-                ),
+                } => write!(f, "SQPK:F:{:?}:{file_offset}:{target_path}", operation),
                 SqpkCommand::AddData { block_offset, .. } => write!(f, "SQPK:A:@{block_offset}"),
                 SqpkCommand::DeleteData { block_offset, .. } => {
                     write!(f, "SQPK:D:@{block_offset}")
@@ -388,7 +389,9 @@ fn read_compressed_block(reader: &mut Reader) -> Result<CompressedBlock, ZiPatch
         & !0x7F; // C# 0xFFFF_FF80（i32 = -128），清低 7 位
 
     let data = if is_compressed {
-        reader.read_bytes((block_length - header_size) as usize)?.to_vec()
+        reader
+            .read_bytes((block_length - header_size) as usize)?
+            .to_vec()
     } else {
         let data = reader.read_bytes(decompressed_size as usize)?.to_vec();
         reader.skip((block_length - header_size - decompressed_size) as usize)?;
@@ -619,7 +622,9 @@ fn parse_chunk_data(chunk_type: &[u8], content: &[u8]) -> Result<ZiPatchChunk, Z
         "DELD" => {
             let mut reader = Reader::new(body);
             let len = reader.read_u32_be()?;
-            Ok(ZiPatchChunk::DeleteDirectory(reader.read_fixed_string(len)?))
+            Ok(ZiPatchChunk::DeleteDirectory(
+                reader.read_fixed_string(len)?,
+            ))
         }
         "EOF_" => Ok(ZiPatchChunk::EndOfFile),
         "XXXX" | "APFS" => Ok(ZiPatchChunk::Ignored),
@@ -786,7 +791,9 @@ mod tests {
         assert!(matches!(&chunks[0], ZiPatchChunk::FileHeader(h) if h.version == 2));
         assert!(matches!(
             &chunks[1],
-            ZiPatchChunk::Sqpk(SqpkCommand::TargetInfo { platform: Platform::Win32 })
+            ZiPatchChunk::Sqpk(SqpkCommand::TargetInfo {
+                platform: Platform::Win32
+            })
         ));
         assert!(matches!(chunks[2], ZiPatchChunk::EndOfFile));
     }

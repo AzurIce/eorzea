@@ -7,10 +7,10 @@
 //!
 //! 补丁**应用**（IndexedZiPatch）尚未实现，见 `crate::game_files` 模块说明。
 
+use eorzea_auth::PatchListEntry;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
-use eorzea_auth::PatchListEntry;
 
 /// 并发下载槽位数，与 C# `PatchManager.MAX_DOWNLOADS_AT_ONCE` 一致。
 pub const MAX_DOWNLOADS_AT_ONCE: usize = 4;
@@ -247,10 +247,13 @@ async fn download_one(
     #[cfg(target_arch = "wasm32")]
     {
         use std::io::Write;
-        let body = response.bytes().await.map_err(|e| PatchDownloadError::Body {
-            url: entry.url.clone(),
-            source: e,
-        })?;
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| PatchDownloadError::Body {
+                url: entry.url.clone(),
+                source: e,
+            })?;
         file.write_all(&body).map_err(|e| PatchDownloadError::Io {
             path: dest.clone(),
             source: e,
@@ -450,11 +453,15 @@ mod tests {
         let first_path = patch_cache_path(dir, &first);
         let second_path = patch_cache_path(dir, &second);
         assert_ne!(first_path, second_path);
-        assert!(first_path
-            .to_string_lossy()
-            .contains("D2026.07.16.0001.0000.patch"));
-        assert!(second_path
-            .to_string_lossy()
-            .contains("D2026.07.16.0001.0000.patch"));
+        assert!(
+            first_path
+                .to_string_lossy()
+                .contains("D2026.07.16.0001.0000.patch")
+        );
+        assert!(
+            second_path
+                .to_string_lossy()
+                .contains("D2026.07.16.0001.0000.patch")
+        );
     }
 }

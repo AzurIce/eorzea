@@ -8,7 +8,10 @@ use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-use super::{normalize_path, sqpack_dat_path, sqpack_index_path, FileOperation, Platform, SqpkCommand, ZiPatchChunk, ZiPatchError};
+use super::{
+    FileOperation, Platform, SqpkCommand, ZiPatchChunk, ZiPatchError, normalize_path,
+    sqpack_dat_path, sqpack_index_path,
+};
 
 /// 应用配置。
 pub struct ApplyContext {
@@ -101,28 +104,36 @@ impl ApplyContext {
                 source: e,
             })?;
         // 头部：i32LE 128, i32LE 0, i32LE 0, i64LE (blockNumber-1), i32LE 0
-        stream.write_all(&(1i32 << 7).to_le_bytes()).map_err(|e| ZiPatchError::Io {
-            path: String::new(),
-            source: e,
-        })?;
-        stream.write_all(&0i32.to_le_bytes()).map_err(|e| ZiPatchError::Io {
-            path: String::new(),
-            source: e,
-        })?;
-        stream.write_all(&0i32.to_le_bytes()).map_err(|e| ZiPatchError::Io {
-            path: String::new(),
-            source: e,
-        })?;
+        stream
+            .write_all(&(1i32 << 7).to_le_bytes())
+            .map_err(|e| ZiPatchError::Io {
+                path: String::new(),
+                source: e,
+            })?;
+        stream
+            .write_all(&0i32.to_le_bytes())
+            .map_err(|e| ZiPatchError::Io {
+                path: String::new(),
+                source: e,
+            })?;
+        stream
+            .write_all(&0i32.to_le_bytes())
+            .map_err(|e| ZiPatchError::Io {
+                path: String::new(),
+                source: e,
+            })?;
         stream
             .write_all(&(block_number as i64 - 1).to_le_bytes())
             .map_err(|e| ZiPatchError::Io {
                 path: String::new(),
                 source: e,
             })?;
-        stream.write_all(&0i32.to_le_bytes()).map_err(|e| ZiPatchError::Io {
-            path: String::new(),
-            source: e,
-        })?;
+        stream
+            .write_all(&0i32.to_le_bytes())
+            .map_err(|e| ZiPatchError::Io {
+                path: String::new(),
+                source: e,
+            })?;
         Ok(())
     }
 
@@ -138,10 +149,12 @@ impl ApplyContext {
                 source: e,
             })?;
         } else {
-            stream.write_all(&block.data).map_err(|e| ZiPatchError::Io {
-                path: String::new(),
-                source: e,
-            })?;
+            stream
+                .write_all(&block.data)
+                .map_err(|e| ZiPatchError::Io {
+                    path: String::new(),
+                    source: e,
+                })?;
         }
         Ok(())
     }
@@ -360,10 +373,12 @@ impl ApplyContext {
                         path: rel.clone(),
                         source: e,
                     })?;
-                stream.write_all(header_data).map_err(|e| ZiPatchError::Io {
-                    path: rel.clone(),
-                    source: e,
-                })?;
+                stream
+                    .write_all(header_data)
+                    .map_err(|e| ZiPatchError::Io {
+                        path: rel.clone(),
+                        source: e,
+                    })?;
                 Ok(())
             }
 

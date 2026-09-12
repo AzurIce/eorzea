@@ -16,10 +16,10 @@ pub mod runner;
 pub mod runtime;
 pub mod updater;
 
-pub use model::{
-    build_injector_launch_args, DalamudLoadMethod, DalamudSettings, DalamudStartInfo,
-    DalamudStatus, DalamudVersionInfo, InstallState,
-};
 pub use assets::ensure_assets;
+pub use model::{
+    DalamudLoadMethod, DalamudSettings, DalamudStartInfo, DalamudStatus, DalamudVersionInfo,
+    InstallState, build_injector_launch_args,
+};
 pub use runtime::ensure_runtime;
-pub use updater::{fetch_version_info, local_game_version, status, DalamudError};
+pub use updater::{DalamudError, fetch_version_info, local_game_version, status};
