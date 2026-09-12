@@ -136,7 +136,7 @@
 - [x] **Dalamud 启动链路纠错**：`build_dalamud_config` 从 `ffxiv_dx11.exe` 路径正确推导游戏根目录（此前把 exe 当根目录导致版本恒不匹配）；路径对齐上游 storage root（`dalamudConfig.json`/`logs`/`installedPlugins`/`dalamudAssets`，不再嵌套 `dalamud/`）；runner 宿主 `current_dir` 用 Unix Injector 目录（此前误传 `Z:\...`）；Injector stderr 后台排空避免管道阻塞；检测 Windows .NET runtime（本项目或 `~/.xlcore_cn` 版本匹配 fallback）与配套 assets，缺失时安全降级；release 元数据不可用不再 panic；`eoz dalamud launch --no-dalamud` 不再被忽略
 - [ ] **阶段 2+**：Wine PID→Unix PID 映射、staging/beta、崩溃恢复（safe mode）
 - [x] **原生 Windows Dalamud 启动（2026-09-12）**：`launch_game` 的 `#[cfg(target_os = "windows")]` 分支支持 `config.dalamud` —— 原生运行 `Dalamud.Injector.exe`（无 winepath/`XL_WINEON*`/`WINEPREFIX`，路径直接传递，`DALAMUD_RUNTIME`/`DOTNET_ROOT` 指向原生 runtime 路径），对应 C# `WindowsDalamudRunner.cs`；`find_7z` 探测改用 `where`（Windows 无 `which`）；新增 `GameLaunchError::Dalamud` 变体。端到端注入未在真机验证
-- [ ] **Windows 收尾**：设置页在 Windows 上仍显示 Wine 配置项（启动时被忽略）；`game_files::version` 测试临时目录已加进程号避免 Windows Temp 残留串扰
+- [x] **Windows 收尾（2026-09-12）**：设置页已按平台隐藏 Wine 配置项（Windows 原生启动忽略）；`game_files::version` 测试临时目录已加进程号避免 Windows Temp 残留串扰 (resolved: 2026-09-12)
 - [x] **Injector 平台标记修正（2026-09-09）**：`runner.rs` 启动 Injector 时按平台设置 `XL_WINEONMAC`/`XL_WINEONLINUX`（此前无条件 `XL_WINEONLINUX`）
 - [ ] **macOS Dalamud 注入验证**：~~xom wine（CrossOver + Rosetta 跑 x64）下 Injector 注入未做端到端验证~~ 已验证可用（2026-09-10，macOS 26 + xom-4.17.1，Dalamud 15.0.3.3 注入成功）；新建 prefix 后的首次注入曾因初始化竞态失败，已由 `EnsurePrefix` 引导命令修复
 
@@ -179,10 +179,10 @@
 - [x] **主页 Dalamud 状态卡**：改为异步获取 release 元数据 + 安装/版本/runtime 状态，不再在 render 中同步读盘并显示误导性的“启动时自动校验/更新”
 - [x] **设置页补全**：新增 Dalamud section（enabled/load_method/track/delay/safe mode）与游戏路径即时校验、msync 开关；主页新增“本次启动加载 Dalamud”会话级开关
 - [x] **Web 预览调试入口（2026-09-12）**：`ui` 移入 lib、`main.rs` 双平台入口（桌面 dioxus-native / wasm dioxus-web），`dx serve --platform web` 浏览器调 UI；wasm 适配（tokio 去 net、reqwest 去 native-tls、rfd/spawn_blocking/chunk() 流式下载平台门控）
+- [x] **Wine UI 按平台隐藏**：Windows 原生启动不经 wine，设置页 Wine 区块与主页 Wine 状态卡整体隐藏（此前“未检测到可用 wine”像故障）；macOS 隐藏 Linux 专属的 esync/fsync/gamemode 开关（msync/DXVK 保留）；隐藏开关的草稿值保存时原样写回 (resolved: 2026-09-12)
 
 #### 待修 UI 问题（2026-09-12 web 预览 + 原生截图审查）
 
-- [ ] **Wine UI 在 Windows 上无意义**：Windows 直接启动游戏（`game.rs` 忽略 wine 参数），但设置页仍显示整块 Wine 配置（启动方式/Prefix/esync/fsync/msync/DXVK/gamemode），主页仪表盘也有 Wine 状态卡（“未检测到可用 wine”看起来像故障）。应按平台隐藏（Windows 全隐藏；macOS 隐藏 esync/fsync/gamemode 等 Linux 专属项）
 - [ ] **下拉框交互缺陷**：点击外部区域不关闭；账号/大区两个下拉可同时打开、弹层互相重叠
 - [ ] **blitz 下拉弹层层级**：原生 blitz 渲染器对 `position:absolute + z-index` 的层叠支持不完整，下拉列表可能被后续卡片遮挡（浏览器 web 渲染正常）；必要时改为不依赖 z-index 的展开方式（如文档流内联展开）
 - [ ] **blitz 字形缺字**：`▾`（下拉箭头）、`☾/☀`（主题切换）在 blitz 默认字体下渲染为方块（web 正常）；改用文字或 ASCII 替代

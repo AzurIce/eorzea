@@ -129,6 +129,12 @@ pub fn SettingsPage() -> Element {
         .unwrap_or(false);
     let game_hint_color = if draft_game_ok { t.success } else { t.warning };
 
+    // Wine 配置仅在依赖 wine 的平台展示：Windows 原生启动忽略 wine 参数；
+    // esync/fsync/gamemode 依赖 Linux 内核特性，macOS（wine/CrossOver）不支持，隐藏对应开关。
+    // 隐藏的开关不重置草稿值，保存时原样写回 config.toml。
+    let show_wine_section = cfg!(not(target_os = "windows"));
+    let show_linux_wine_toggles = cfg!(target_os = "linux");
+
     rsx! {
         div {
             style: "display: flex; flex-direction: column; gap: 24px;",
@@ -156,54 +162,60 @@ pub fn SettingsPage() -> Element {
                 }
             }
 
-            Section { title: "Wine",
-                SettingsRow { label: "启动方式",
-                    div {
-                        style: "display: flex; flex-direction: row; gap: 8px;",
-                        for (ty, name) in [
-                            (WineStartupType::Auto, "自动"),
-                            (WineStartupType::Managed, "托管"),
-                            (WineStartupType::Custom, "自定义"),
-                            (WineStartupType::System, "系统"),
-                        ] {
-                            {
-                                let active = startup_type() == ty;
-                                let bg = if active { t.active_bg } else { "transparent" };
-                                let fg = if active { t.text } else { t.text_secondary };
-                                rsx! {
-                                    button {
-                                        key: "{name}",
-                                        style: "padding: 6px 14px; border: 1px solid {t.border}; border-radius: 6px; background: {bg}; color: {fg}; font-size: 13px; cursor: pointer;",
-                                        onclick: move |_| startup_type.set(ty),
-                                        "{name}"
+            if show_wine_section {
+                Section { title: "Wine",
+                    SettingsRow { label: "启动方式",
+                        div {
+                            style: "display: flex; flex-direction: row; gap: 8px;",
+                            for (ty, name) in [
+                                (WineStartupType::Auto, "自动"),
+                                (WineStartupType::Managed, "托管"),
+                                (WineStartupType::Custom, "自定义"),
+                                (WineStartupType::System, "系统"),
+                            ] {
+                                {
+                                    let active = startup_type() == ty;
+                                    let bg = if active { t.active_bg } else { "transparent" };
+                                    let fg = if active { t.text } else { t.text_secondary };
+                                    rsx! {
+                                        button {
+                                            key: "{name}",
+                                            style: "padding: 6px 14px; border: 1px solid {t.border}; border-radius: 6px; background: {bg}; color: {fg}; font-size: 13px; cursor: pointer;",
+                                            onclick: move |_| startup_type.set(ty),
+                                            "{name}"
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
-                if startup_type() == WineStartupType::Custom {
-                    SettingsRow { label: "自定义路径",
-                        TextInput {
-                            placeholder: "wine64 可执行文件或含 wine64 的 bin 目录",
-                            value: custom_path,
+                    if startup_type() == WineStartupType::Custom {
+                        SettingsRow { label: "自定义路径",
+                            TextInput {
+                                placeholder: "wine64 可执行文件或含 wine64 的 bin 目录",
+                                value: custom_path,
+                            }
                         }
                     }
-                }
-                SettingsRow { label: "Prefix",
-                    TextInput {
-                        placeholder: "留空使用默认 ~/.eorzea/prefix",
-                        value: prefix,
+                    SettingsRow { label: "Prefix",
+                        TextInput {
+                            placeholder: "留空使用默认 ~/.eorzea/prefix",
+                            value: prefix,
+                        }
                     }
-                }
 
-                div {
-                    style: "display: flex; flex-direction: row; gap: 24px; margin-top: 4px; flex-wrap: wrap;",
-                    Checkbox { label: "esync", checked: esync }
-                    Checkbox { label: "fsync", checked: fsync }
-                    Checkbox { label: "msync", checked: msync }
-                    Checkbox { label: "DXVK", checked: dxvk }
-                    Checkbox { label: "gamemode", checked: gamemode }
+                    div {
+                        style: "display: flex; flex-direction: row; gap: 24px; margin-top: 4px; flex-wrap: wrap;",
+                        if show_linux_wine_toggles {
+                            Checkbox { label: "esync", checked: esync }
+                            Checkbox { label: "fsync", checked: fsync }
+                        }
+                        Checkbox { label: "msync", checked: msync }
+                        Checkbox { label: "DXVK", checked: dxvk }
+                        if show_linux_wine_toggles {
+                            Checkbox { label: "gamemode", checked: gamemode }
+                        }
+                    }
                 }
             }
 

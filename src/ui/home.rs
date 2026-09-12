@@ -363,19 +363,31 @@ pub fn HomePage() -> Element {
         }
     };
 
-    let wine_cfg = state.settings.read().clone();
-    let wine_startup = match wine_cfg.startup_type {
-        WineStartupType::Auto => "自动",
-        WineStartupType::Managed => "托管",
-        WineStartupType::Custom => "自定义",
-        WineStartupType::System => "系统",
-    };
-    // detect 只做本地探测（自定义路径 → 托管目录 → PATH），不会触发下载
-    let wine_tool = WineTool::detect(wine_cfg.custom_path.as_deref());
-    let wine_sub = match &wine_tool {
-        Some(w) if w.is_managed => format!("{}（托管）", w.wine64_path.display()),
-        Some(w) => format!("{}", w.wine64_path.display()),
-        None => "未检测到可用 wine".to_string(),
+    // Wine 状态卡仅在依赖 wine 的平台展示：Windows 原生启动忽略 wine 参数，
+    // 展示"未检测到可用 wine"会被误读为故障。
+    let wine_card = if cfg!(not(target_os = "windows")) {
+        let wine_cfg = state.settings.read().clone();
+        let wine_startup = match wine_cfg.startup_type {
+            WineStartupType::Auto => "自动",
+            WineStartupType::Managed => "托管",
+            WineStartupType::Custom => "自定义",
+            WineStartupType::System => "系统",
+        };
+        // detect 只做本地探测（自定义路径 → 托管目录 → PATH），不会触发下载
+        let wine_tool = WineTool::detect(wine_cfg.custom_path.as_deref());
+        let wine_sub = match &wine_tool {
+            Some(w) if w.is_managed => format!("{}（托管）", w.wine64_path.display()),
+            Some(w) => format!("{}", w.wine64_path.display()),
+            None => "未检测到可用 wine".to_string(),
+        };
+        rsx! {
+            StatusCard { title: "Wine",
+                p { style: "margin: 0; font-size: 13px; color: {t.text};", "启动方式：{wine_startup}" }
+                p { style: "margin: 4px 0 0 0; font-size: 12px; color: {t.text_secondary}; overflow-wrap: anywhere;", "{wine_sub}" }
+            }
+        }
+    } else {
+        rsx! {}
     };
 
     let update_is_busy = update_state.read().is_busy();
@@ -450,10 +462,7 @@ pub fn HomePage() -> Element {
                     p { style: "margin: 0; font-size: 13px; color: {dalamud_color};", "{dalamud_main}" }
                     p { style: "margin: 4px 0 0 0; font-size: 12px; color: {t.text_secondary}; overflow-wrap: anywhere;", "{dalamud_sub}" }
                 }
-                StatusCard { title: "Wine",
-                    p { style: "margin: 0; font-size: 13px; color: {t.text};", "启动方式：{wine_startup}" }
-                    p { style: "margin: 4px 0 0 0; font-size: 12px; color: {t.text_secondary}; overflow-wrap: anywhere;", "{wine_sub}" }
-                }
+                {wine_card}
             }
 
             // ── 游戏更新 ────────────────────────────────────────────────
