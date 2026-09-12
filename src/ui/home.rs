@@ -410,8 +410,9 @@ pub fn HomePage() -> Element {
             // ── 启动设置（紧凑单行）─────────────────────────────────────
             Section { title: "启动设置",
                 div {
-                    style: "display: flex; flex-direction: row; align-items: center; gap: 12px; flex-wrap: wrap;",
-                    span { style: "font-size: 14px; color: {t.text_secondary};", "账号" }
+                    // flex-start：下拉内联展开撑高行时，标签保持与按钮同顶对齐
+                    style: "display: flex; flex-direction: row; align-items: flex-start; gap: 12px; flex-wrap: wrap;",
+                    span { style: "font-size: 14px; color: {t.text_secondary}; padding: 8px 0;", "账号" }
                     div {
                         style: "width: 220px;",
                         Dropdown {
@@ -420,7 +421,7 @@ pub fn HomePage() -> Element {
                             placeholder: "请选择账号",
                         }
                     }
-                    span { style: "font-size: 14px; color: {t.text_secondary};", "大区" }
+                    span { style: "font-size: 14px; color: {t.text_secondary}; padding: 8px 0;", "大区" }
                     div {
                         style: "width: 220px;",
                         Dropdown {
@@ -545,8 +546,12 @@ fn StatusCard(title: &'static str, children: Element) -> Element {
 
 /// 自定义下拉框（blitz 暂不支持原生 `select`，用按钮 + 展开列表实现）。
 ///
-/// 注意：按钮用 `display: block` 撑满容器而不是 `width: 100%`——
-/// 后者在 content-box 下会叠加 padding/border 导致横向溢出。
+/// 注意：
+/// - 按钮用 `display: block` 撑满容器而不是 `width: 100%`——
+///   后者在 content-box 下会叠加 padding/border 导致横向溢出。
+/// - 展开列表走文档流内联展开（不用 `position: absolute + z-index`）：
+///   原生 blitz 渲染器对层叠上下文支持不完整，绝对定位的弹层会被
+///   文档序靠后的卡片遮挡；内联展开把下方内容顶开，两端渲染一致。
 #[component]
 fn Dropdown(
     items: Vec<(String, String)>,
@@ -564,7 +569,7 @@ fn Dropdown(
 
     rsx! {
         div {
-            style: "position: relative;",
+            style: "display: flex; flex-direction: column;",
             button {
                 style: "display: block; padding: 8px 12px; border: 1px solid {t.input_border}; border-radius: 6px; background: transparent; color: {t.text}; font-size: 14px; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;",
                 onclick: move |_| open.set(!open()),
@@ -572,7 +577,7 @@ fn Dropdown(
             }
             if open() {
                 div {
-                    style: "position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px; max-height: 240px; overflow-y: auto; background: {t.card_bg}; border: 1px solid {t.border}; border-radius: 6px; z-index: 10; padding: 4px;",
+                    style: "margin-top: 4px; max-height: 240px; overflow-y: auto; background: {t.card_bg}; border: 1px solid {t.border}; border-radius: 6px; padding: 4px;",
                     if items.is_empty() {
                         div {
                             style: "padding: 8px 12px; color: {t.text_secondary}; font-size: 13px;",

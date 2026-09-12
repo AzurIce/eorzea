@@ -180,11 +180,11 @@
 - [x] **设置页补全**：新增 Dalamud section（enabled/load_method/track/delay/safe mode）与游戏路径即时校验、msync 开关；主页新增“本次启动加载 Dalamud”会话级开关
 - [x] **Web 预览调试入口（2026-09-12）**：`ui` 移入 lib、`main.rs` 双平台入口（桌面 dioxus-native / wasm dioxus-web），`dx serve --platform web` 浏览器调 UI；wasm 适配（tokio 去 net、reqwest 去 native-tls、rfd/spawn_blocking/chunk() 流式下载平台门控）
 - [x] **Wine UI 按平台隐藏**：Windows 原生启动不经 wine，设置页 Wine 区块与主页 Wine 状态卡整体隐藏（此前“未检测到可用 wine”像故障）；macOS 隐藏 Linux 专属的 esync/fsync/gamemode 开关（msync/DXVK 保留）；隐藏开关的草稿值保存时原样写回 (resolved: 2026-09-12)
+- [x] **blitz 下拉弹层层级**：改为不依赖 `position:absolute + z-index` 的文档流内联展开（把下方内容顶开），原生 blitz 与 web 渲染一致，不再被后续卡片遮挡 (resolved: 2026-09-12)
 
 #### 待修 UI 问题（2026-09-12 web 预览 + 原生截图审查）
 
 - [ ] **下拉框交互缺陷**：点击外部区域不关闭；账号/大区两个下拉可同时打开、弹层互相重叠
-- [ ] **blitz 下拉弹层层级**：原生 blitz 渲染器对 `position:absolute + z-index` 的层叠支持不完整，下拉列表可能被后续卡片遮挡（浏览器 web 渲染正常）；必要时改为不依赖 z-index 的展开方式（如文档流内联展开）
 - [ ] **blitz 字形缺字**：`▾`（下拉箭头）、`☾/☀`（主题切换）在 blitz 默认字体下渲染为方块（web 正常）；改用文字或 ASCII 替代
 - [ ] **设置页长表单**：保存按钮在页面最底部，修改 Wine/Dalamud 后需滚到底才能保存；可考虑吸底保存栏
 - [ ] **状态栏长错误不换行**：错误信息（如“获取大区列表失败: …”）超长时单行溢出，无截断/换行处理
