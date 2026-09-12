@@ -578,6 +578,10 @@ fn Dropdown(
     rsx! {
         div {
             style: "display: flex; flex-direction: column;",
+            // 阻断冒泡：下拉内部（按钮切换/选项选择）的点击不触发根容器的
+            // 「点击外部收起」；点击其它下拉按钮时，其 onclick 直接替换
+            // open_dropdown，前一个自动收起（互斥不依赖根容器）
+            onclick: move |e: MouseEvent| e.stop_propagation(),
             button {
                 style: "display: block; padding: 8px 12px; border: 1px solid {t.input_border}; border-radius: 6px; background: transparent; color: {t.text}; font-size: 14px; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;",
                 onclick: move |_| {
@@ -587,9 +591,7 @@ fn Dropdown(
             }
             if is_open {
                 div {
-                    // relative + z-index 20：压过点击外部捕获层（z-index 5），
-                    // blitz 端仍保持文档流内联展开
-                    style: "position: relative; z-index: 20; margin-top: 4px; max-height: 240px; overflow-y: auto; background: {t.card_bg}; border: 1px solid {t.border}; border-radius: 6px; padding: 4px;",
+                    style: "margin-top: 4px; max-height: 240px; overflow-y: auto; background: {t.card_bg}; border: 1px solid {t.border}; border-radius: 6px; padding: 4px;",
                     if items.is_empty() {
                         div {
                             style: "padding: 8px 12px; color: {t.text_secondary}; font-size: 13px;",

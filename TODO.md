@@ -181,7 +181,7 @@
 - [x] **Web 预览调试入口（2026-09-12）**：`ui` 移入 lib、`main.rs` 双平台入口（桌面 dioxus-native / wasm dioxus-web），`dx serve --platform web` 浏览器调 UI；wasm 适配（tokio 去 net、reqwest 去 native-tls、rfd/spawn_blocking/chunk() 流式下载平台门控）
 - [x] **Wine UI 按平台隐藏**：Windows 原生启动不经 wine，设置页 Wine 区块与主页 Wine 状态卡整体隐藏（此前“未检测到可用 wine”像故障）；macOS 隐藏 Linux 专属的 esync/fsync/gamemode 开关（msync/DXVK 保留）；隐藏开关的草稿值保存时原样写回 (resolved: 2026-09-12)
 - [x] **blitz 下拉弹层层级**：改为不依赖 `position:absolute + z-index` 的文档流内联展开（把下方内容顶开），原生 blitz 与 web 渲染一致，不再被后续卡片遮挡 (resolved: 2026-09-12)
-- [x] **下拉框交互缺陷**：展开状态收进全局 `AppState.open_dropdown`（同时只允许一个展开，切 Tab 自动收起）；新增全屏透明捕获层，点击弹层外任意区域收起（blitz 端按文档序垫底、web 端 z-index 5 低于弹层的 20） (resolved: 2026-09-12)
+- [x] **下拉框交互缺陷**：展开状态收进全局 `AppState.open_dropdown`（同时只允许一个展开，切 Tab 自动收起）；点击弹层外区域收起走事件冒泡——根容器 onclick 收起、下拉容器 `stop_propagation` 阻断内部点击（全屏透明捕获层方案在 blitz 上会连弹层选项点击一并吞掉，已弃用） (resolved: 2026-09-12)
 - [x] **blitz 字形缺字**：下拉箭头 `▾` 改 ASCII `v`/`^`（随展开状态切换），主题切换 `☾/☀` 改纯文字「暗色主题/亮色主题」，原生 blitz 不再渲染为方块 (resolved: 2026-09-12)
 - [x] **设置页长表单**：保存按钮改为吸底保存栏（`position: sticky; bottom: 0` + 负 margin 横跨内容区），滚动任意位置都可直接保存；blitz 不支持 sticky 时退化为普通块 (resolved: 2026-09-12)
 - [x] **状态栏长错误不换行**：状态栏加 `overflow-wrap: anywhere` + `line-height: 1.5`，无空格长串（URL/路径/长错误）可断行，不再单行溢出窗口 (resolved: 2026-09-12)

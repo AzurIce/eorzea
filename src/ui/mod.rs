@@ -149,16 +149,10 @@ pub fn app() -> Element {
         style { "html, body {{ margin: 0; padding: 0; }}" }
         div {
             style: "display: flex; flex-direction: row; width: 100vw; height: 100vh; font-family: sans-serif; background: {t.page_bg}; color: {t.text};",
-
-            // 下拉展开时的全屏透明捕获层：点击弹层外任意区域收起。
-            // 文档序最先（blitz 按文档序绘制，位于底层）；web 端 z-index 5
-            // 压过普通内容、又低于弹层的 20，两端行为一致。
-            if state.open_dropdown.read().is_some() {
-                div {
-                    style: "position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; z-index: 5; background: transparent;",
-                    onclick: move |_| state.open_dropdown.set(None),
-                }
-            }
+            // 点击任意下拉外部区域收起展开的下拉：事件冒泡到根容器即收起
+            // （下拉容器内部用 stop_propagation 阻断，不依赖 CSS 层叠，
+            // web 与原生 blitz 行为一致）
+            onclick: move |_| state.open_dropdown.set(None),
 
             // 侧边栏导航
             div {
@@ -208,8 +202,7 @@ pub fn app() -> Element {
 
 #[component]
 fn NavButton(label: &'static str, target: Tab, tab: Signal<Tab>) -> Element {
-    let mut state = use_context::<AppState>();
-    let t = (state.theme)();
+    let t = (use_context::<AppState>().theme)();
     let active = tab() == target;
     let bg = if active { t.active_bg } else { "transparent" };
     let fg = if active { t.text } else { t.text_secondary };
@@ -217,11 +210,8 @@ fn NavButton(label: &'static str, target: Tab, tab: Signal<Tab>) -> Element {
         button {
             // display: block 撑满侧边栏；不要用 width: 100%（content-box 下会叠加 padding 溢出）
             style: "display: block; padding: 8px 12px; border: none; border-radius: 6px; background: {bg}; color: {fg}; font-size: 14px; text-align: left; cursor: pointer;",
-            onclick: move |_| {
-                // 离开页面时收起下拉，避免全局捕获层残留挡住新页面的点击
-                state.open_dropdown.set(None);
-                tab.set(target);
-            },
+            // 切页时冒泡到根容器的 onclick 会顺带收起展开的下拉
+            onclick: move |_| tab.set(target),
             "{label}"
         }
     }
