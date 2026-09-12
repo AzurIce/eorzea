@@ -1,15 +1,15 @@
 //! 主页：账号/大区选择、状态仪表盘（游戏位置/版本、Dalamud、Wine）、检查/更新游戏、启动游戏。
 
-use dioxus::prelude::*;
-use eorzea_auth::PatchListEntry;
 use crate::config::WineStartupType;
-use crate::dalamud::{updater, DalamudStatus, InstallState};
+use crate::dalamud::{DalamudStatus, InstallState, updater};
 use crate::game_files::{CheckResult, GameFileManager};
 use crate::wine::WineTool;
+use dioxus::prelude::*;
+use eorzea_auth::PatchListEntry;
 
 use super::login::{ActionButton, ErrorRow, Section};
 use super::settings::Checkbox;
-use super::AppState;
+use super::{AppState, Dropdown};
 
 /// 更新流程状态机。
 enum UpdateState {
@@ -208,10 +208,7 @@ pub fn HomePage() -> Element {
                                         },
                                         false,
                                     );
-                                    let _ = crate::auth::save(
-                                        &crate::auth::config_path(),
-                                        &cfg,
-                                    );
+                                    let _ = crate::auth::save(&crate::auth::config_path(), &cfg);
                                     state.auth_cfg.set(cfg);
                                     state.tokens.write().insert(t.snda_id.clone(), t.clone());
                                     Some(t)
@@ -405,7 +402,10 @@ pub fn HomePage() -> Element {
 
     rsx! {
         div {
-            style: "display: flex; flex-direction: column; gap: 16px;",
+            // 页面自持滚动（外层不滚，设置页的保存栏才能固定在滚动区外）
+            style: "flex: 1; min-height: 0; overflow-y: auto; padding: 24px 28px;",
+            div {
+                style: "display: flex; flex-direction: column; gap: 16px;",
 
             // ── 启动设置（紧凑单行）─────────────────────────────────────
             Section { title: "启动设置",
@@ -514,13 +514,14 @@ pub fn HomePage() -> Element {
             }
 
             // ── 启动游戏 ────────────────────────────────────────────────
-            div {
-                style: "display: flex; flex-direction: column; gap: 12px;",
-                Checkbox { label: "本次启动加载 Dalamud（插件）", checked: dalamud_this_launch }
-                button {
-                    style: "padding: 16px; border: none; border-radius: 8px; background: {launch_button_bg}; color: {launch_button_fg}; font-size: 18px; font-weight: 600; cursor: {launch_button_cursor};",
-                    onclick: launch_game,
-                    if launching() { "启动中…" } else { "启动游戏" }
+                div {
+                    style: "display: flex; flex-direction: column; gap: 12px;",
+                    Checkbox { label: "本次启动加载 Dalamud（插件）", checked: dalamud_this_launch }
+                    button {
+                        style: "padding: 16px; border: none; border-radius: 8px; background: {launch_button_bg}; color: {launch_button_fg}; font-size: 18px; font-weight: 600; cursor: {launch_button_cursor};",
+                        onclick: launch_game,
+                        if launching() { "启动中…" } else { "启动游戏" }
+                    }
                 }
             }
         }
@@ -542,81 +543,6 @@ fn StatusCard(title: &'static str, children: Element) -> Element {
             style: "flex: 1; min-width: 180px; background: {t.card_bg}; border: 1px solid {t.border}; border-radius: 8px; padding: 12px 16px;",
             p { style: "margin: 0 0 6px 0; font-size: 12px; color: {t.text_secondary};", "{title}" }
             {children}
-        }
-    }
-}
-
-/// 自定义下拉框（blitz 暂不支持原生 `select`，用按钮 + 展开列表实现）。
-///
-/// 注意：
-/// - 按钮用 `display: block` 撑满容器而不是 `width: 100%`——
-///   后者在 content-box 下会叠加 padding/border 导致横向溢出。
-/// - 展开列表走文档流内联展开（不用 `position: absolute + z-index`）：
-///   原生 blitz 渲染器对层叠上下文支持不完整，绝对定位的弹层会被
-///   文档序靠后的卡片遮挡；内联展开把下方内容顶开，两端渲染一致。
-/// - 展开状态收在全局 `AppState.open_dropdown`（`id` 区分实例）：
-///   同时只允许一个展开，且点击外部（`DropdownBackdrop` 捕获层）收起。
-#[component]
-fn Dropdown(
-    id: &'static str,
-    items: Vec<(String, String)>,
-    selected: Signal<Option<String>>,
-    placeholder: &'static str,
-) -> Element {
-    let mut open_dropdown = use_context::<AppState>().open_dropdown;
-    let is_open = open_dropdown() == Some(id);
-    let t = (use_context::<AppState>().theme)();
-    let current = selected
-        .read()
-        .as_ref()
-        .and_then(|id| items.iter().find(|(k, _)| k == id))
-        .map(|(_, name)| name.clone());
-    let current_label = current.unwrap_or_else(|| placeholder.to_string());
-    // 箭头用 ASCII v/^：▾ 在原生 blitz 默认字体下缺字渲染为方块
-    let arrow = if is_open { "^" } else { "v" };
-
-    rsx! {
-        div {
-            style: "display: flex; flex-direction: column;",
-            // 阻断冒泡：下拉内部（按钮切换/选项选择）的点击不触发根容器的
-            // 「点击外部收起」；点击其它下拉按钮时，其 onclick 直接替换
-            // open_dropdown，前一个自动收起（互斥不依赖根容器）
-            onclick: move |e: MouseEvent| e.stop_propagation(),
-            button {
-                style: "display: block; padding: 8px 12px; border: 1px solid {t.input_border}; border-radius: 6px; background: transparent; color: {t.text}; font-size: 14px; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;",
-                onclick: move |_| {
-                    open_dropdown.set(if is_open { None } else { Some(id) });
-                },
-                "{current_label} {arrow}"
-            }
-            if is_open {
-                div {
-                    style: "margin-top: 4px; max-height: 240px; overflow-y: auto; background: {t.card_bg}; border: 1px solid {t.border}; border-radius: 6px; padding: 4px;",
-                    if items.is_empty() {
-                        div {
-                            style: "padding: 8px 12px; color: {t.text_secondary}; font-size: 13px;",
-                            "暂无选项"
-                        }
-                    }
-                    for (id, name) in items {
-                        {
-                            let is_selected = selected.read().as_deref() == Some(id.as_str());
-                            let bg = if is_selected { t.active_bg } else { "transparent" };
-                            rsx! {
-                                button {
-                                    key: "{id}",
-                                    style: "display: block; padding: 8px 12px; border: none; border-radius: 4px; background: {bg}; color: {t.text}; font-size: 14px; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;",
-                                    onclick: move |_| {
-                                        selected.set(Some(id.clone()));
-                                        open_dropdown.set(None);
-                                    },
-                                    "{name}"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }

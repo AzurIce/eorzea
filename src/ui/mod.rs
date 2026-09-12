@@ -18,12 +18,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use dioxus::prelude::*;
-use eorzea_auth::SdoArea;
 use crate::auth::{self, AuthConfig};
 use crate::config::{self, WineSettings};
 use crate::dalamud::model::DalamudSettings;
 use crate::launcher::{LaunchToken, Launcher};
+use dioxus::prelude::*;
+use eorzea_auth::SdoArea;
 
 /// 顶部标签页。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,13 +148,20 @@ pub fn app() -> Element {
     let tab = state.tab;
     let t = (state.theme)();
     // 主题切换不用 ☀/☾：原生 blitz 默认字体缺字渲染为方块
-    let toggle_label = if t.dark { "亮色主题" } else { "暗色主题" };
+    let toggle_label = if t.dark {
+        "亮色主题"
+    } else {
+        "暗色主题"
+    };
     rsx! {
         // blitz 默认 UA 样式表带 `body { margin: 8px }`，窗口白底会从四周透出，
         // 这里注入静态样式重置（blitz 会把 mutation 插入的 <style> 编译为 author 样式表）
         style { "html, body {{ margin: 0; padding: 0; }}" }
         div {
-            style: "display: flex; flex-direction: row; width: 100vw; height: 100vh; font-family: sans-serif; background: {t.page_bg}; color: {t.text};",
+            // 字体栈显式指定中文字体：blitz 缺少逐字符回退，默认拉丁字体没有
+            // 全角标点（（）等），紧邻西文时渲染为方块；中文字体同时覆盖
+            // 拉丁字形与全角标点，两端一致
+            style: "display: flex; flex-direction: row; width: 100vw; height: 100vh; font-family: \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", \"Source Han Sans SC\", sans-serif; background: {t.page_bg}; color: {t.text};",
             // 点击任意下拉外部区域收起展开的下拉：事件冒泡到根容器即收起
             // （下拉容器内部用 stop_propagation 阻断，不依赖 CSS 层叠，
             // web 与原生 blitz 行为一致）
@@ -183,16 +190,14 @@ pub fn app() -> Element {
                 }
             }
 
-            // 右栏：页面内容 + 状态栏
+            // 右栏：页面内容 + 状态栏。
+            // 滚动由各页面自持（设置页需要把保存栏固定在滚动区外）
             div {
-                style: "flex: 1; display: flex; flex-direction: column; min-width: 0;",
-                div {
-                    style: "flex: 1; overflow-y: auto; padding: 24px 28px;",
-                    match tab() {
-                        Tab::Login => rsx! { login::LoginPage {} },
-                        Tab::Home => rsx! { home::HomePage {} },
-                        Tab::Settings => rsx! { settings::SettingsPage {} },
-                    }
+                style: "flex: 1; min-height: 0; display: flex; flex-direction: column; min-width: 0;",
+                match tab() {
+                    Tab::Login => rsx! { login::LoginPage {} },
+                    Tab::Home => rsx! { home::HomePage {} },
+                    Tab::Settings => rsx! { settings::SettingsPage {} },
                 }
 
                 // 状态栏。overflow-wrap: anywhere 让无空格长串（URL/路径）
@@ -219,6 +224,81 @@ fn NavButton(label: &'static str, target: Tab, tab: Signal<Tab>) -> Element {
             // 切页时冒泡到根容器的 onclick 会顺带收起展开的下拉
             onclick: move |_| tab.set(target),
             "{label}"
+        }
+    }
+}
+
+/// 自定义下拉框（blitz 暂不支持原生 `select`，用按钮 + 展开列表实现）。
+///
+/// 注意：
+/// - 按钮用 `display: block` 撑满容器而不是 `width: 100%`——
+///   后者在 content-box 下会叠加 padding/border 导致横向溢出。
+/// - 展开列表走文档流内联展开（不用 `position: absolute + z-index`）：
+///   原生 blitz 渲染器对层叠上下文支持不完整，绝对定位的弹层会被
+///   文档序靠后的卡片遮挡；内联展开把下方内容顶开，两端渲染一致。
+/// - 展开状态收在全局 `AppState.open_dropdown`（`id` 区分实例）：
+///   同时只允许一个展开，且点击外部（事件冒泡到根容器）收起。
+#[component]
+pub fn Dropdown(
+    id: &'static str,
+    items: Vec<(String, String)>,
+    selected: Signal<Option<String>>,
+    placeholder: &'static str,
+) -> Element {
+    let mut open_dropdown = use_context::<AppState>().open_dropdown;
+    let is_open = open_dropdown() == Some(id);
+    let t = (use_context::<AppState>().theme)();
+    let current = selected
+        .read()
+        .as_ref()
+        .and_then(|id| items.iter().find(|(k, _)| k == id))
+        .map(|(_, name)| name.clone());
+    let current_label = current.unwrap_or_else(|| placeholder.to_string());
+    // 箭头用 ASCII v/^：▾ 在原生 blitz 默认字体下缺字渲染为方块
+    let arrow = if is_open { "^" } else { "v" };
+
+    rsx! {
+        div {
+            style: "display: flex; flex-direction: column;",
+            // 阻断冒泡：下拉内部（按钮切换/选项选择）的点击不触发根容器的
+            // 「点击外部收起」；点击其它下拉按钮时，其 onclick 直接替换
+            // open_dropdown，前一个自动收起（互斥不依赖根容器）
+            onclick: move |e: MouseEvent| e.stop_propagation(),
+            button {
+                style: "display: block; padding: 8px 12px; border: 1px solid {t.input_border}; border-radius: 6px; background: transparent; color: {t.text}; font-size: 14px; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;",
+                onclick: move |_| {
+                    open_dropdown.set(if is_open { None } else { Some(id) });
+                },
+                "{current_label} {arrow}"
+            }
+            if is_open {
+                div {
+                    style: "margin-top: 4px; max-height: 240px; overflow-y: auto; background: {t.card_bg}; border: 1px solid {t.border}; border-radius: 6px; padding: 4px;",
+                    if items.is_empty() {
+                        div {
+                            style: "padding: 8px 12px; color: {t.text_secondary}; font-size: 13px;",
+                            "暂无选项"
+                        }
+                    }
+                    for (id, name) in items {
+                        {
+                            let is_selected = selected.read().as_deref() == Some(id.as_str());
+                            let bg = if is_selected { t.active_bg } else { "transparent" };
+                            rsx! {
+                                button {
+                                    key: "{id}",
+                                    style: "display: block; padding: 8px 12px; border: none; border-radius: 4px; background: {bg}; color: {t.text}; font-size: 14px; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;",
+                                    onclick: move |_| {
+                                        selected.set(Some(id.clone()));
+                                        open_dropdown.set(None);
+                                    },
+                                    "{name}"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -1,11 +1,11 @@
 //! 设置页：游戏目录、Wine 与 Dalamud 配置，保存写回 `config.toml`。
 
-use dioxus::prelude::*;
 use crate::config::{self, AppConfig, WineStartupType};
 use crate::dalamud::model::DalamudLoadMethod;
+use dioxus::prelude::*;
 
 use super::login::{ActionButton, GhostButton, Section, TextInput};
-use super::AppState;
+use super::{AppState, Dropdown};
 
 #[component]
 pub fn SettingsPage() -> Element {
@@ -26,7 +26,8 @@ pub fn SettingsPage() -> Element {
 
     let mut dalamud_enabled = use_signal(|| false);
     let mut dalamud_load_method = use_signal(|| DalamudLoadMethod::EntryPoint);
-    let mut dalamud_track = use_signal(String::new);
+    // Some(通道) 供下拉框显示；None 视为 release
+    let mut dalamud_track = use_signal(|| Some("release".to_string()));
     let mut dalamud_delay_ms = use_signal(String::new);
     let mut dalamud_install_root = use_signal(String::new);
     let mut dalamud_no_plugins = use_signal(|| false);
@@ -49,7 +50,11 @@ pub fn SettingsPage() -> Element {
         let d = state.dalamud_cfg.read();
         dalamud_enabled.set(d.enabled);
         dalamud_load_method.set(d.load_method);
-        dalamud_track.set(d.track.clone());
+        dalamud_track.set(Some(if d.track.trim().is_empty() {
+            "release".to_string()
+        } else {
+            d.track.clone()
+        }));
         dalamud_delay_ms.set(if d.delay_initialize_ms == 0 {
             String::new()
         } else {
@@ -65,7 +70,9 @@ pub fn SettingsPage() -> Element {
         #[cfg(target_arch = "wasm32")]
         {
             // 浏览器预览没有原生目录选择（rfd 同步 API 仅原生平台）
-            state.status.set("Web 预览不支持目录选择，请手动输入路径".into());
+            state
+                .status
+                .set("Web 预览不支持目录选择，请手动输入路径".into());
         }
         #[cfg(not(target_arch = "wasm32"))]
         spawn(async move {
@@ -97,12 +104,7 @@ pub fn SettingsPage() -> Element {
         let mut d = state.dalamud_cfg.read().clone();
         d.enabled = dalamud_enabled();
         d.load_method = dalamud_load_method();
-        let track = dalamud_track.read().trim().to_string();
-        d.track = if track.is_empty() {
-            "release".to_string()
-        } else {
-            track
-        };
+        d.track = dalamud_track().unwrap_or_else(|| "release".to_string());
         d.delay_initialize_ms = parse_u32(&dalamud_delay_ms.read()).unwrap_or(0);
         d.install_root = string_to_path(&dalamud_install_root.read());
         d.no_plugins = dalamud_no_plugins();
@@ -111,7 +113,11 @@ pub fn SettingsPage() -> Element {
         let area_id = area.read().trim().to_string();
         let app = AppConfig {
             game_path: string_to_path(&game_path.read()),
-            area: if area_id.is_empty() { None } else { Some(area_id) },
+            area: if area_id.is_empty() {
+                None
+            } else {
+                Some(area_id)
+            },
             settings: s.clone(),
             dalamud: d.clone(),
         };
@@ -147,6 +153,19 @@ pub fn SettingsPage() -> Element {
             .join(" · ")
     };
 
+    // 更新通道下拉选项；配置为自定义通道时补进列表以正确回显当前值
+    let mut track_items = vec![
+        ("release".to_string(), "稳定版（release）".to_string()),
+        ("staging".to_string(), "测试版（staging）".to_string()),
+    ];
+    let cur_track = dalamud_track
+        .read()
+        .clone()
+        .unwrap_or_else(|| "release".to_string());
+    if !track_items.iter().any(|(k, _)| *k == cur_track) {
+        track_items.push((cur_track.clone(), format!("自定义（{cur_track}）")));
+    }
+
     // Wine 配置仅在依赖 wine 的平台展示：Windows 原生启动忽略 wine 参数；
     // esync/fsync/gamemode 依赖 Linux 内核特性，macOS（wine/CrossOver）不支持，隐藏对应开关。
     // 隐藏的开关不重置草稿值，保存时原样写回 config.toml。
@@ -155,9 +174,13 @@ pub fn SettingsPage() -> Element {
 
     rsx! {
         div {
-            style: "display: flex; flex-direction: column; gap: 24px;",
+            style: "flex: 1; min-height: 0; display: flex; flex-direction: column; min-width: 0;",
 
-            Section { title: "游戏",
+            // 表单滚动区；保存栏在滚动区外固定，任何位置都能直接保存
+            div {
+                style: "flex: 1; overflow-y: auto; padding: 24px 28px; display: flex; flex-direction: column; gap: 24px;",
+
+                Section { title: "游戏",
                 SettingsRow { label: "游戏根目录",
                     div {
                         style: "display: flex; flex-direction: row; gap: 8px; align-items: center;",
@@ -176,8 +199,8 @@ pub fn SettingsPage() -> Element {
                             value: area,
                         }
                         p {
-                            style: "margin: 0; font-size: 12px; line-height: 1.5; color: {t.text_secondary};",
-                            "启动时默认使用的大区。当前可用：{area_hint}"
+                            style: "margin: 0; font-size: 12px; color: {t.text_secondary};",
+                            "启动时默认使用；留空则每次到主页选择。当前可用：{area_hint}"
                         }
                     }
                 }
@@ -282,21 +305,23 @@ pub fn SettingsPage() -> Element {
                                     }
                                 }
                                 p {
-                                    style: "margin: 0; font-size: 12px; line-height: 1.5; color: {t.text_secondary};",
-                                    "入口点：由注入器拉起游戏，Dalamud 随游戏一起加载，最稳定。DLL 注入：向已启动的游戏进程注入，传统方式。仅兼容修复：经注入器启动游戏但不加载 Dalamud 本体，用于排查问题。"
+                                    style: "margin: 0; font-size: 12px; color: {t.text_secondary};",
+                                    "入口点最稳定；DLL 注入为传统方式；仅兼容修复不加载 Dalamud 本体，用于排查问题。"
                                 }
                             }
                         }
                         SettingsRow { label: "更新通道",
                             div {
-                                style: "display: flex; flex-direction: column; gap: 6px;",
-                                TextInput {
-                                    placeholder: "release / staging / 自定义 track",
-                                    value: dalamud_track,
+                                style: "display: flex; flex-direction: column; gap: 6px; max-width: 360px;",
+                                Dropdown {
+                                    id: "settings-track",
+                                    items: track_items,
+                                    selected: dalamud_track,
+                                    placeholder: "选择通道",
                                 }
                                 p {
-                                    style: "margin: 0; font-size: 12px; line-height: 1.5; color: {t.text_secondary};",
-                                    "Dalamud 本体用哪个版本：release 为稳定版；staging 为测试版，适配新游戏版本更快但可能不稳定；一般保持 release。"
+                                    style: "margin: 0; font-size: 12px; color: {t.text_secondary};",
+                                    "测试版适配新游戏版本更快，但可能不稳定。"
                                 }
                             }
                         }
@@ -304,12 +329,12 @@ pub fn SettingsPage() -> Element {
                             div {
                                 style: "display: flex; flex-direction: column; gap: 6px;",
                                 TextInput {
-                                    placeholder: "留空使用默认 ~/.eorzea/dalamud",
+                                    placeholder: "~/.eorzea/dalamud（默认，留空即用）",
                                     value: dalamud_install_root,
                                 }
                                 p {
-                                    style: "margin: 0; font-size: 12px; line-height: 1.5; color: {t.text_secondary};",
-                                    "Dalamud 本体（注入器、运行文件）的下载安装位置，留空即用上面的默认目录；首次启动游戏时自动下载，之后版本匹配直接复用。"
+                                    style: "margin: 0; font-size: 12px; color: {t.text_secondary};",
+                                    "默认 ~/.eorzea/dalamud，首次启动游戏时自动下载，之后版本匹配直接复用。"
                                 }
                             }
                         }
@@ -317,12 +342,12 @@ pub fn SettingsPage() -> Element {
                             div {
                                 style: "display: flex; flex-direction: column; gap: 6px;",
                                 TextInput {
-                                    placeholder: "毫秒（留空为 0）",
+                                    placeholder: "毫秒，0 = 不延迟",
                                     value: dalamud_delay_ms,
                                 }
                                 p {
-                                    style: "margin: 0; font-size: 12px; line-height: 1.5; color: {t.text_secondary};",
-                                    "游戏启动后延迟多少毫秒再初始化 Dalamud，留空为 0（不延迟）；启动卡顿时可尝试调大。"
+                                    style: "margin: 0; font-size: 12px; color: {t.text_secondary};",
+                                    "0 = 不延迟；启动卡顿时可调大。"
                                 }
                             }
                         }
@@ -334,8 +359,8 @@ pub fn SettingsPage() -> Element {
                                 Checkbox { label: "禁用第三方插件", checked: dalamud_no_third_party }
                             }
                             p {
-                                style: "margin: 0; font-size: 12px; line-height: 1.5; color: {t.text_secondary};",
-                                "排查插件问题用：前者只启动 Dalamud 本体、完全不加载插件；后者只屏蔽第三方仓库插件，官方插件照常加载。"
+                                style: "margin: 0; font-size: 12px; color: {t.text_secondary};",
+                                "排查插件问题时使用：前者不加载任何插件，后者仅屏蔽第三方仓库插件。"
                             }
                         }
                         p {
@@ -345,12 +370,11 @@ pub fn SettingsPage() -> Element {
                     }
                 }
             }
+            }
 
-            // 吸底保存栏：长表单滚动时保存按钮始终可见（sticky 在 blitz 上
-            // 不生效时退化为普通块，仍位于表单底部）。
-            // 负 margin 抵消内容区 24px/28px 内边距，横跨整个滚动视口。
+            // 保存栏固定在滚动区外，不随表单滚动
             div {
-                style: "position: sticky; bottom: 0; margin: 12px -28px -24px; padding: 12px 28px; background: {t.page_bg}; border-top: 1px solid {t.border};",
+                style: "flex-shrink: 0; padding: 12px 28px; border-top: 1px solid {t.border}; background: {t.page_bg};",
                 ActionButton { label: "保存设置", onclick: save }
             }
         }
@@ -403,11 +427,7 @@ fn path_to_string(p: &Option<std::path::PathBuf>) -> String {
 
 fn string_to_path(s: &str) -> Option<std::path::PathBuf> {
     let s = s.trim();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s.into())
-    }
+    if s.is_empty() { None } else { Some(s.into()) }
 }
 
 fn parse_u32(s: &str) -> Option<u32> {

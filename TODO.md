@@ -183,15 +183,13 @@
 - [x] **blitz 下拉弹层层级**：改为不依赖 `position:absolute + z-index` 的文档流内联展开（把下方内容顶开），原生 blitz 与 web 渲染一致，不再被后续卡片遮挡 (resolved: 2026-09-12)
 - [x] **下拉框交互缺陷**：展开状态收进全局 `AppState.open_dropdown`（同时只允许一个展开，切 Tab 自动收起）；点击弹层外区域收起走事件冒泡——根容器 onclick 收起、下拉容器 `stop_propagation` 阻断内部点击（全屏透明捕获层方案在 blitz 上会连弹层选项点击一并吞掉，已弃用） (resolved: 2026-09-12)
 - [x] **blitz 字形缺字**：下拉箭头 `▾` 改 ASCII `v`/`^`（随展开状态切换），主题切换 `☾/☀` 改纯文字「暗色主题/亮色主题」，原生 blitz 不再渲染为方块 (resolved: 2026-09-12)
-- [x] **设置页长表单**：保存按钮改为吸底保存栏（`position: sticky; bottom: 0` + 负 margin 横跨内容区），滚动任意位置都可直接保存；blitz 不支持 sticky 时退化为普通块 (resolved: 2026-09-12)
+- [x] **设置页长表单**：滚动改为页面自持——主页/登录页各自包滚动容器，设置页拆为「表单滚动区 + 固定保存栏」，保存按钮在任何滚动位置都可见可点（此前的 sticky 方案在 blitz 上不生效，已弃用） (resolved: 2026-09-12)
+- [x] **全角括号紧邻西文时渲染为方块**：根因是 blitz 无逐字符字体回退，默认拉丁字体缺全角标点字形；根容器显式指定中文字体栈（Microsoft YaHei / PingFang SC / Noto Sans CJK SC，覆盖三平台，web 端同样生效），「（插件）」「（release）」等混排均正常渲染 (resolved: 2026-09-12)
+- [x] **设置页交互形态**：更新通道从自由文本改为下拉框（稳定版 release / 测试版 staging，回显当前值，配置为自定义通道时自动补进选项）；另有默认值的输入项（安装目录/初始化延迟/默认大区）以常显说明文字标注默认与留空语义——blitz 未实现 placeholder 渲染，原生端不能依赖 placeholder 表达默认值 (resolved: 2026-09-12)
 - [x] **状态栏长错误不换行**：状态栏加 `overflow-wrap: anywhere` + `line-height: 1.5`，无空格长串（URL/路径/长错误）可断行，不再单行溢出窗口 (resolved: 2026-09-12)
 - [x] **设置页开关在原生 blitz 下保存无效**：blitz 对 checkbox 点击只派发 input 事件（无 change），`onchange` 桌面端永不触发——勾选只是控件自身视觉切换、草稿 signal 不更新，保存实际写入旧值（实测启用 Dalamud 后 config.toml 仍为 `enabled = false`）；`Checkbox` 改用 `oninput`（web 端 checkbox 点击同样触发 input；dioxus-web 与 blitz 均把 value 归一为 "true"/"false"，`FormData::checked()` 两端可用） (resolved: 2026-09-12)
 - [x] **设置页补全剩余配置项**：新增「默认大区」（`AppConfig.area`，此前设置页无此输入框、保存时只能原样保留；GUI 启动拉取大区列表后默认选中该大区，CLI `launch` 未传 `--area` 时也用它）与 Dalamud「安装目录」（`install_root`，留空用默认 `~/.eorzea/dalamud`） (resolved: 2026-09-12)
 - [x] **设置页 Dalamud 项无说明**：加载方式/更新通道/安装目录/初始化延迟/插件禁用开关逐项补充说明文字（按注入器 `--mode`/`--without-dalamud`/`--no-plugin`/`--no-3rd-plugin`/`--dalamud-delay-initialize` 实际行为撰写）；「默认大区」下方动态列出可用大区 ID 对照（如 8=豆豆柴 · 1=陆行鸟） (resolved: 2026-09-12)
-
-#### 待修 UI 问题（2026-09-12 原生截图审查补充）
-
-- [ ] **全角括号紧邻西文时渲染为方块**：如「本次启动加载 Dalamud（插件）」的 `（`、「opt-in）」的 `）`——blitz 字体回退按文本运行段选字体，紧邻拉丁文本的全角标点走了缺字的拉丁字体（纯 CJK 之间的全角括号正常）；规避可改半角括号，或等 blitz 上游字体回退修复
 
 ### P4-3 错误处理
 

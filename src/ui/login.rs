@@ -1,9 +1,9 @@
 //! 登录页：账号列表 + 扫码 / 推送 / 密码三种登录方式。
 
+use crate::auth;
 use base64::Engine;
 use dioxus::core::Task;
 use dioxus::prelude::*;
-use crate::auth;
 
 use super::AppState;
 
@@ -157,7 +157,10 @@ pub fn LoginPage() -> Element {
 
     rsx! {
         div {
-            style: "display: flex; flex-direction: column; gap: 24px;",
+            // 页面自持滚动（外层不滚，各页面自己管理滚动与固定元素）
+            style: "flex: 1; min-height: 0; overflow-y: auto; padding: 24px 28px;",
+            div {
+                style: "display: flex; flex-direction: column; gap: 24px;",
 
             // ── 账号列表 ────────────────────────────────────────────────
             Section { title: "已保存账号",
@@ -309,17 +312,18 @@ pub fn LoginPage() -> Element {
             }
 
             // ── 密码登录 ────────────────────────────────────────────────
-            Section { title: "密码登录",
-                if let Some(e) = &*pwd_error.read() {
-                    ErrorRow { message: "{e}" }
-                }
-                div {
-                    style: "display: flex; flex-direction: column; gap: 12px; max-width: 320px;",
-                    TextInput { placeholder: "账号", value: pwd_account }
-                    PasswordInput { placeholder: "密码", value: pwd_password }
-                    ActionButton {
-                        label: if pwd_busy() { "登录中…" } else { "登录" },
-                        onclick: start_password,
+                Section { title: "密码登录",
+                    if let Some(e) = &*pwd_error.read() {
+                        ErrorRow { message: "{e}" }
+                    }
+                    div {
+                        style: "display: flex; flex-direction: column; gap: 12px; max-width: 320px;",
+                        TextInput { placeholder: "账号", value: pwd_account }
+                        PasswordInput { placeholder: "密码", value: pwd_password }
+                        ActionButton {
+                            label: if pwd_busy() { "登录中…" } else { "登录" },
+                            onclick: start_password,
+                        }
                     }
                 }
             }
