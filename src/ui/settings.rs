@@ -14,6 +14,7 @@ pub fn SettingsPage() -> Element {
 
     // 草稿状态（进入页面时从当前内存配置初始化）
     let mut game_path = use_signal(String::new);
+    let mut area = use_signal(String::new);
     let mut startup_type = use_signal(|| WineStartupType::Auto);
     let mut custom_path = use_signal(String::new);
     let mut prefix = use_signal(String::new);
@@ -27,12 +28,15 @@ pub fn SettingsPage() -> Element {
     let mut dalamud_load_method = use_signal(|| DalamudLoadMethod::EntryPoint);
     let mut dalamud_track = use_signal(String::new);
     let mut dalamud_delay_ms = use_signal(String::new);
+    let mut dalamud_install_root = use_signal(String::new);
     let mut dalamud_no_plugins = use_signal(|| false);
     let mut dalamud_no_third_party = use_signal(|| false);
 
     use_hook(|| {
         let s = state.settings.read();
         game_path.set(path_to_string(&state.game_path.read()));
+        // area 在 AppConfig 顶层（AppState 只镜像 game_path），进入页面时读一次
+        area.set(config::load_app_default().area.unwrap_or_default());
         startup_type.set(s.startup_type);
         custom_path.set(path_to_string(&s.custom_path));
         prefix.set(path_to_string(&s.prefix));
@@ -51,6 +55,7 @@ pub fn SettingsPage() -> Element {
         } else {
             d.delay_initialize_ms.to_string()
         });
+        dalamud_install_root.set(path_to_string(&d.install_root));
         dalamud_no_plugins.set(d.no_plugins);
         dalamud_no_third_party.set(d.no_third_party_plugins);
     });
@@ -99,14 +104,14 @@ pub fn SettingsPage() -> Element {
             track
         };
         d.delay_initialize_ms = parse_u32(&dalamud_delay_ms.read()).unwrap_or(0);
+        d.install_root = string_to_path(&dalamud_install_root.read());
         d.no_plugins = dalamud_no_plugins();
         d.no_third_party_plugins = dalamud_no_third_party();
 
-        // 设置页目前没有 area 输入框，保存时保留 config.toml 中已有的 area。
-        let existing_area = config::load_app_default().area;
+        let area_id = area.read().trim().to_string();
         let app = AppConfig {
             game_path: string_to_path(&game_path.read()),
-            area: existing_area,
+            area: if area_id.is_empty() { None } else { Some(area_id) },
             settings: s.clone(),
             dalamud: d.clone(),
         };
@@ -148,6 +153,12 @@ pub fn SettingsPage() -> Element {
                             value: game_path,
                         }
                         GhostButton { label: "浏览…", onclick: browse_game_path }
+                    }
+                }
+                SettingsRow { label: "默认大区",
+                    TextInput {
+                        placeholder: "大区 ID（如 1 = 豆豆柴），留空则每次启动到主页选择",
+                        value: area,
                     }
                 }
                 if let Some(root) = &draft_root {
@@ -255,6 +266,12 @@ pub fn SettingsPage() -> Element {
                                 value: dalamud_track,
                             }
                         }
+                        SettingsRow { label: "安装目录",
+                            TextInput {
+                                placeholder: "留空使用默认 ~/.eorzea/dalamud",
+                                value: dalamud_install_root,
+                            }
+                        }
                         SettingsRow { label: "初始化延迟",
                             TextInput {
                                 placeholder: "毫秒（留空为 0）",
@@ -311,7 +328,12 @@ pub fn Checkbox(label: &'static str, checked: Signal<bool>) -> Element {
                 // 要显式给深色，否则白底白勾不可见
                 style: "color: {t.checkbox_accent};",
                 checked: checked(),
-                onchange: move |e| checked.set(e.checked()),
+                // 必须用 oninput：原生 blitz 对 checkbox 只派发 input 事件、
+                // 不派发 change，onchange 在桌面端永远不会触发（勾选只是
+                // 控件自身视觉切换，signal 不更新）；web 端浏览器点击
+                // checkbox 同样触发 input，两端一致。checked() 从 value
+                // （"true"/"false"，两端渲染器均归一为此格式）解析布尔
+                oninput: move |e| checked.set(e.checked()),
             }
             "{label}"
         }
