@@ -195,8 +195,15 @@ impl SdoAuth {
     pub fn new() -> Result<Self, AuthError> {
         info!("Creating SdoAuth client");
         let mac = crate::sdo_device::get_mac_id_raw();
+        // cookie store 只是兜底：SDO 的 Cookie 主要由 build_cookie_header() 手动注入，
+        // wasm 客户端无此方法，跳过即可。
+        let mut builder = Client::builder();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            builder = builder.cookie_store(true);
+        }
         Ok(Self {
-            client: Client::builder().cookie_store(true).build()?,
+            client: builder.build()?,
             base_url: SDO_BASE_URL.to_string(),
             device_id: crate::sdo_device::get_device_id(),
             mac_id: crate::crypto::md5_hex_upper(mac.as_bytes()),

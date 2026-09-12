@@ -1,4 +1,5 @@
 use crate::config::WineSettings;
+#[cfg(not(target_os = "windows"))]
 use crate::wine::{build_launch_env, WineTool};
 use eorzea_auth::SdoArea;
 use std::path::PathBuf;
@@ -72,18 +73,19 @@ pub struct GameLaunchResult {
     pub command: String,
     /// wine/游戏输出日志文件路径（如有）。
     pub log_path: Option<PathBuf>,
-    /// 游戏进程的 Wine PID（Injector 模式由 Injector 报告；direct 模式为 child.pid()）。
+    /// 游戏进程 PID（Injector 模式由 Injector 报告；direct 模式为 child.pid()。
+    /// 非 Windows 上为 Wine PID，Windows 上为原生 PID）。
     pub wine_pid: Option<u32>,
 }
 
-/// 默认游戏运行日志路径：`~/.xiv-launcher-rs/logs/game-{unix_ts}.log`。
+/// 默认游戏运行日志路径：`~/.eorzea/logs/game-{unix_ts}.log`。
 pub fn default_game_log_path() -> PathBuf {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     dirs::home_dir()
-        .map(|h| h.join(format!(".xiv-launcher-rs/logs/game-{ts}.log")))
+        .map(|h| h.join(format!(".eorzea/logs/game-{ts}.log")))
         .unwrap_or_else(|| PathBuf::from(format!("game-{ts}.log")))
 }
 
@@ -243,7 +245,7 @@ async fn download_ottercorp_dll() -> Result<std::path::PathBuf, GameLaunchError>
     const DLL_URL: &str = "https://raw.githubusercontent.com/ottercorp/XIVLauncher.Core/cn/src/XIVLauncher.Core/Resources/binaries/sdologinentry64.dll";
 
     let tools_dir = dirs::home_dir()
-        .map(|h| h.join(".xiv-launcher-rs/tools"))
+        .map(|h| h.join(".eorzea/tools"))
         .unwrap_or_else(|| std::path::PathBuf::from("./tools"));
     std::fs::create_dir_all(&tools_dir).map_err(GameLaunchError::Io)?;
 
@@ -343,7 +345,70 @@ pub async fn launch_game(
 
     #[cfg(target_os = "windows")]
     {
-        let mut cmd = Command::new(game_path);
+        // 启用 Dalamud → 通过原生 Injector 创建游戏；否则直接运行。
+        // 对应 C# WindowsDalamudRunner：路径直接传递，无需 winepath 转换。
+        if let Some(d) = &config.dalamud {
+            // Injector 会在 game 进程内创建这些目录；但插件/配置目录缺失会导致
+            // 部分版本直接失败，这里预先创建，避免首启报错难以排查。
+            for dir in [
+                d.config_path.parent(),
+                d.log_path.parent(),
+                Some(d.plugin_dir.as_path()),
+                Some(d.asset_dir.as_path()),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                std::fs::create_dir_all(dir).map_err(GameLaunchError::Io)?;
+            }
+
+            // 托管了 Windows .NET runtime 时设置 DALAMUD_RUNTIME 与 DOTNET_ROOT，
+            // 让 Injector.exe 的 .NET apphost 直接找到 hostfxr。原生路径直接传递。
+            let mut env: Vec<(String, String)> = Vec::new();
+            if let Some(runtime_dir) = &d.runtime_dir {
+                let runtime_win = runtime_dir.to_string_lossy().to_string();
+                env.push(("DALAMUD_RUNTIME".to_string(), runtime_win.clone()));
+                env.push(("DOTNET_ROOT".to_string(), runtime_win));
+            }
+
+            let start = crate::dalamud::model::DalamudStartInfo {
+                game_path: game_path.to_string_lossy().to_string(),
+                working_directory: d.install_dir.to_string_lossy().to_string(),
+                configuration_path: d.config_path.to_string_lossy().to_string(),
+                logging_path: d.log_path.to_string_lossy().to_string(),
+                plugin_directory: d.plugin_dir.to_string_lossy().to_string(),
+                asset_directory: d.asset_dir.to_string_lossy().to_string(),
+                client_language: 4,
+                delay_initialize_ms: d.delay_initialize_ms,
+                no_plugins: d.no_plugins,
+                no_third_party_plugins: d.no_third_party_plugins,
+            };
+            let launch = crate::dalamud::runner::launch_through_injector_native(
+                &d.injector_exe,
+                &start,
+                d.load_method,
+                &arg_list,
+                false,
+                &env,
+            )
+            .map_err(|e| {
+                error!(error = %e, "failed to launch through Dalamud Injector");
+                GameLaunchError::Dalamud(e.to_string())
+            })?;
+
+            info!(
+                game_pid = launch.wine_pid,
+                "game spawned through Dalamud Injector"
+            );
+            return Ok(GameLaunchResult {
+                child: launch.injector,
+                command: format!("{} {}", d.injector_exe.display(), args),
+                log_path: Some(log_path),
+                wine_pid: Some(launch.wine_pid),
+            });
+        }
+
+        let mut cmd = std::process::Command::new(game_path);
         cmd.args(&arg_list).current_dir(working_dir);
         redirect_to_log(&mut cmd, &log_path);
         let child = cmd.spawn().map_err(|e| {
@@ -351,12 +416,14 @@ pub async fn launch_game(
             GameLaunchError::Io(e)
         })?;
 
-        info!(pid = child.id(), "game process spawned");
+        let pid = child.id();
+        info!(pid, "game process spawned");
 
         Ok(GameLaunchResult {
             child,
             command: format!("{} {}", game_path.display(), args),
             log_path: Some(log_path),
+            wine_pid: Some(pid),
         })
     }
 
@@ -442,7 +509,7 @@ pub async fn launch_game(
             )
             .map_err(|e| {
                 error!(error = %e, "failed to launch through Dalamud Injector");
-                GameLaunchError::Wine(e.to_string())
+                GameLaunchError::Dalamud(e.to_string())
             })?;
 
             info!(
@@ -491,6 +558,8 @@ pub enum GameLaunchError {
     Io(#[from] std::io::Error),
     #[error("Wine error: {0}")]
     Wine(String),
+    #[error("Dalamud error: {0}")]
+    Dalamud(String),
     #[error(
         "Wine game path contains non-ASCII characters: {0}. Move the game to an ASCII-only path"
     )]
@@ -592,7 +661,7 @@ mod tests {
 
         // 真实缓存的修改版 DLL（如存在）必须被识别
         if let Some(home) = dirs::home_dir() {
-            let cached = home.join(".xiv-launcher-rs/tools/sdologinentry64.dll");
+            let cached = home.join(".eorzea/tools/sdologinentry64.dll");
             if cached.exists() {
                 assert!(
                     is_ottercorp_dll(&cached),

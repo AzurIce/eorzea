@@ -70,7 +70,7 @@
 - [x] **`areasInfo` 计算**：`build_lobby_hosts()` 将所有大区 `lobby:54994` 用 `|` 分隔
 - [x] **`XL.DcTraveler` 参数**：当 `dc_travel_port > 0` 时添加
 - [x] **端到端验证**：`sdo_login` 示例完成 QR 扫码 → `sso_login` → ticket 获取 → 启动参数构造
-- [x] **`sdologinentry64.dll` 替换**：`EnsureLoginEntry()` — 自动从 ottercorp GitHub 下载修改版 DLL，缓存到 `~/.xiv-launcher-rs/tools/`，复制到 `{gamePath}/sdo/sdologinentry64.dll`
+- [x] **`sdologinentry64.dll` 替换**：`EnsureLoginEntry()` — 自动从 ottercorp GitHub 下载修改版 DLL，缓存到 `~/.eorzea/tools/`，复制到 `{gamePath}/sdo/sdologinentry64.dll`
   - **已修复（2026-08-06）**：`is_ottercorp_dll()` 原先按 UTF-8 搜索 `"ottercorp"`，但 PE version info 中该字符串是 UTF-16LE 存储，检测恒为 false → 每次启动都把当前 DLL 备份覆盖 `.sdo.dll`，第二次启动即永久覆盖原版备份，修改版 shim 转发到自身导致游戏内 5003「帐号认证发生了错误」。现已同时匹配 ASCII/UTF-16LE 两种编码，且已有 `.sdo.dll` 备份时不再覆盖
 
 ### P2-2 参数加密 (`ArgumentBuilder.cs` → `BuildEncrypted`)
@@ -92,7 +92,7 @@
 - [x] **补丁下载管理**：`game_files/patch_manager.rs` 实现下载管线（并发 4 槽同 C# `MAX_DOWNLOADS_AT_ONCE`、SHA1 块校验同 `CheckPatchValidity`、已校验文件跳过、进度回调）；SHA1 块算法已用真实补丁验证通过
 - [x] **修复跨仓库补丁缓存名碰撞（2026-08-06）**：缓存名加入完整 URL 的 SHA1 身份，`ffxiv`、`ex1`-`ex5` 的同名补丁不再互相覆盖；安装前再次校验长度/逐块 SHA1，不匹配时禁止应用和写 `.ver`。旧的 basename + version 歧义缓存不会再被复用
 - [x] **eoz 命令行**：`packages/eorzea-cli`（bin `eoz`，clap）— `areas` / `game status` / `game check` / `game update`（下载 + 应用）
-- [x] **eoz auth**：多账号管理 — `auth login qr|password|auto` / `auth status` / `auth default <账号>` / `auth logout`；配置持久化到 `~/.xiv-launcher-rs/auth.toml`（`--config` 或 `XIV_LAUNCHER_RS_CONFIG` 覆盖）；`launch` 未指定账号时用默认账号自动登录
+- [x] **eoz auth**：多账号管理 — `auth login qr|password|auto` / `auth status` / `auth default <账号>` / `auth logout`；配置持久化到 `~/.eorzea/auth.toml`（`--config` 或 `XIV_LAUNCHER_RS_CONFIG` 覆盖）；`launch` 未指定账号时用默认账号自动登录
 - [x] **eoz login/launch**：登录 + 启动游戏；扫码二维码通过终端图片协议直接显示（kitty graphics protocol / iTerm2 OSC 1337，`src/term_img.rs`），无协议时 fallback 保存 PNG
 - [x] **补丁应用**（ZiPatch）：`src/game_files/zpatch/` 完整移植 C# `ZiPatch` 解析与应用（FHDR/APLY/SQPK:T/F/A/D/E/H/I/X/ADIR/DELD/EOF），`RemotePatchInstaller` 流程（应用 → `SetVer` → `VerToBck`）；已用修复后的唯一缓存键重放 11 个补丁（877.50 MiB），版本检查通过且实际启动进入游戏
 - [ ] **Boot 版本检查**：国服无需实现（C# `CheckBootVersion` 对 CN 直接 `return Array.Empty`）
@@ -103,7 +103,7 @@
 ### P2-4 Wine 配置与启动环境 (`WineSettings.cs` / `CompatibilityTools.cs` → `src/wine.rs` + `src/config.rs`)
 
 - [x] **`WineSettings` 配置模型**：`startup_type`（Auto/Managed/Custom/System）、`custom_path`、`prefix`、esync/fsync/msync、`debug_vars`、自定义 `env`、DXVK 设置（enabled/hud/frame_limit）、gamemode — `src/config.rs`
-- [x] **配置持久化**：拆分存储 — `~/.xiv-launcher-rs/config.toml`（`AppConfig`：顶层 `game_path` + Wine 设置 + `[dalamud]`）+ `~/.xiv-launcher-rs/auth.toml`（账号，TOML）；旧 `settings.json`/`eorzea.toml` 自动迁移。`game_path` 与 Wine 无关，已从 `WineSettings` 上移到 `AppConfig`；CLI 的 `--game-path` 缺省时从 config 读取
+- [x] **配置持久化**：拆分存储 — `~/.eorzea/config.toml`（`AppConfig`：顶层 `game_path` + Wine 设置 + `[dalamud]`）+ `~/.eorzea/auth.toml`（账号，TOML）；旧 `settings.json`/`eorzea.toml` 自动迁移。`game_path` 与 Wine 无关，已从 `WineSettings` 上移到 `AppConfig`；CLI 的 `--game-path` 缺省时从 config 读取
 - [x] **`WineTool::resolve(&WineSettings)`**：配置 → 运行时解析（Auto = 自定义→托管→系统→下载；Managed/Custom/System 显式分派），`custom_path` 支持 wine64 文件或 bin 目录归一化
 - [x] **`WineTool::probe()`**：`wine64 --version` 校验可执行性
 - [x] **`build_launch_env()`**：对齐 `CompatibilityTools.RunInPrefix` 环境变量（`WINEDLLOVERRIDES`、`WINEESYNC/WINEFSYNC/WINEMSYNC`、`WINEDEBUG`、`DXVK_STATE_CACHE_PATH`/`DXVK_CONFIG_FILE`/`DXVK_HUD`/`DXVK_FRAME_RATE`、`LD_PRELOAD` gamemode、自定义 env 覆盖）
@@ -114,7 +114,7 @@
   - [ ] `Auto`/`Managed` 下 `probe()` 失败回退系统 wine 并给出 NixOS 提示
   - [ ] 托管 wine 跑不起来且 PATH 有 `steam-run` 时自动用 steam-run 包装（需 `unset TZ` 规避 nixpkgs#279893）
   - [x] NixOS 用户上手指南已写入 `docs/notes/nixos.md`（系统 wine / nix-ld / steam-run 手动包装三条路径）
-- [x] **wine/游戏日志重定向**：launch 时 wine/游戏输出写入 `~/.xiv-launcher-rs/logs/game-{ts}.log`，CLI 终端不再被污染；`GameLaunchResult.log_path` 暴露日志路径
+- [x] **wine/游戏日志重定向**：launch 时 wine/游戏输出写入 `~/.eorzea/logs/game-{ts}.log`，CLI 终端不再被污染；`GameLaunchResult.log_path` 暴露日志路径
 - [ ] **`WineSettings.log_file` 字段**：可配置日志路径（当前为默认路径，GUI 配置项待加）
 - [x] **prefix 架构检测修复**：`detect_prefix_arch` 之前只读 `system.reg` 第一行，而真实 wine 文件头是 `WINE REGISTRY Version 2`（`#arch=` 在第 3~4 行），导致每次启动都误判架构并**删除重建 prefix**（反复出现 "configuration in prefix is being updated"、DXVK 反复重装、Injector 启动时 dxgi.dll 丢失）；已改为扫描头部 8 行
 - [x] **DXVK 安装检测修复**：`ensure_dxvk` 之前只看 `d3d11.dll` 是否存在，而 wineboot 重建 prefix 后会放回 builtin d3d11.dll（DXVK 已被覆盖），导致误判"已安装"并在 `dxgi=n` override 下报 `dxgi.dll not found`；现改为 d3d11.dll + `.dxvk-installed` 标记文件双重判断
@@ -134,7 +134,9 @@
 - [x] **Dalamud assets 获取**（Asset Meta 版本管理 + 单文件 SHA1 校验/镜像 fallback；上游 Noto 字体 hash 与镜像文件不一致，按 C# 行为接受镜像文件并告警）
 - [x] **launch backend 切换**：`launch_game` 支持 `dalamud` 配置时走 Injector（winepath 转换 + Injector 启动 + JSON 解析）；`Launcher::launch_with_options` 自动读 `[dalamud].enabled`（可被 CLI 覆盖）并安全降级；`eoz launch --dalamud/--no-dalamud` 覆盖配置
 - [x] **Dalamud 启动链路纠错**：`build_dalamud_config` 从 `ffxiv_dx11.exe` 路径正确推导游戏根目录（此前把 exe 当根目录导致版本恒不匹配）；路径对齐上游 storage root（`dalamudConfig.json`/`logs`/`installedPlugins`/`dalamudAssets`，不再嵌套 `dalamud/`）；runner 宿主 `current_dir` 用 Unix Injector 目录（此前误传 `Z:\...`）；Injector stderr 后台排空避免管道阻塞；检测 Windows .NET runtime（本项目或 `~/.xlcore_cn` 版本匹配 fallback）与配套 assets，缺失时安全降级；release 元数据不可用不再 panic；`eoz dalamud launch --no-dalamud` 不再被忽略
-- [ ] **阶段 2+**：Windows runner、Wine PID→Unix PID 映射、staging/beta、崩溃恢复（safe mode）
+- [ ] **阶段 2+**：Wine PID→Unix PID 映射、staging/beta、崩溃恢复（safe mode）
+- [x] **原生 Windows Dalamud 启动（2026-09-12）**：`launch_game` 的 `#[cfg(target_os = "windows")]` 分支支持 `config.dalamud` —— 原生运行 `Dalamud.Injector.exe`（无 winepath/`XL_WINEON*`/`WINEPREFIX`，路径直接传递，`DALAMUD_RUNTIME`/`DOTNET_ROOT` 指向原生 runtime 路径），对应 C# `WindowsDalamudRunner.cs`；`find_7z` 探测改用 `where`（Windows 无 `which`）；新增 `GameLaunchError::Dalamud` 变体。端到端注入未在真机验证
+- [ ] **Windows 收尾**：设置页在 Windows 上仍显示 Wine 配置项（启动时被忽略）；`game_files::version` 测试临时目录已加进程号避免 Windows Temp 残留串扰
 - [x] **Injector 平台标记修正（2026-09-09）**：`runner.rs` 启动 Injector 时按平台设置 `XL_WINEONMAC`/`XL_WINEONLINUX`（此前无条件 `XL_WINEONLINUX`）
 - [ ] **macOS Dalamud 注入验证**：~~xom wine（CrossOver + Rosetta 跑 x64）下 Injector 注入未做端到端验证~~ 已验证可用（2026-09-10，macOS 26 + xom-4.17.1，Dalamud 15.0.3.3 注入成功）；新建 prefix 后的首次注入曾因初始化竞态失败，已由 `EnsurePrefix` 引导命令修复
 
@@ -176,6 +178,16 @@
 - [x] **更新进度可读**：补丁下载进度显示 MiB/GiB 而非裸字节
 - [x] **主页 Dalamud 状态卡**：改为异步获取 release 元数据 + 安装/版本/runtime 状态，不再在 render 中同步读盘并显示误导性的“启动时自动校验/更新”
 - [x] **设置页补全**：新增 Dalamud section（enabled/load_method/track/delay/safe mode）与游戏路径即时校验、msync 开关；主页新增“本次启动加载 Dalamud”会话级开关
+- [x] **Web 预览调试入口（2026-09-12）**：`ui` 移入 lib、`main.rs` 双平台入口（桌面 dioxus-native / wasm dioxus-web），`dx serve --platform web` 浏览器调 UI；wasm 适配（tokio 去 net、reqwest 去 native-tls、rfd/spawn_blocking/chunk() 流式下载平台门控）
+
+#### 待修 UI 问题（2026-09-12 web 预览 + 原生截图审查）
+
+- [ ] **Wine UI 在 Windows 上无意义**：Windows 直接启动游戏（`game.rs` 忽略 wine 参数），但设置页仍显示整块 Wine 配置（启动方式/Prefix/esync/fsync/msync/DXVK/gamemode），主页仪表盘也有 Wine 状态卡（“未检测到可用 wine”看起来像故障）。应按平台隐藏（Windows 全隐藏；macOS 隐藏 esync/fsync/gamemode 等 Linux 专属项）
+- [ ] **下拉框交互缺陷**：点击外部区域不关闭；账号/大区两个下拉可同时打开、弹层互相重叠
+- [ ] **blitz 下拉弹层层级**：原生 blitz 渲染器对 `position:absolute + z-index` 的层叠支持不完整，下拉列表可能被后续卡片遮挡（浏览器 web 渲染正常）；必要时改为不依赖 z-index 的展开方式（如文档流内联展开）
+- [ ] **blitz 字形缺字**：`▾`（下拉箭头）、`☾/☀`（主题切换）在 blitz 默认字体下渲染为方块（web 正常）；改用文字或 ASCII 替代
+- [ ] **设置页长表单**：保存按钮在页面最底部，修改 Wine/Dalamud 后需滚到底才能保存；可考虑吸底保存栏
+- [ ] **状态栏长错误不换行**：错误信息（如“获取大区列表失败: …”）超长时单行溢出，无截断/换行处理
 
 ### P4-3 错误处理
 

@@ -5,4 +5,5 @@ pub mod term_img;
 pub mod game;
 pub mod launcher;
 pub mod config;
+pub mod ui;
 pub mod wine;

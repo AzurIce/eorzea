@@ -84,7 +84,7 @@ impl WineTool {
     /// - `Custom`：用户路径（`wine64` 文件或 bin 目录，见 [`Self::normalize_wine64_path`]）
     /// - `System`：PATH 中的 `wine64`
     ///
-    /// prefix 一律以 `settings.prefix` 为准（`None` 用默认 `~/.xiv-launcher-rs/prefix`）。
+    /// prefix 一律以 `settings.prefix` 为准（`None` 用默认 `~/.eorzea/prefix`）。
     #[tracing::instrument]
     pub async fn resolve(settings: &WineSettings) -> Result<Self, WineError> {
         match settings.startup_type {
@@ -613,14 +613,14 @@ impl WineTool {
 
     fn tools_dir() -> Result<PathBuf, WineError> {
         let home = dirs::home_dir().ok_or(WineError::NoHomeDir)?;
-        let dir = home.join(".xiv-launcher-rs/tools");
+        let dir = home.join(".eorzea/tools");
         std::fs::create_dir_all(&dir).map_err(WineError::Io)?;
         Ok(dir)
     }
 
     fn default_prefix_path() -> PathBuf {
         dirs::home_dir()
-            .map(|h| h.join(".xiv-launcher-rs/prefix"))
+            .map(|h| h.join(".eorzea/prefix"))
             .unwrap_or_else(|| PathBuf::from("./prefix"))
     }
 }

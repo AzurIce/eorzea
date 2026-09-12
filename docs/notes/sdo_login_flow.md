@@ -150,5 +150,5 @@ codeKeyLogin     ──▶ snda_id ──┬─▶ eoz auth 账号 key（配置�
 | `auth login qr` | 流程 1（扫码 + 自动保存账号/session key） |
 | `auth login password` | 流程 2 |
 | `auth login auto --session-key <key>` | 流程 4 |
-| `auth status` / `auth default` / `auth logout` | 读取/修改 `~/.xiv-launcher-rs/eorzea.toml` 中的账号 |
+| `auth status` / `auth default` / `auth logout` | 读取/修改 `~/.eorzea/eorzea.toml` 中的账号 |
 | `launch`（不指定账号） | 用默认账号的 session key 走流程 4，成功即启动 |

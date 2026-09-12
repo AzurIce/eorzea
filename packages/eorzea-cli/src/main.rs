@@ -157,7 +157,7 @@ enum GameCommand {
         #[arg(long)]
         repair: bool,
 
-        /// 补丁暂存目录（默认 ~/.xiv-launcher-rs/patches）
+        /// 补丁暂存目录（默认 ~/.eorzea/patches）
         #[arg(long)]
         patch_dir: Option<PathBuf>,
 
@@ -576,7 +576,7 @@ async fn cmd_update(
 
     let patch_dir = patch_dir.unwrap_or_else(|| {
         dirs::home_dir()
-            .map(|h| h.join(".xiv-launcher-rs/patches"))
+            .map(|h| h.join(".eorzea/patches"))
             .unwrap_or_else(|| PathBuf::from("./patches"))
     });
 

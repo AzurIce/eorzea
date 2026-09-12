@@ -197,6 +197,7 @@ async fn download_to_file(
     })?;
     let mut stream = resp;
     let mut written = 0u64;
+    #[cfg(not(target_arch = "wasm32"))]
     while let Some(chunk) = stream
         .chunk()
         .await
@@ -207,6 +208,20 @@ async fn download_to_file(
             source: e,
         })?;
         written += chunk.len() as u64;
+        on_progress(written, total);
+    }
+    // wasm 客户端不支持流式 chunk()：一次读完再写盘（浏览器预览用）
+    #[cfg(target_arch = "wasm32")]
+    {
+        let body = stream
+            .bytes()
+            .await
+            .map_err(|e| DalamudError::Network(e.to_string()))?;
+        file.write_all(&body).map_err(|e| DalamudError::Io {
+            path: target.to_path_buf(),
+            source: e,
+        })?;
+        written = body.len() as u64;
         on_progress(written, total);
     }
     file.flush().map_err(|e| DalamudError::Io {

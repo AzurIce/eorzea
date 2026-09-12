@@ -31,11 +31,14 @@ pub struct SeAuth {
 }
 
 impl SeAuth {
-    /// 创建 SE 认证客户端（使用 cookie store 保持会话）。
+    /// 创建 SE 认证客户端（使用 cookie store 保持会话；wasm 客户端不支持，跳过）。
     pub fn new() -> Result<Self, AuthError> {
-        Ok(Self {
-            client: Client::builder().cookie_store(true).build()?,
-        })
+        let mut builder = Client::builder();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            builder = builder.cookie_store(true);
+        }
+        Ok(Self { client: builder.build()? })
     }
 
     /// 完整的国际服 OAuth 登录流程。

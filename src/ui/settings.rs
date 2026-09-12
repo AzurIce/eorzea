@@ -1,8 +1,8 @@
 //! 设置页：游戏目录、Wine 与 Dalamud 配置，保存写回 `config.toml`。
 
 use dioxus::prelude::*;
-use eorzea_lib::config::{self, AppConfig, WineStartupType};
-use eorzea_lib::dalamud::model::DalamudLoadMethod;
+use crate::config::{self, AppConfig, WineStartupType};
+use crate::dalamud::model::DalamudLoadMethod;
 
 use super::login::{ActionButton, GhostButton, Section, TextInput};
 use super::AppState;
@@ -57,6 +57,12 @@ pub fn SettingsPage() -> Element {
 
     // ── 浏览游戏根目录（rfd 原生目录选择对话框，阻塞调用放 spawn_blocking）──
     let browse_game_path = move |_: MouseEvent| {
+        #[cfg(target_arch = "wasm32")]
+        {
+            // 浏览器预览没有原生目录选择（rfd 同步 API 仅原生平台）
+            state.status.set("Web 预览不支持目录选择，请手动输入路径".into());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         spawn(async move {
             let picked = tokio::task::spawn_blocking(|| {
                 rfd::FileDialog::new()
@@ -186,7 +192,7 @@ pub fn SettingsPage() -> Element {
                 }
                 SettingsRow { label: "Prefix",
                     TextInput {
-                        placeholder: "留空使用默认 ~/.xiv-launcher-rs/prefix",
+                        placeholder: "留空使用默认 ~/.eorzea/prefix",
                         value: prefix,
                     }
                 }

@@ -3,7 +3,7 @@
 use base64::Engine;
 use dioxus::core::Task;
 use dioxus::prelude::*;
-use eorzea_lib::auth;
+use crate::auth;
 
 use super::AppState;
 

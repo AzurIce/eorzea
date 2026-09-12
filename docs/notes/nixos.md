@@ -78,7 +78,7 @@ fetchurl wine-xiv + autoPatchelf 整棵树，或引 nix-gaming 的 wine-tkg。�
 environment.systemPackages = [ pkgs.wineWow64Packages.staging ];
 ```
 
-然后让启动器用系统 wine——编辑 `~/.xiv-launcher-rs/settings.json`：
+然后让启动器用系统 wine——编辑 `~/.eorzea/settings.json`：
 
 ```json
 { "startup_type": "system" }
@@ -114,16 +114,16 @@ programs.nix-ld.libraries = with pkgs; [
 前提：装了 Steam（`programs.steam.enable = true`，自带 `steam-run`）。写一个 wrapper 脚本把托管 wine 包进 FHS 容器：
 
 ```sh
-# ~/.xiv-launcher-rs/tools/wine64-steam-run
+# ~/.eorzea/tools/wine64-steam-run
 #!/bin/sh
 unset TZ  # 规避 steam-run 容器内时区错乱（nixpkgs#279893）
-exec steam-run "$HOME/.xiv-launcher-rs/tools/wine/bin/wine64" "$@"
+exec steam-run "$HOME/.eorzea/tools/wine/bin/wine64" "$@"
 ```
 
 `chmod +x` 后把 `settings.json` 设为：
 
 ```json
-{ "startup_type": "custom", "custom_path": "~/.xiv-launcher-rs/tools/wine64-steam-run" }
+{ "startup_type": "custom", "custom_path": "~/.eorzea/tools/wine64-steam-run" }
 ```
 
 等价于 nixpkgs `xivlauncher` 包的做法（其把整个 XIVLauncher 包进 steam-run）。注意 wine 需先由启动器下载一次（`Auto` 模式跑一次即可，失败没关系，文件已落盘）。
@@ -134,7 +134,7 @@ exec steam-run "$HOME/.xiv-launcher-rs/tools/wine/bin/wine64" "$@"
 hardware.graphics.enable32Bit = true;  # 32 位图形驱动（prefix 内 32 位组件保险）
 ```
 
-游戏文件与上述所有方案无关，放在任意目录即可；prefix 默认为 `~/.xiv-launcher-rs/prefix`，可用 `settings.json` 的 `prefix` 字段改。
+游戏文件与上述所有方案无关，放在任意目录即可；prefix 默认为 `~/.eorzea/prefix`，可用 `settings.json` 的 `prefix` 字段改。
 
 ## 主要来源
 

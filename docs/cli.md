@@ -1,6 +1,6 @@
 # `eoz` 命令行工具
 
-`eoz` 是 eorzea（FFXIV 国服启动器）的命令行入口，覆盖大区查询、游戏文件管理、账号管理、Dalamud 集成以及一键登录启动。与 GUI 共享同一套配置（`~/.xiv-launcher-rs/`）。
+`eoz` 是 eorzea（FFXIV 国服启动器）的命令行入口，覆盖大区查询、游戏文件管理、账号管理、Dalamud 集成以及一键登录启动。与 GUI 共享同一套配置（`~/.eorzea/`）。
 
 ## 目录
 
@@ -34,13 +34,13 @@ cargo install --path packages/eorzea-cli   # 安装到 ~/.cargo/bin
 
 | 路径 | 用途 |
 |------|------|
-| `~/.xiv-launcher-rs/config.toml` | 主配置（字段详见 [`config.md`](config.md)） |
-| `~/.xiv-launcher-rs/auth.toml` | 已保存账号与自动登录 session key |
-| `~/.xiv-launcher-rs/patches/` | 补丁下载暂存目录 |
-| `~/.xiv-launcher-rs/prefix/` | 默认 Wine prefix |
-| `~/.xiv-launcher-rs/tools/` | 下载的 Wine、DXVK、登录 DLL 缓存 |
-| `~/.xiv-launcher-rs/dalamud/` | Dalamud 安装目录（详见 [`dalamud.md`](dalamud.md)） |
-| `~/.xiv-launcher-rs/logs/game-{ts}.log` | 每次启动的 wine/游戏输出 |
+| `~/.eorzea/config.toml` | 主配置（字段详见 [`config.md`](config.md)） |
+| `~/.eorzea/auth.toml` | 已保存账号与自动登录 session key |
+| `~/.eorzea/patches/` | 补丁下载暂存目录 |
+| `~/.eorzea/prefix/` | 默认 Wine prefix |
+| `~/.eorzea/tools/` | 下载的 Wine、DXVK、登录 DLL 缓存 |
+| `~/.eorzea/dalamud/` | Dalamud 安装目录（详见 [`dalamud.md`](dalamud.md)） |
+| `~/.eorzea/logs/game-{ts}.log` | 每次启动的 wine/游戏输出 |
 
 如果你通过 git 管理 dotfiles，只需要管理 `config.toml`。
 
@@ -60,7 +60,7 @@ RUST_LOG=debug eoz launch        # 全量调试日志
 RUST_LOG=warn eoz launch         # 只要警告和错误
 ```
 
-wine/游戏本身的输出不打印到终端，每次启动写入 `~/.xiv-launcher-rs/logs/game-{unix_ts}.log`（启动成功时 CLI 会打印该路径）。
+wine/游戏本身的输出不打印到终端，每次启动写入 `~/.eorzea/logs/game-{unix_ts}.log`（启动成功时 CLI 会打印该路径）。
 
 ---
 
@@ -126,7 +126,7 @@ eoz areas
 4. **同步版本文件**：写对应的 `.ver`（如 `game/ffxivgame.ver`、`game/sqpack/ex1/ex1.ver`）。
 5. **备份**：全部成功后把各仓库的 `.ver` 复制为 `.bck`。
 
-选项：`--area`、`--max-expansion`、`--repair`、`--patch-dir <path>`（默认 `~/.xiv-launcher-rs/patches`）、`--concurrency <n>`（默认 4）。
+选项：`--area`、`--max-expansion`、`--repair`、`--patch-dir <path>`（默认 `~/.eorzea/patches`）、`--concurrency <n>`（默认 4）。
 
 ### `eoz game verify`
 
@@ -174,7 +174,7 @@ eoz areas
 1. **登录**：未指定 `--method` 时，用 `--account` 或默认账号的 session key 自动登录（新 key 写回 `auth.toml`，并显示剩余有效期）；`--method qr|password|auto` 则本次手动登录（流程同 `eoz auth login`）。
 2. **大区解析**：获取大区列表，按 `--area`/配置找到目标大区（提供 lobby/patch 地址）。
 3. **Dalamud 预检**：打印启用状态与 `InstallState`（版本不匹配时提示将安全降级，详见 [`dalamud.md`](dalamud.md)）。
-4. **登录 DLL 检查**：确保 `sdo/sdologin/sdologinentry64.dll` 是 ottercorp 修改版——缺失则下载（缓存于 `~/.xiv-launcher-rs/tools/`），是原版则备份为 `sdologinentry64.sdo.dll` 后替换。
+4. **登录 DLL 检查**：确保 `sdo/sdologin/sdologinentry64.dll` 是 ottercorp 修改版——缺失则下载（缓存于 `~/.eorzea/tools/`），是原版则备份为 `sdologinentry64.sdo.dll` 后替换。
 5. **Wine 准备**：按 `startup_type` 解析 Wine（必要时自动下载）→ `wine64 --version` 探针 → 确保 prefix 存在且为 64 位（详见 [`wine.md`](wine.md)）。
 6. **DXVK 检查**：`dxvk.enabled` 时确保 DXVK 已装入 prefix（未装则下载安装）。
 7. **组装启动参数与环境**：`-AppID=100001900 -AreaID=… Dev.LobbyHost01=… DEV.TestSID=<ticket> XL.SndaId=…` 等；环境变量由配置生成（`WINEDLLOVERRIDES`、esync/fsync、DXVK、`[env]` 自定义项等）。
@@ -264,7 +264,7 @@ eoz launch
 
 ## 故障排查
 
-- **先看日志**：`RUST_LOG=debug eoz launch`；wine/游戏输出在 `~/.xiv-launcher-rs/logs/game-{ts}.log`。
+- **先看日志**：`RUST_LOG=debug eoz launch`；wine/游戏输出在 `~/.eorzea/logs/game-{ts}.log`。
 - **游戏路径找不到**：确认 `--game-path` 指向含 `boot/`、`game/`、`sdo/` 的根目录，或先 `eoz config set game_path …`。
 - **自动登录失败**：session key 过期，重新 `eoz auth login qr` / `password`。
 - **Dalamud 不加载**：`eoz dalamud status` 看具体原因；游戏刚更新时 release 未跟进是常态，用 `--no-dalamud` 先玩。

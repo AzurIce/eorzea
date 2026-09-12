@@ -60,7 +60,7 @@ pub struct DalamudSettings {
     pub track: String,
     /// staging beta key（敏感，不写入普通日志）
     pub beta_key: Option<String>,
-    /// 安装根目录 override（开发/排障；默认 `~/.xiv-launcher-rs/dalamud`）
+    /// 安装根目录 override（开发/排障；默认 `~/.eorzea/dalamud`）
     pub install_root: Option<PathBuf>,
 }
 

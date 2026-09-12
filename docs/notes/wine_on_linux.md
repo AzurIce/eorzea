@@ -34,7 +34,7 @@ Linux 下跑 FFXIV 涉及三个相互独立的目录：
 | 组件 | 作用 | 典型位置 |
 |------|------|----------|
 | **Wine binary** | Windows API 兼容层本体（`wine64`/`wineserver`），即"解释器" | `~/.xlcore/compatibilitytool/beta/wine-xiv-staging-fsync-git-*/bin/` |
-| **Wine prefix** | 虚拟 C: 盘：注册表、DLL override、DXVK 的 `d3d11.dll`/`dxgi.dll` 都装在这里，通过 `WINEPREFIX` 环境变量绑定 | `~/.xlcore/wineprefix`（本项目：`~/.xiv-launcher-rs/prefix`） |
+| **Wine prefix** | 虚拟 C: 盘：注册表、DLL override、DXVK 的 `d3d11.dll`/`dxgi.dll` 都装在这里，通过 `WINEPREFIX` 环境变量绑定 | `~/.xlcore/wineprefix`（本项目：`~/.eorzea/prefix`） |
 | **游戏文件** | `ffxiv_dx11.exe` 及全部游戏数据，**不在 prefix 内**，运行时经 `winepath --windows` 映射为 Z: 盘路径传给游戏 | 独立目录（如 `~/.xlcore/ffxiv`，国服拷贝 Windows 侧游戏文件） |
 
 **prefix 与 wine binary 没有绑定关系**：一个 prefix 可以被不同版本的 wine 共用（`WINEPREFIX` 只是个环境变量，指哪用哪），一个 wine 也可以同时服务多个 prefix。XIVLauncher 就是"单一 prefix + 可换 wine binary"的用法——它把托管 wine 升级到新版本时 prefix 并不重建。

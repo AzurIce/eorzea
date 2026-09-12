@@ -215,7 +215,7 @@ Dalamud.Injector.exe launch
 6. 保存 `version.json` 与 rollout bucket。bucket 应首次随机生成后持久化，而不是每次运行重新抽签，以免控制组抖动。
 7. 失败时保留已验证的旧版本供回滚，但旧版本仅能在 `SupportedGameVer` 仍匹配时使用。
 
-建议默认根目录延续项目现状，如 `~/.xiv-launcher-rs/dalamud/{Hooks,runtime,assets,config,logs,installedPlugins}`，不要依赖用户恰好存在的 `~/.xlcore_cn`；可在开发期提供只读 `runner_override` 便于使用现有安装验证。
+建议默认根目录延续项目现状，如 `~/.eorzea/dalamud/{Hooks,runtime,assets,config,logs,installedPlugins}`，不要依赖用户恰好存在的 `~/.xlcore_cn`；可在开发期提供只读 `runner_override` 便于使用现有安装验证。
 
 ### 3.3 启动时注入
 

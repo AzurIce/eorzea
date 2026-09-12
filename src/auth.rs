@@ -1,7 +1,7 @@
-//! eorzea 账号配置（`~/.xiv-launcher-rs/auth.toml`）。
+//! eorzea 账号配置（`~/.eorzea/auth.toml`）。
 //!
 //! 与 Wine 配置（`config.toml`，见 `settings.rs`）分开存储。
-//! 位置固定：`~/.xiv-launcher-rs/auth.toml`。
+//! 位置固定：`~/.eorzea/auth.toml`。
 //! 旧版 `eorzea.toml` 会在首次加载时自动迁移。
 //!
 //! ```toml
@@ -129,17 +129,17 @@ impl AuthConfig {
     }
 }
 
-/// 配置文件路径：`~/.xiv-launcher-rs/auth.toml`。
+/// 配置文件路径：`~/.eorzea/auth.toml`。
 pub fn config_path() -> PathBuf {
     dirs::home_dir()
-        .map(|h| h.join(".xiv-launcher-rs/auth.toml"))
+        .map(|h| h.join(".eorzea/auth.toml"))
         .unwrap_or_else(|| PathBuf::from("auth.toml"))
 }
 
 /// 旧版 `eorzea.toml` 路径（迁移用）。
 pub fn legacy_path() -> PathBuf {
     dirs::home_dir()
-        .map(|h| h.join(".xiv-launcher-rs/eorzea.toml"))
+        .map(|h| h.join(".eorzea/eorzea.toml"))
         .unwrap_or_else(|| PathBuf::from("eorzea.toml"))
 }
 

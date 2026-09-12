@@ -1,18 +1,18 @@
 # 配置说明
 
-eorzea 的全部配置落在 `~/.xiv-launcher-rs/`，GUI 与 CLI（`eoz`）共享同一份。本文档列出所有字段；字段的读写方式见 [`cli.md`](cli.md) 的 `eoz config` 一节。
+eorzea 的全部配置落在 `~/.eorzea/`，GUI 与 CLI（`eoz`）共享同一份。本文档列出所有字段；字段的读写方式见 [`cli.md`](cli.md) 的 `eoz config` 一节。
 
 ## 文件总览
 
 | 路径 | 内容 |
 |------|------|
-| `~/.xiv-launcher-rs/config.toml` | 主配置：游戏目录、大区、Wine、DXVK、Dalamud、自定义环境变量 |
-| `~/.xiv-launcher-rs/auth.toml` | 已保存账号与自动登录 session key（由 `eoz auth` / GUI 登录页管理） |
+| `~/.eorzea/config.toml` | 主配置：游戏目录、大区、Wine、DXVK、Dalamud、自定义环境变量 |
+| `~/.eorzea/auth.toml` | 已保存账号与自动登录 session key（由 `eoz auth` / GUI 登录页管理） |
 
 ### 旧配置迁移
 
-- `config.toml` 不存在而旧版 `~/.xiv-launcher-rs/settings.json` 存在时，自动按新结构解析并写回 TOML（旧文件保留不删）。
-- `auth.toml` 不存在而旧版 `~/.xiv-launcher-rs/eorzea.toml` 存在时，自动迁移到 `auth.toml`。
+- `config.toml` 不存在而旧版 `~/.eorzea/settings.json` 存在时，自动按新结构解析并写回 TOML（旧文件保留不删）。
+- `auth.toml` 不存在而旧版 `~/.eorzea/eorzea.toml` 存在时，自动迁移到 `auth.toml`。
 - 配置文件解析失败或缺字段时一律回退默认值（warn 日志），不会报错中断。
 
 ## config.toml
@@ -32,7 +32,7 @@ Wine 字段通过 `#[serde(flatten)]` 直接写在 TOML 顶层（兼容旧格式
 |------|------|------|------|
 | `startup_type` | string | `"auto"` | Wine 来源：`auto`（custom_path → XIVLauncher 托管 → 系统 → 下载）、`managed`（用/下载官方 wine-xiv）、`custom`（用 `custom_path`）、`system`（PATH 中的 wine） |
 | `custom_path` | path | 无 | `custom` 模式下的 wine 可执行文件或含 `wine64`/`wine` 的目录（含 `bin/` 目录） |
-| `prefix` | path | 无 | `WINEPREFIX`；缺省 `~/.xiv-launcher-rs/prefix` |
+| `prefix` | path | 无 | `WINEPREFIX`；缺省 `~/.eorzea/prefix` |
 | `esync` | bool | `false` | 设置 `WINEESYNC=1` |
 | `fsync` | bool | `false` | 设置 `WINEFSYNC=1` |
 | `msync` | bool | `false` | 设置 `WINEMSYNC=1`（仅 macOS 生效） |
@@ -60,7 +60,7 @@ Wine 字段通过 `#[serde(flatten)]` 直接写在 TOML 顶层（兼容旧格式
 | `dalamud.manage_runtime` | bool | `false` | 强制由 launcher 托管 Windows x64 .NET runtime（即使 release 未声明需要） |
 | `dalamud.track` | string | `"release"` | 更新通道（`release` / `staging` / 自定义） |
 | `dalamud.beta_key` | string | 无 | staging 通道的 beta key |
-| `dalamud.install_root` | path | 无 | Dalamud 安装根目录；缺省 `~/.xiv-launcher-rs/dalamud` |
+| `dalamud.install_root` | path | 无 | Dalamud 安装根目录；缺省 `~/.eorzea/dalamud` |
 
 ### 完整示例
 

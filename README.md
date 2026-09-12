@@ -8,7 +8,7 @@ FFXIV 国服（SDO/盛趣）启动器的 Rust 实现，移植自 `XIVLauncher.Co
 - **游戏文件管理**：本地版本查看、补丁检查/下载/应用（ZiPatch）、完整性校验
 - **启动**：Wine 运行游戏（esync/fsync/msync、DXVK、gamemode、自定义环境变量）
 - **Dalamud**：插件框架集成，版本门控 + 自动安装 + 安全降级
-- **双前端**：dioxus-native GUI 与 `eoz` CLI，共享同一套配置（`~/.xiv-launcher-rs/`）
+- **双前端**：dioxus-native GUI 与 `eoz` CLI，共享同一套配置（`~/.eorzea/`）
 
 ## 快速开始
 

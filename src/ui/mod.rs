@@ -20,10 +20,10 @@ use std::sync::Arc;
 
 use dioxus::prelude::*;
 use eorzea_auth::SdoArea;
-use eorzea_lib::auth::{self, AuthConfig};
-use eorzea_lib::config::{self, WineSettings};
-use eorzea_lib::dalamud::model::DalamudSettings;
-use eorzea_lib::launcher::{LaunchToken, Launcher};
+use crate::auth::{self, AuthConfig};
+use crate::config::{self, WineSettings};
+use crate::dalamud::model::DalamudSettings;
+use crate::launcher::{LaunchToken, Launcher};
 
 /// 顶部标签页。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

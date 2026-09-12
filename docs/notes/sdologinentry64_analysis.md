@@ -100,7 +100,7 @@ src/XIVLauncher.Core/Resources/binaries/sdologinentry64.dll
 https://raw.githubusercontent.com/ottercorp/XIVLauncher.Core/cn/src/XIVLauncher.Core/Resources/binaries/sdologinentry64.dll
 ```
 
-下载后缓存在 `~/.xiv-launcher-rs/tools/sdologinentry64.dll`，避免重复下载。
+下载后缓存在 `~/.eorzea/tools/sdologinentry64.dll`，避免重复下载。
 
 ---
 
@@ -256,7 +256,7 @@ Rust launcher 不再搜索本地文件，而是直接从 ottercorp GitHub 仓库
 const DLL_URL: &str = "https://raw.githubusercontent.com/ottercorp/XIVLauncher.Core/main/src/XIVLauncher.Core/Resources/binaries/sdologinentry64.dll";
 ```
 
-下载后缓存在 `~/.xiv-launcher-rs/tools/sdologinentry64.dll`，如果已存在则直接使用缓存版本。
+下载后缓存在 `~/.eorzea/tools/sdologinentry64.dll`，如果已存在则直接使用缓存版本。
 
 ### 6.3 识别修改版
 

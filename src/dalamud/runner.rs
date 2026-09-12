@@ -1,9 +1,10 @@
-//! Dalamud 启动编排（Linux 通过 Wine 运行 Injector）。
+//! Dalamud 启动编排（Linux/macOS 通过 Wine，Windows 原生运行 Injector）。
 //!
-//! 对应 C# `UnixDalamudRunner.cs`。关键点：
-//! - Injector 是 Windows 组件，在**与游戏相同的 Wine prefix** 内运行
-//! - 所有传入 Injector 的路径须经 `winepath --windows` 转换为 `Z:\...`
-//! - Injector stdout 输出单行 JSON `{pid, handle}`（Wine PID）
+//! 对应 C# `UnixDalamudRunner.cs` / `WindowsDalamudRunner.cs`。关键点：
+//! - Injector 是 Windows 组件；非 Windows 上在**与游戏相同的 Wine prefix** 内运行，
+//!   所有传入 Injector 的路径须经 `winepath --windows` 转换为 `Z:\...`
+//! - Windows 上 Injector 与游戏均为原生进程，路径直接传递
+//! - Injector stdout 输出单行 JSON `{pid, handle}`（Wine/原生 PID）
 
 use std::path::Path;
 use std::process::Command;
@@ -107,6 +108,43 @@ pub fn launch_through_injector(
         cmd.env(k, v);
     }
 
+    spawn_and_read_result(cmd)
+}
+
+/// 原生 Windows：直接运行 `Dalamud.Injector.exe launch`，解析 JSON 结果。
+///
+/// 对应 C# `WindowsDalamudRunner.cs`：Injector 与游戏都是原生进程，
+/// 路径无需 winepath 转换，也不设置 `XL_WINEON*`/`WINEPREFIX`；
+/// `env` 只传增量项（如 `DALAMUD_RUNTIME`/`DOTNET_ROOT`），其余继承本进程。
+/// Injector 报告的 pid 即游戏进程的原生 PID。
+#[cfg(target_os = "windows")]
+pub fn launch_through_injector_native(
+    injector_exe: &Path,
+    start: &DalamudStartInfo,
+    load_method: DalamudLoadMethod,
+    game_args: &[String],
+    without_dalamud: bool,
+    env: &[(String, String)],
+) -> Result<InjectorLaunch, WineError> {
+    let injector_args = build_injector_launch_args(start, load_method, game_args, without_dalamud);
+
+    info!(injector = ?injector_exe, "launching game through Dalamud Injector (native)");
+    let mut cmd = Command::new(injector_exe);
+    cmd.args(&injector_args).current_dir(
+        injector_exe
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new(".")),
+    );
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+
+    spawn_and_read_result(cmd)
+}
+
+/// 启动 Injector 进程并读取其 stdout JSON（Wine/原生 Windows 共用）。
+fn spawn_and_read_result(mut cmd: Command) -> Result<InjectorLaunch, WineError> {
     // 捕获 stdout 用于解析 JSON（stderr 独立，避免干扰）
     use std::process::Stdio;
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());

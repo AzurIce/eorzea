@@ -4,7 +4,7 @@
 //! 与 `wine.rs` 的关系：这里是**声明式配置**，`WineTool` 是解析后的运行时对象。
 //! 支持"启动时使用不同的 wine"：持久化默认配置 + `Launcher::launch_with_wine` 单次覆盖。
 //!
-//! 配置文件：`~/.xiv-launcher-rs/config.toml`（TOML，旧版 `settings.json` 自动迁移）。
+//! 配置文件：`~/.eorzea/config.toml`（TOML，旧版 `settings.json` 自动迁移）。
 //! 顶层为 Wine 设置（flatten），`[dalamud]` section 为 Dalamud 配置。
 
 use std::collections::BTreeMap;
@@ -66,7 +66,7 @@ pub struct WineSettings {
     pub startup_type: WineStartupType,
     /// `Custom` 模式下的路径：`wine64` 可执行文件，或含 `wine64` 的 bin 目录
     pub custom_path: Option<PathBuf>,
-    /// Wine prefix 目录；`None` 使用默认 `~/.xiv-launcher-rs/prefix`
+    /// Wine prefix 目录；`None` 使用默认 `~/.eorzea/prefix`
     pub prefix: Option<PathBuf>,
     /// 启用 esync（`WINEESYNC=1`）
     pub esync: bool,
@@ -143,17 +143,17 @@ pub fn save_app(path: &Path, cfg: &AppConfig) -> Result<(), std::io::Error> {
     std::fs::write(path, content)
 }
 
-/// 配置文件路径：`~/.xiv-launcher-rs/config.toml`。
+/// 配置文件路径：`~/.eorzea/config.toml`。
 pub fn settings_path() -> PathBuf {
     dirs::home_dir()
-        .map(|h| h.join(".xiv-launcher-rs/config.toml"))
+        .map(|h| h.join(".eorzea/config.toml"))
         .unwrap_or_else(|| PathBuf::from("config.toml"))
 }
 
 /// 旧版 `settings.json` 路径（迁移用）。
 pub fn legacy_settings_path() -> PathBuf {
     dirs::home_dir()
-        .map(|h| h.join(".xiv-launcher-rs/settings.json"))
+        .map(|h| h.join(".eorzea/settings.json"))
         .unwrap_or_else(|| PathBuf::from("settings.json"))
 }
 
@@ -162,7 +162,7 @@ pub fn load_settings_from(path: &Path) -> WineSettings {
     load_app(path).settings
 }
 
-/// 加载默认位置（`~/.xiv-launcher-rs/config.toml`）的整个 AppConfig。
+/// 加载默认位置（`~/.eorzea/config.toml`）的整个 AppConfig。
 ///
 /// 若新文件不存在但旧版 `settings.json` 存在，自动迁移并保存。
 pub fn load_app_default() -> AppConfig {

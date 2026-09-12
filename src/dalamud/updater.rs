@@ -12,10 +12,10 @@ use super::model::{DalamudStatus, DalamudVersionInfo, InstallState};
 /// release API 基地址（`ServerAddress.MainAddress`）。
 pub const REMOTE_BASE: &str = "https://aonyx.ffxiv.wang/Dalamud/Release/VersionInfo?track=";
 
-/// 默认安装根目录：`~/.xiv-launcher-rs/dalamud`。
+/// 默认安装根目录：`~/.eorzea/dalamud`。
 pub fn default_install_root() -> PathBuf {
     dirs::home_dir()
-        .map(|h| h.join(".xiv-launcher-rs/dalamud"))
+        .map(|h| h.join(".eorzea/dalamud"))
         .unwrap_or_else(|| PathBuf::from("./dalamud"))
 }
 
@@ -215,9 +215,17 @@ pub async fn status(
 }
 
 /// 检测可用的 7z 解压命令（7zz / 7z / 7za）。
+///
+/// 探测命令平台相关：Unix 用 `which`，Windows 用 `where`
+/// （GUI 进程不在 Git Bash 里，没有 `which`）。
 fn find_7z() -> Option<String> {
+    let probe_cmd = if cfg!(target_os = "windows") {
+        "where"
+    } else {
+        "which"
+    };
     for name in ["7zz", "7z", "7za"] {
-        if Command::new("which")
+        if Command::new(probe_cmd)
             .arg(name)
             .output()
             .map(|o| o.status.success())
@@ -350,7 +358,10 @@ pub async fn download_release(
     install_root: &Path,
     mut on_progress: impl FnMut(u64, u64),
 ) -> Result<PathBuf, DalamudError> {
-    let sevenz = find_7z().ok_or(DalamudError::NotImplemented)?;
+    let sevenz = find_7z().ok_or_else(|| {
+        warn!("no 7z executable found (looked for 7zz/7z/7za in PATH)");
+        DalamudError::NotImplemented
+    })?;
 
     // 1. 下载
     let url = &version_info.download_url;
@@ -387,6 +398,7 @@ pub async fn download_release(
     })?;
     let mut written = 0u64;
     let mut stream = resp;
+    #[cfg(not(target_arch = "wasm32"))]
     while let Some(chunk) = stream
         .chunk()
         .await
@@ -398,6 +410,21 @@ pub async fn download_release(
             source: e,
         })?;
         written += chunk.len() as u64;
+        on_progress(written, total);
+    }
+    // wasm 客户端不支持流式 chunk()：一次读完再写盘（浏览器预览用）
+    #[cfg(target_arch = "wasm32")]
+    {
+        use std::io::Write;
+        let body = stream
+            .bytes()
+            .await
+            .map_err(|e| DalamudError::Network(e.to_string()))?;
+        file.write_all(&body).map_err(|e| DalamudError::Io {
+            path: archive.clone(),
+            source: e,
+        })?;
+        written = body.len() as u64;
         on_progress(written, total);
     }
     info!(bytes = written, "downloaded Dalamud release");
@@ -481,7 +508,7 @@ pub enum DalamudError {
     Parse(String),
     #[error("Dalamud release integrity check failed: {0}")]
     Integrity(String),
-    #[error("not implemented yet: release download/install requires 7z support")]
+    #[error("7z not found in PATH (install 7-Zip or p7zip to download Dalamud release)")]
     NotImplemented,
     #[error("IO error at {path}: {source}")]
     Io {

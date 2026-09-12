@@ -113,35 +113,55 @@ pub async fn download_patches(
     let mut skipped = 0;
     let mut downloaded = Vec::new();
 
-    let mut tasks = Vec::new();
-    for entry in patches.iter() {
-        let client = client.clone();
-        let semaphore = semaphore.clone();
-        let dest_dir = dest_dir.to_path_buf();
-        let entry = entry.clone();
-        tasks.push(tokio::spawn(async move {
-            let _permit = semaphore
-                .acquire()
-                .await
-                .map_err(|_| PatchDownloadError::Semaphore)?;
-            download_one(&client, &entry, &dest_dir).await
-        }));
-    }
-
-    for task in tasks {
-        let (bytes, path) = match task.await {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => return Err(e),
-            Err(e) => return Err(PatchDownloadError::TaskJoin(e)),
-        };
-        match bytes {
-            Some(b) => {
-                downloaded_bytes += b;
-                downloaded.push(path);
-            }
-            None => skipped += 1,
+    // 原生：Semaphore + tokio::spawn 并发下载
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut tasks = Vec::new();
+        for entry in patches.iter() {
+            let client = client.clone();
+            let semaphore = semaphore.clone();
+            let dest_dir = dest_dir.to_path_buf();
+            let entry = entry.clone();
+            tasks.push(tokio::spawn(async move {
+                let _permit = semaphore
+                    .acquire()
+                    .await
+                    .map_err(|_| PatchDownloadError::Semaphore)?;
+                download_one(&client, &entry, &dest_dir).await
+            }));
         }
-        on_progress(downloaded_bytes, total_bytes);
+
+        for task in tasks {
+            let (bytes, path) = match task.await {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(PatchDownloadError::TaskJoin(e)),
+            };
+            match bytes {
+                Some(b) => {
+                    downloaded_bytes += b;
+                    downloaded.push(path);
+                }
+                None => skipped += 1,
+            }
+            on_progress(downloaded_bytes, total_bytes);
+        }
+    }
+    // wasm：reqwest Response 含 Rc 非 Send，不能 tokio::spawn；顺序下载即可
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = &semaphore;
+        for entry in patches.iter() {
+            let (bytes, path) = download_one(client, entry, dest_dir).await?;
+            match bytes {
+                Some(b) => {
+                    downloaded_bytes += b;
+                    downloaded.push(path);
+                }
+                None => skipped += 1,
+            }
+            on_progress(downloaded_bytes, total_bytes);
+        }
     }
 
     Ok(DownloadSummary {
@@ -207,6 +227,7 @@ async fn download_one(
     })?;
 
     let mut bytes = 0u64;
+    #[cfg(not(target_arch = "wasm32"))]
     while let Some(chunk) = response
         .chunk()
         .await
@@ -221,6 +242,20 @@ async fn download_one(
             source: e,
         })?;
         bytes += chunk.len() as u64;
+    }
+    // wasm 客户端不支持流式 chunk()：一次读完再写盘（浏览器预览用）
+    #[cfg(target_arch = "wasm32")]
+    {
+        use std::io::Write;
+        let body = response.bytes().await.map_err(|e| PatchDownloadError::Body {
+            url: entry.url.clone(),
+            source: e,
+        })?;
+        file.write_all(&body).map_err(|e| PatchDownloadError::Io {
+            path: dest.clone(),
+            source: e,
+        })?;
+        bytes = body.len() as u64;
     }
 
     debug!(file = %dest.display(), bytes, "patch downloaded");

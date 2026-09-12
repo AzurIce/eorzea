@@ -183,13 +183,13 @@
         ├── 未检测到 → 自动下载
         │   ├── URL: https://s3.ffxiv.wang/xlcore/deps/wine/osx/xom-4.17.1/wine.tar.gz
         │   ├── 大小：~285MB
-        │   ├── 解压到：~/.xiv-launcher-rs/tools/wine/
+        │   ├── 解压到：~/.eorzea/tools/wine/
         │   └── 验证：wine64 可执行文件存在
         │
         ▼
     返回 WineTool {
-        wine64_path: "~/.xiv-launcher-rs/tools/wine/bin/wine64",
-        prefix_path: "~/.xiv-launcher-rs/prefix",
+        wine64_path: "~/.eorzea/tools/wine/bin/wine64",
+        prefix_path: "~/.eorzea/prefix",
         is_managed: true
     }
 ```
@@ -204,7 +204,7 @@
         ├── 不存在 → 自动下载
         │   ├── URL: https://s3.ffxiv.wang/xlcore/deps/dxvk/osx/...
         │   ├── 大小：~2.7MB
-        │   ├── 解压到：~/.xiv-launcher-rs/tools/dxvk/
+        │   ├── 解压到：~/.eorzea/tools/dxvk/
         │   └── 复制 DLL：
         │       ├── x64/d3d11.dll → prefix/system32/
         │       ├── x64/d3d10core.dll → prefix/system32/
@@ -224,7 +224,7 @@
         ├── 场景 A：不存在
         │   └── 从 GitHub 下载 ottercorp 修改版
         │       URL: raw.githubusercontent.com/ottercorp/XIVLauncher.Core/cn/...
-        │       缓存：~/.xiv-launcher-rs/tools/sdologinentry64.dll
+        │       缓存：~/.eorzea/tools/sdologinentry64.dll
         │       复制到：{gamePath}/../sdo/sdologin/sdologinentry64.dll
         │
         ├── 场景 B：存在但不是修改版（CompanyName != "ottercorp"）
@@ -256,7 +256,7 @@
          XL.LobbyHosts=...
 
 环境变量：
-    WINEPREFIX=~/.xiv-launcher-rs/prefix
+    WINEPREFIX=~/.eorzea/prefix
     XL_WINEONLINUX=true
     XL_WINEONMAC=true
     WINEDLLOVERRIDES="msquic=,mscoree=n,b;d3d11=n;dxgi=n,b"
@@ -312,7 +312,7 @@
 ### 文件系统变更
 
 ```
-~/.xiv-launcher-rs/
+~/.eorzea/
 ├── tools/
 │   ├── wine/                          ← Wine 运行时（285MB）
 │   │   └── bin/wine64

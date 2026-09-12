@@ -2,10 +2,10 @@
 
 use dioxus::prelude::*;
 use eorzea_auth::PatchListEntry;
-use eorzea_lib::config::WineStartupType;
-use eorzea_lib::dalamud::{updater, DalamudStatus, InstallState};
-use eorzea_lib::game_files::{CheckResult, GameFileManager};
-use eorzea_lib::wine::WineTool;
+use crate::config::WineStartupType;
+use crate::dalamud::{updater, DalamudStatus, InstallState};
+use crate::game_files::{CheckResult, GameFileManager};
+use crate::wine::WineTool;
 
 use super::login::{ActionButton, ErrorRow, Section};
 use super::settings::Checkbox;
@@ -120,7 +120,7 @@ pub fn HomePage() -> Element {
             return;
         }
         let patch_dir = dirs::home_dir()
-            .map(|h| h.join(".xiv-launcher-rs/patches"))
+            .map(|h| h.join(".eorzea/patches"))
             .unwrap_or_else(|| "patches".into());
         update_state.set(UpdateState::Downloading(0, 0));
         spawn(async move {
@@ -199,7 +199,7 @@ pub fn HomePage() -> Element {
                                     // 写回轮换后的 session key
                                     let mut cfg = state.auth_cfg.read().clone();
                                     cfg.upsert(
-                                        eorzea_lib::auth::Account {
+                                        crate::auth::Account {
                                             snda_id: t.snda_id.clone(),
                                             username: t.username.clone(),
                                             auto_login_session_key: t
@@ -208,8 +208,8 @@ pub fn HomePage() -> Element {
                                         },
                                         false,
                                     );
-                                    let _ = eorzea_lib::auth::save(
-                                        &eorzea_lib::auth::config_path(),
+                                    let _ = crate::auth::save(
+                                        &crate::auth::config_path(),
                                         &cfg,
                                     );
                                     state.auth_cfg.set(cfg);

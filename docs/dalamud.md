@@ -1,15 +1,15 @@
 # Dalamud 集成
 
-eorzea 支持通过 Dalamud.Injector 在与游戏相同的 Wine prefix 内加载 Dalamud 插件框架。设计原则是**版本门控 + 安全降级**：任何环节不满足条件都退回直接启动游戏，绝不带着版本不匹配的 Dalamud 强行启动。
+eorzea 支持通过 Dalamud.Injector 加载 Dalamud 插件框架：Linux/macOS 在与游戏相同的 Wine prefix 内运行 Injector，Windows 原生运行。设计原则是**版本门控 + 安全降级**：任何环节不满足条件都退回直接启动游戏，绝不带着版本不匹配的 Dalamud 强行启动。
 
 配置字段见 [`config.md`](config.md) 的 `[dalamud]` 一节；加载机制的深度调研见 [`notes/dalamud_integration.md`](notes/dalamud_integration.md)。
 
 ## 目录布局
 
-默认安装根目录 `~/.xiv-launcher-rs/dalamud`（可用 `dalamud.install_root` 覆盖）：
+默认安装根目录 `~/.eorzea/dalamud`（可用 `dalamud.install_root` 覆盖）：
 
 ```text
-~/.xiv-launcher-rs/dalamud/
+~/.eorzea/dalamud/
 ├── Hooks/<AssemblyVersion>/    # Dalamud release（Dalamud.Injector.exe、Dalamud.dll、hashes.json、version.json）
 │   └── dev/                    # 开发版（状态检测时跳过）
 ├── runtime/                    # 托管的 Windows x64 .NET runtime
@@ -47,12 +47,12 @@ eorzea 支持通过 Dalamud.Injector 在与游戏相同的 Wine prefix 内加载
 1. 获取远端元数据；不可用 → 降级。
 2. 版本门控：`SupportedGameVer != 本地游戏版本` → 降级。
 3. **Hooks（release 本体）**：本地无有效安装（缺关键文件或 MD5 校验失败）→ 从元数据 `downloadUrl` 下载 `.7z`，用 `7zz/7z/7za` 解压，校验关键文件与逐文件 MD5，原子 rename 到 `Hooks/<AssemblyVersion>/` 并写 `version.json`。
-4. **runtime**：`RuntimeRequired` 或 `dalamud.manage_runtime = true` 时，从华为 NuGet 镜像（失败回退官方 NuGet）下载 `Microsoft.{NETCore,WindowsDesktop}.App` 的 win-x64 runtime nupkg，只提取需要的目录，组装后原子替换到 `runtime/`。注入前会把 `DALAMUD_RUNTIME` / `DOTNET_ROOT` 指向它（经 `winepath` 转 Windows 路径），不依赖 wine-mono。
+4. **runtime**：`RuntimeRequired` 或 `dalamud.manage_runtime = true` 时，从华为 NuGet 镜像（失败回退官方 NuGet）下载 `Microsoft.{NETCore,WindowsDesktop}.App` 的 win-x64 runtime nupkg，只提取需要的目录，组装后原子替换到 `runtime/`。注入前会把 `DALAMUD_RUNTIME` / `DOTNET_ROOT` 指向它（非 Windows 经 `winepath` 转 Windows 路径，Windows 直接传原生路径），不依赖 wine-mono。
 5. **assets**：从 `https://aonyx.ffxiv.wang/Dalamud/Asset/Meta` 取元数据，逐文件 SHA1 校验、缺失才下载；Noto 字体有多个 CTAN 镜像 fallback。完成后写 `asset.ver` 并清理旧版本目录（保留 `dev`）。
 
 ## 通过 Injector 启动（runner）
 
-所有传给 Injector 的路径先经 `winepath --windows` 转成 `Z:\...` 形式，然后：
+非 Windows 上所有传给 Injector 的路径先经 `winepath --windows` 转成 `Z:\...` 形式；Windows 上 Injector 与游戏都是原生进程，路径直接传递（无 `WINEPREFIX`/`XL_WINEON*` 环境变量）。命令行形态一致：
 
 ```text
 wine64 Dalamud.Injector.exe launch --mode=<entrypoint|inject>

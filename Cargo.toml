@@ -14,17 +14,16 @@ name = "eorzea_lib"
 
 [dependencies]
 dioxus = "0.7"
-dioxus-native = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 eorzea-auth = { path = "packages/eorzea-auth" }
 thiserror = "2"
-tokio = { version = "1", features = ["full"] }
+# wasm 安全的 tokio 子集；原生目标在下方 target 段补 "full"（net→mio 不支持 wasm）
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 reqwest = { version = "0.12", features = ["rustls-tls", "gzip"], default-features = false }
 dirs = "5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-rpassword = "7"
 clap = { version = "4", features = ["derive"] }
 sha1 = "0.10"
 flate2 = "1"
@@ -32,8 +31,21 @@ base64 = "0.22"
 toml = "0.8"
 md5 = "0.7"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+rpassword = "7"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dioxus-native = "0.7"
+tokio = { version = "1", features = ["full"] }
 # 原生文件/目录选择对话框（Linux 走 xdg-desktop-portal，与 blitz-shell 的 rfd 统一 feature）
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+
+# 浏览器端调试入口（dx serve --platform web）：同一套 rsx UI 在浏览器里渲染，
+# 便于截图/检查层级；rfd 目录选择等原生能力在 wasm 上以提示替代。
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+dioxus = { version = "0.7", features = ["web"] }
+getrandom = { version = "0.2", features = ["js"] }
 
 [[example]]
 name = "sdo_launch"
