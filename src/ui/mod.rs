@@ -114,6 +114,7 @@ pub fn app() -> Element {
     };
     use_context_provider(|| state);
 
+    let default_area = initial_config.area.clone();
     // 启动时初始化 Launcher（设备指纹）并拉取大区列表。
     use_hook(move || {
         spawn(async move {
@@ -124,8 +125,13 @@ pub fn app() -> Element {
             match eorzea_auth::sdo::SdoAuth::fetch_server_list().await {
                 Ok(mut list) => {
                     list.sort_by_key(|a| a.area_order);
-                    // 默认选中第一个大区
-                    if let Some(first) = list.first() {
+                    // 默认选中：config.toml 的默认大区（设置页可配），
+                    // 不在列表中时退回第一个大区
+                    if let Some(first) = list
+                        .iter()
+                        .find(|a| Some(&a.area_id) == default_area.as_ref())
+                        .or_else(|| list.first())
+                    {
                         state.selected_area.set(Some(first.area_id.clone()));
                     }
                     state.areas.set(list);
