@@ -195,9 +195,10 @@ pub fn app() -> Element {
                     }
                 }
 
-                // 状态栏
+                // 状态栏。overflow-wrap: anywhere 让无空格长串（URL/路径）
+                // 也能断行，避免超长错误信息单行溢出窗口
                 div {
-                    style: "padding: 8px 28px; border-top: 1px solid {t.border}; font-size: 12px; color: {t.text_secondary};",
+                    style: "padding: 8px 28px; border-top: 1px solid {t.border}; font-size: 12px; line-height: 1.5; color: {t.text_secondary}; overflow-wrap: anywhere;",
                     "{state.status}"
                 }
             }
