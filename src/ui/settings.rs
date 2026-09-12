@@ -134,6 +134,19 @@ pub fn SettingsPage() -> Element {
         .unwrap_or(false);
     let game_hint_color = if draft_game_ok { t.success } else { t.warning };
 
+    // 大区 ID 对照（随服务端大区列表动态生成）
+    let area_hint = if state.areas.read().is_empty() {
+        "大区列表加载中…".to_string()
+    } else {
+        state
+            .areas
+            .read()
+            .iter()
+            .map(|a| format!("{}={}", a.area_id, a.area_name))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    };
+
     // Wine 配置仅在依赖 wine 的平台展示：Windows 原生启动忽略 wine 参数；
     // esync/fsync/gamemode 依赖 Linux 内核特性，macOS（wine/CrossOver）不支持，隐藏对应开关。
     // 隐藏的开关不重置草稿值，保存时原样写回 config.toml。
@@ -156,9 +169,16 @@ pub fn SettingsPage() -> Element {
                     }
                 }
                 SettingsRow { label: "默认大区",
-                    TextInput {
-                        placeholder: "大区 ID（如 1 = 豆豆柴），留空则每次启动到主页选择",
-                        value: area,
+                    div {
+                        style: "display: flex; flex-direction: column; gap: 6px;",
+                        TextInput {
+                            placeholder: "填下方列出的大区 ID，留空则每次启动到主页选择",
+                            value: area,
+                        }
+                        p {
+                            style: "margin: 0; font-size: 12px; line-height: 1.5; color: {t.text_secondary};",
+                            "启动时默认使用的大区。当前可用：{area_hint}"
+                        }
                     }
                 }
                 if let Some(root) = &draft_root {
@@ -238,50 +258,85 @@ pub fn SettingsPage() -> Element {
                         style: "margin-top: 16px; display: flex; flex-direction: column; gap: 12px;",
                         SettingsRow { label: "加载方式",
                             div {
-                                style: "display: flex; flex-direction: row; gap: 8px; flex-wrap: wrap;",
-                                for (method, name, hint) in [
-                                    (DalamudLoadMethod::EntryPoint, "入口点", "推荐"),
-                                    (DalamudLoadMethod::DllInject, "DLL 注入", "传统方式"),
-                                    (DalamudLoadMethod::AclOnly, "仅兼容修复", "不加载插件"),
-                                ] {
-                                    {
-                                        let active = dalamud_load_method() == method;
-                                        let bg = if active { t.active_bg } else { "transparent" };
-                                        let fg = if active { t.text } else { t.text_secondary };
-                                        rsx! {
-                                            button {
-                                                key: "{hint}",
-                                                style: "padding: 6px 14px; border: 1px solid {t.border}; border-radius: 6px; background: {bg}; color: {fg}; font-size: 13px; cursor: pointer;",
-                                                onclick: move |_| dalamud_load_method.set(method),
-                                                "{name} · {hint}"
+                                style: "display: flex; flex-direction: column; gap: 6px;",
+                                div {
+                                    style: "display: flex; flex-direction: row; gap: 8px; flex-wrap: wrap;",
+                                    for (method, name, hint) in [
+                                        (DalamudLoadMethod::EntryPoint, "入口点", "推荐"),
+                                        (DalamudLoadMethod::DllInject, "DLL 注入", "传统方式"),
+                                        (DalamudLoadMethod::AclOnly, "仅兼容修复", "不加载插件"),
+                                    ] {
+                                        {
+                                            let active = dalamud_load_method() == method;
+                                            let bg = if active { t.active_bg } else { "transparent" };
+                                            let fg = if active { t.text } else { t.text_secondary };
+                                            rsx! {
+                                                button {
+                                                    key: "{hint}",
+                                                    style: "padding: 6px 14px; border: 1px solid {t.border}; border-radius: 6px; background: {bg}; color: {fg}; font-size: 13px; cursor: pointer;",
+                                                    onclick: move |_| dalamud_load_method.set(method),
+                                                    "{name} · {hint}"
+                                                }
                                             }
                                         }
                                     }
                                 }
+                                p {
+                                    style: "margin: 0; font-size: 12px; line-height: 1.5; color: {t.text_secondary};",
+                                    "入口点：由注入器拉起游戏，Dalamud 随游戏一起加载，最稳定。DLL 注入：向已启动的游戏进程注入，传统方式。仅兼容修复：经注入器启动游戏但不加载 Dalamud 本体，用于排查问题。"
+                                }
                             }
                         }
                         SettingsRow { label: "更新通道",
-                            TextInput {
-                                placeholder: "release / staging / 自定义 track",
-                                value: dalamud_track,
+                            div {
+                                style: "display: flex; flex-direction: column; gap: 6px;",
+                                TextInput {
+                                    placeholder: "release / staging / 自定义 track",
+                                    value: dalamud_track,
+                                }
+                                p {
+                                    style: "margin: 0; font-size: 12px; line-height: 1.5; color: {t.text_secondary};",
+                                    "Dalamud 本体用哪个版本：release 为稳定版；staging 为测试版，适配新游戏版本更快但可能不稳定；一般保持 release。"
+                                }
                             }
                         }
                         SettingsRow { label: "安装目录",
-                            TextInput {
-                                placeholder: "留空使用默认 ~/.eorzea/dalamud",
-                                value: dalamud_install_root,
+                            div {
+                                style: "display: flex; flex-direction: column; gap: 6px;",
+                                TextInput {
+                                    placeholder: "留空使用默认 ~/.eorzea/dalamud",
+                                    value: dalamud_install_root,
+                                }
+                                p {
+                                    style: "margin: 0; font-size: 12px; line-height: 1.5; color: {t.text_secondary};",
+                                    "Dalamud 本体（注入器、运行文件）的下载安装位置，留空即用上面的默认目录；首次启动游戏时自动下载，之后版本匹配直接复用。"
+                                }
                             }
                         }
                         SettingsRow { label: "初始化延迟",
-                            TextInput {
-                                placeholder: "毫秒（留空为 0）",
-                                value: dalamud_delay_ms,
+                            div {
+                                style: "display: flex; flex-direction: column; gap: 6px;",
+                                TextInput {
+                                    placeholder: "毫秒（留空为 0）",
+                                    value: dalamud_delay_ms,
+                                }
+                                p {
+                                    style: "margin: 0; font-size: 12px; line-height: 1.5; color: {t.text_secondary};",
+                                    "游戏启动后延迟多少毫秒再初始化 Dalamud，留空为 0（不延迟）；启动卡顿时可尝试调大。"
+                                }
                             }
                         }
                         div {
-                            style: "display: flex; flex-direction: row; gap: 24px; flex-wrap: wrap;",
-                            Checkbox { label: "禁用所有插件（safe mode）", checked: dalamud_no_plugins }
-                            Checkbox { label: "禁用第三方插件", checked: dalamud_no_third_party }
+                            style: "display: flex; flex-direction: column; gap: 6px;",
+                            div {
+                                style: "display: flex; flex-direction: row; gap: 24px; flex-wrap: wrap;",
+                                Checkbox { label: "禁用所有插件（safe mode）", checked: dalamud_no_plugins }
+                                Checkbox { label: "禁用第三方插件", checked: dalamud_no_third_party }
+                            }
+                            p {
+                                style: "margin: 0; font-size: 12px; line-height: 1.5; color: {t.text_secondary};",
+                                "排查插件问题用：前者只启动 Dalamud 本体、完全不加载插件；后者只屏蔽第三方仓库插件，官方插件照常加载。"
+                            }
                         }
                         p {
                             style: "font-size: 12px; color: {t.text_secondary}; margin-top: 4px;",
