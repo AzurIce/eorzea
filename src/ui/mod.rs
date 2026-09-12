@@ -141,7 +141,8 @@ pub fn app() -> Element {
 
     let tab = state.tab;
     let t = (state.theme)();
-    let toggle_label = if t.dark { "☀ 亮色" } else { "☾ 暗色" };
+    // 主题切换不用 ☀/☾：原生 blitz 默认字体缺字渲染为方块
+    let toggle_label = if t.dark { "亮色主题" } else { "暗色主题" };
     rsx! {
         // blitz 默认 UA 样式表带 `body { margin: 8px }`，窗口白底会从四周透出，
         // 这里注入静态样式重置（blitz 会把 mutation 插入的 <style> 编译为 author 样式表）

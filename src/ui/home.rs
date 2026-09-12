@@ -572,6 +572,8 @@ fn Dropdown(
         .and_then(|id| items.iter().find(|(k, _)| k == id))
         .map(|(_, name)| name.clone());
     let current_label = current.unwrap_or_else(|| placeholder.to_string());
+    // 箭头用 ASCII v/^：▾ 在原生 blitz 默认字体下缺字渲染为方块
+    let arrow = if is_open { "^" } else { "v" };
 
     rsx! {
         div {
@@ -581,7 +583,7 @@ fn Dropdown(
                 onclick: move |_| {
                     open_dropdown.set(if is_open { None } else { Some(id) });
                 },
-                "{current_label} ▾"
+                "{current_label} {arrow}"
             }
             if is_open {
                 div {
