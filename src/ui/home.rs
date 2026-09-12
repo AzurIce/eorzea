@@ -416,6 +416,7 @@ pub fn HomePage() -> Element {
                     div {
                         style: "width: 220px;",
                         Dropdown {
+                            id: "home-account",
                             items: account_items,
                             selected: state.selected_account,
                             placeholder: "请选择账号",
@@ -425,6 +426,7 @@ pub fn HomePage() -> Element {
                     div {
                         style: "width: 220px;",
                         Dropdown {
+                            id: "home-area",
                             items: area_items,
                             selected: state.selected_area,
                             placeholder: area_placeholder,
@@ -552,13 +554,17 @@ fn StatusCard(title: &'static str, children: Element) -> Element {
 /// - 展开列表走文档流内联展开（不用 `position: absolute + z-index`）：
 ///   原生 blitz 渲染器对层叠上下文支持不完整，绝对定位的弹层会被
 ///   文档序靠后的卡片遮挡；内联展开把下方内容顶开，两端渲染一致。
+/// - 展开状态收在全局 `AppState.open_dropdown`（`id` 区分实例）：
+///   同时只允许一个展开，且点击外部（`DropdownBackdrop` 捕获层）收起。
 #[component]
 fn Dropdown(
+    id: &'static str,
     items: Vec<(String, String)>,
     selected: Signal<Option<String>>,
     placeholder: &'static str,
 ) -> Element {
-    let mut open = use_signal(|| false);
+    let mut open_dropdown = use_context::<AppState>().open_dropdown;
+    let is_open = open_dropdown() == Some(id);
     let t = (use_context::<AppState>().theme)();
     let current = selected
         .read()
@@ -572,12 +578,16 @@ fn Dropdown(
             style: "display: flex; flex-direction: column;",
             button {
                 style: "display: block; padding: 8px 12px; border: 1px solid {t.input_border}; border-radius: 6px; background: transparent; color: {t.text}; font-size: 14px; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;",
-                onclick: move |_| open.set(!open()),
+                onclick: move |_| {
+                    open_dropdown.set(if is_open { None } else { Some(id) });
+                },
                 "{current_label} ▾"
             }
-            if open() {
+            if is_open {
                 div {
-                    style: "margin-top: 4px; max-height: 240px; overflow-y: auto; background: {t.card_bg}; border: 1px solid {t.border}; border-radius: 6px; padding: 4px;",
+                    // relative + z-index 20：压过点击外部捕获层（z-index 5），
+                    // blitz 端仍保持文档流内联展开
+                    style: "position: relative; z-index: 20; margin-top: 4px; max-height: 240px; overflow-y: auto; background: {t.card_bg}; border: 1px solid {t.border}; border-radius: 6px; padding: 4px;",
                     if items.is_empty() {
                         div {
                             style: "padding: 8px 12px; color: {t.text_secondary}; font-size: 13px;",
@@ -594,7 +604,7 @@ fn Dropdown(
                                     style: "display: block; padding: 8px 12px; border: none; border-radius: 4px; background: {bg}; color: {t.text}; font-size: 14px; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;",
                                     onclick: move |_| {
                                         selected.set(Some(id.clone()));
-                                        open.set(false);
+                                        open_dropdown.set(None);
                                     },
                                     "{name}"
                                 }
