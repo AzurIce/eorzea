@@ -274,7 +274,11 @@ pub fn SettingsPage() -> Element {
                 }
             }
 
+            // 吸底保存栏：长表单滚动时保存按钮始终可见（sticky 在 blitz 上
+            // 不生效时退化为普通块，仍位于表单底部）。
+            // 负 margin 抵消内容区 24px/28px 内边距，横跨整个滚动视口。
             div {
+                style: "position: sticky; bottom: 0; margin: 12px -28px -24px; padding: 12px 28px; background: {t.page_bg}; border-top: 1px solid {t.border};",
                 ActionButton { label: "保存设置", onclick: save }
             }
         }
