@@ -1,7 +1,7 @@
 //! 设置页：游戏目录、Wine 与 Dalamud 配置，保存写回 `config.toml`。
 
-use crate::config::{self, AppConfig, WineStartupType};
-use crate::dalamud::model::DalamudLoadMethod;
+use eorzea_lib::config::{self, AppConfig, WineStartupType};
+use eorzea_lib::dalamud::model::DalamudLoadMethod;
 use dioxus::prelude::*;
 
 use super::login::{ActionButton, GhostButton, Section, TextInput};

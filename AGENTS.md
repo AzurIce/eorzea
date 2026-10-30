@@ -5,19 +5,23 @@
 `eorzea` is a Rust reimplementation of the FFXIV launcher, porting auth and game-launch logic from `XIVLauncher.Core` (C#). The project uses a dioxus-native + Rust workspace:
 
 ```
-eorzea/              # workspace root (dioxus-native GUI crate)
+eorzea/                     # workspace root（核心库 crate `eorzea_lib`，不含 GUI）
+├── src/                    # auth / config / launcher / game / wine / dalamud / game_files
 ├── packages/
-│   ├── eorzea-auth/    # auth library (feature-gated)
-│   └── eorzea-cli/     # CLI（bin `eoz`：游戏文件管理/账号/启动）
-└── src/
-    ├── main.rs         # GUI 入口（dioxus-native launch）
-    └── ui/             # GUI 页面（mod.rs 根组件/共享状态，login/home/settings）
+│   ├── eorzea-app/         # GUI（bin `eorzea`，dioxus-native）
+│   │   └── src/ui/         # GUI 页面（mod.rs 根组件/共享状态，login/home/settings）
+│   ├── eorzea-auth/        # auth library (feature-gated)
+│   └── eorzea-cli/         # CLI（bin `eoz`：游戏文件管理/账号/启动）
+└── examples/               # sdo_launch / wine_test / hash_bench（核心库示例）
 ```
 
-GUI 相关：`src/ui/mod.rs` 是根组件与 `AppState`（标签页、auth.toml/config.toml 内存镜像、
+工作区默认成员是 `eorzea-cli`：`cargo run` / `cargo check` 只编译 CLI 链路，不碰 dioxus/blitz；
+GUI 用 `cargo run -p eorzea-app`（wasm 预览在该 crate 目录下 `dx serve --platform web`）。
+
+GUI 相关：`packages/eorzea-app/src/ui/mod.rs` 是根组件与 `AppState`（标签页、auth.toml/config.toml 内存镜像、
 大区缓存、本会话 token 缓存、底部状态栏），通过 dioxus context 共享给
-`src/ui/login.rs`（账号列表 + 扫码/推送/密码登录）、`src/ui/home.rs`
-（账号/大区选择、版本、检查/更新游戏、启动）、`src/ui/settings.rs`（游戏目录与 Wine 配置）。
+`ui/login.rs`（账号列表 + 扫码/推送/密码登录）、`ui/home.rs`
+（账号/大区选择、版本、检查/更新游戏、启动）、`ui/settings.rs`（游戏目录与 Wine 配置）。
 所有耗时操作（登录、等扫码、下载）在 dioxus `spawn` 异步任务中执行
 （dioxus-native 内置 tokio runtime），不阻塞 UI 线程。
 

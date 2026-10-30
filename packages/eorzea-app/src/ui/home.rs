@@ -3,11 +3,11 @@
 use dioxus::prelude::*;
 use eorzea_auth::PatchListEntry;
 #[cfg(not(target_os = "windows"))]
-use crate::config::WineStartupType;
-use crate::dalamud::{DalamudStatus, InstallState, updater};
-use crate::game_files::{CheckResult, GameFileManager, default_patch_dir};
+use eorzea_lib::config::WineStartupType;
+use eorzea_lib::dalamud::{DalamudStatus, InstallState, updater};
+use eorzea_lib::game_files::{CheckResult, GameFileManager, default_patch_dir};
 #[cfg(not(target_os = "windows"))]
-use crate::wine::WineTool;
+use eorzea_lib::wine::WineTool;
 
 use super::login::{ActionButton, ErrorRow, Section};
 use super::settings::Checkbox;
@@ -228,7 +228,7 @@ pub fn HomePage() -> Element {
                                     // 写回轮换后的 session key
                                     let mut cfg = state.auth_cfg.read().clone();
                                     cfg.upsert(
-                                        crate::auth::Account {
+                                        eorzea_lib::auth::Account {
                                             snda_id: t.snda_id.clone(),
                                             username: t.username.clone(),
                                             auto_login_session_key: t
@@ -237,8 +237,8 @@ pub fn HomePage() -> Element {
                                         },
                                         false,
                                     );
-                                    let _ = crate::auth::save(
-                                        &crate::auth::config_path(),
+                                    let _ = eorzea_lib::auth::save(
+                                        &eorzea_lib::auth::config_path(),
                                         &cfg,
                                     );
                                     state.auth_cfg.set(cfg);

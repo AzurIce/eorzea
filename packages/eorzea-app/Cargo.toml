@@ -1,0 +1,32 @@
+[package]
+name = "eorzea-app"
+version = "0.1.0"
+description = "Eorzea（FFXIV 国服启动器）dioxus-native GUI"
+authors = ["azurice"]
+edition = "2024"
+
+[[bin]]
+name = "eorzea"
+path = "src/main.rs"
+
+[dependencies]
+dioxus = "0.7"
+eorzea = { path = "../.." }
+eorzea-auth = { path = "../eorzea-auth" }
+base64 = "0.22"
+dirs = "5"
+# 扫描大区/补丁列表等轻量请求；与核心库同源（rustls，无系统 OpenSSL）
+reqwest = { version = "0.12", features = ["rustls-tls", "gzip"], default-features = false }
+tokio = { version = "1", features = ["rt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dioxus-native = "0.7"
+# 原生文件/目录选择对话框（Linux 走 xdg-desktop-portal，与 blitz-shell 的 rfd 统一 feature）
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+
+# 浏览器端调试入口（dx serve --platform web）：同一套 rsx UI 在浏览器里渲染，
+# 便于截图/检查层级；rfd 目录选择等原生能力在 wasm 上以提示替代。
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+dioxus = { version = "0.7", features = ["web"] }
+getrandom = { version = "0.2", features = ["js"] }

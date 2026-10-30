@@ -2307,16 +2307,11 @@ name = "eorzea"
 version = "0.1.0"
 dependencies = [
  "base64",
- "clap",
- "dioxus",
- "dioxus-native",
  "dirs",
  "eorzea-auth",
  "flate2",
- "getrandom 0.2.17",
  "md5",
  "reqwest",
- "rfd",
  "rpassword",
  "serde",
  "serde_json",
@@ -2328,6 +2323,23 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zip",
+]
+
+[[package]]
+name = "eorzea-app"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "dioxus",
+ "dioxus-native",
+ "dirs",
+ "eorzea",
+ "eorzea-auth",
+ "getrandom 0.2.17",
+ "reqwest",
+ "rfd",
+ "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]

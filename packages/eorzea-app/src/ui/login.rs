@@ -1,6 +1,6 @@
 //! 登录页：账号列表 + 扫码 / 推送 / 密码三种登录方式。
 
-use crate::auth;
+use eorzea_lib::auth;
 use base64::Engine;
 use dioxus::core::Task;
 use dioxus::prelude::*;

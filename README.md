@@ -13,11 +13,11 @@ FFXIV 国服（SDO/盛趣）启动器的 Rust 实现，移植自 `XIVLauncher.Co
 ## 快速开始
 
 ```bash
-# GUI
-cargo run
+# CLI（工作区默认成员，cargo run 直接跑 eoz）
+cargo run -- --help
 
-# CLI
-cargo run -p eorzea-cli -- --help
+# GUI
+cargo run -p eorzea-app
 
 # 典型流程：设置游戏目录 → 扫码登录 → 启动
 eoz config set game_path /games/ffxiv
@@ -29,9 +29,7 @@ eoz launch
 ## 目录结构
 
 ```text
-├── src/                    # 核心库（eorzea_lib）+ GUI crate
-│   ├── main.rs             # GUI 入口（dioxus-native）
-│   ├── ui/                 # GUI 页面：login / home / settings
+├── src/                    # 核心库（eorzea_lib）：认证/配置/补丁/启动编排
 │   ├── launcher.rs         # 登录 → 启动的编排层
 │   ├── game.rs             # 游戏进程启动（Wine / Dalamud Injector）
 │   ├── wine.rs             # Wine 解析、prefix 管理、DXVK 安装、环境变量（仅 Linux/macOS）
@@ -40,9 +38,10 @@ eoz launch
 │   ├── dalamud/            # Dalamud：updater / runtime / assets / runner
 │   └── game_files/         # 版本读取、补丁下载与应用、完整性校验
 ├── packages/
+│   ├── eorzea-app/         # GUI（bin `eorzea`）：main.rs + ui/（login / home / settings）
 │   ├── eorzea-auth/        # 认证库（feature gate：sdo 默认，se 可选）
 │   └── eorzea-cli/         # CLI（bin `eoz`）
-├── examples/               # 示例二进制（sdo_launch、wine_test）
+├── examples/               # 核心库示例二进制（sdo_launch、wine_test、hash_bench）
 ├── docs/                   # 用户文档
 │   ├── cli.md              #   CLI 完整用法与各命令执行阶段
 │   ├── config.md           #   全部配置字段说明
@@ -64,7 +63,9 @@ eoz launch
 ## 开发
 
 ```bash
-cargo check                      # 工作区（GUI + 核心库）
+cargo check                      # 默认成员（CLI + 核心库），不编译 GUI
+cargo check --workspace          # 含 GUI（dioxus/blitz）
+cargo run -p eorzea-app          # 运行 GUI
 cargo check -p eorzea-auth       # 认证库（默认 feature：sdo）
 cargo check -p eorzea-cli        # CLI
 cargo test -p eorzea --lib       # 核心库单元测试

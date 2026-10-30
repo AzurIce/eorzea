@@ -220,7 +220,7 @@
 
 ### P4-4 Windows 平台
 
-- [x] **编译与单元测试**：Windows（MSVC）上 `cargo check --workspace --all-targets` 通过、`cargo test --workspace` 全绿（根 crate / eorzea-auth / eoz 全部通过，2026-10-30 复核）
+- [x] **编译与单元测试**：Windows（MSVC）上 `cargo check --workspace --all-targets` 通过、`cargo test --workspace` 全绿（eorzea 核心库 / eorzea-app / eorzea-auth / eoz 全部通过，2026-10-30 复核）
 - [x] **Wine 模块按平台裁剪**：`src/wine.rs` 在 Windows 上不参与编译（`lib.rs` 的 `pub mod wine` 加 `cfg(not(windows))`）；Injector 启动/通信错误改用平台无关的 `dalamud::runner::InjectorError`（`WineError` 留在 wine 模块，原生 Windows 路径不再借用它）；`runner` 的 winepath/Injector-over-Wine 函数、`home` 的 Wine 状态卡、`wine_test` 示例均在 Windows 上不编译；`eoz launch --wine` 在 Windows 上不存在
 - [x] **原生启动分支**：`game.rs` 的 `cfg(target_os = "windows")` 分支直启 `ffxiv_dx11.exe`，或原生运行 `Dalamud.Injector.exe`（无 winepath / `XL_WINEON*` / `WINEPREFIX`）；Wine 设置区块与主页 Wine 状态卡在 UI 隐藏
 - [x] **GUI 启动冒烟**：`target/debug/eorzea.exe` 在 Windows 上保持运行、渲染后端为 wgpu/Vulkan（2026-10-30）
@@ -228,7 +228,7 @@
 - [ ] **Windows 设备指纹**：见 P0-1（当前 fallback 为 `unknown-<USERNAME>`）
 - [ ] **发布版日志**：`windows_subsystem = "windows"` 后 GUI 无控制台，`tracing` 只写 stderr → release 版没有日志可查；需要文件日志（如滚动写到 `~/.eorzea/logs/`）
 - [ ] **配置目录**：当前 `~/.eorzea`（`C:\Users\<用户>\.eorzea`），与 C# 的 `%APPDATA%\XIVLauncher` 不同，也不读取 C# 旧配置；是否改用 `dirs::config_dir()` 待定
-- [ ] **打包/CI**：仓库没有 Windows 安装包或构建工作流，目前只能本机 `cargo build`
+- [ ] **打包/CI**：仓库没有 Windows 安装包或构建工作流，目前只能本机 `cargo build`（拆分后 `cargo install --path packages/eorzea-cli` 不再连带编译 dioxus/blitz）
 - [x] **配置按平台拆分**：Windows 的 `AppConfig` 不含 Wine 字段（`#[cfg(not(windows))]`），`config.toml` 不写 `startup_type`/`custom_path`/`prefix`/`esync`/`fsync`/`msync`/`gamemode`/`[dxvk]`/`[env]`，`eoz config set` 对 Wine 键报「未知配置键」；读取 Linux/macOS 写出的配置时忽略这些键，`eoz config list` 只输出当前平台字段；首次运行模板也按平台区分（2026-10-30）
 
 ---
@@ -250,6 +250,7 @@
 - [x] Feature gate (`sdo` default, `se` optional)
 - [x] 补全 `se_login` example（此前 Cargo.toml 已声明但文件缺失，导致 `cargo fmt --all` 报错）
 - [x] Cargo workspace 重构（根 crate = tauri，`packages/` 下子 crate）
+- [x] **GUI 拆成独立 crate `eorzea-app`**（2026-10-30）：根包 `eorzea` 只留核心库（`eorzea_lib`，无 bin），`src/main.rs` + `src/ui/` 迁到 `packages/eorzea-app`（bin 名仍是 `eorzea`，dioxus/dioxus-native/rfd/wasm 依赖随之下沉）；`[workspace] default-members = ["packages/eorzea-cli"]`，因此 `cargo run` / `cargo check` 默认只走 CLI 链路，不再为了一条命令编译 blitz（CLI 依赖树从 626 个 crate 降到核心库规模）；GUI 用 `cargo run -p eorzea-app`
 - [x] Rust doc 注释覆盖所有公开 API
 - [x] **`SdoLoginData.SndaId` 字段大小写修复**：`model.rs` 中 `snda_id` 和 `snda_id_array` 添加 `alias` 同时支持 `SndaId`/`sndaId` 两种大小写（C# 参考使用小写 `sndaId`）
 

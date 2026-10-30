@@ -25,11 +25,12 @@
 
 ```bash
 cargo build -p eorzea-cli                  # 仅构建
-cargo run -p eorzea-cli -- --help          # 直接运行
+cargo run -- --help                        # 直接运行（工作区默认成员就是 CLI）
 cargo install --path packages/eorzea-cli   # 安装到 ~/.cargo/bin
 ```
 
-产物为二进制 `eoz`。
+产物为二进制 `eoz`。工作区的 GUI 是独立 crate `eorzea-app`（`cargo run -p eorzea-app`），
+CLI 的构建与安装不会编译 dioxus/blitz。
 
 ## 文件位置
 
