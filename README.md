@@ -6,9 +6,9 @@ FFXIV 国服（SDO/盛趣）启动器的 Rust 实现，移植自 `XIVLauncher.Co
 
 - **登录**：扫码（叨鱼 App）、密码、session key 自动登录；多账号管理
 - **游戏文件管理**：本地版本查看、补丁检查/下载/应用（ZiPatch）、完整性校验
-- **启动**：Wine 运行游戏（esync/fsync/msync、DXVK、gamemode、自定义环境变量）
+- **启动**：Linux/macOS 通过 Wine 运行游戏（esync/fsync/msync、DXVK、gamemode、自定义环境变量）；Windows 原生启动 `ffxiv_dx11.exe`（Wine 相关配置在 Windows 上不参与构建与持久化）
 - **Dalamud**：插件框架集成，版本门控 + 自动安装 + 安全降级
-- **双前端**：dioxus-native GUI 与 `eoz` CLI，共享同一套配置（`~/.eorzea/`）
+- **双前端**：dioxus-native GUI 与 `eoz` CLI，共享同一套配置（`~/.eorzea/`，按平台裁剪字段）
 
 ## 快速开始
 
@@ -34,7 +34,7 @@ eoz launch
 │   ├── ui/                 # GUI 页面：login / home / settings
 │   ├── launcher.rs         # 登录 → 启动的编排层
 │   ├── game.rs             # 游戏进程启动（Wine / Dalamud Injector）
-│   ├── wine.rs             # Wine 解析、prefix 管理、DXVK 安装、环境变量
+│   ├── wine.rs             # Wine 解析、prefix 管理、DXVK 安装、环境变量（仅 Linux/macOS）
 │   ├── config.rs           # config.toml 配置模型与持久化
 │   ├── auth.rs             # auth.toml 账号存储
 │   ├── dalamud/            # Dalamud：updater / runtime / assets / runner

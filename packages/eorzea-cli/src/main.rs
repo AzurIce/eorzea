@@ -104,7 +104,8 @@ enum Command {
         #[arg(long)]
         username: Option<String>,
 
-        /// 自定义 Wine 路径
+        /// 自定义 Wine 路径（仅 Linux/macOS）
+        #[cfg(not(target_os = "windows"))]
         #[arg(long)]
         wine: Option<PathBuf>,
 
@@ -386,6 +387,7 @@ async fn main() {
             account,
             method,
             username,
+            #[cfg(not(target_os = "windows"))]
             wine,
             qr_file,
             dalamud,
@@ -400,6 +402,10 @@ async fn main() {
             };
             let game_path = game_path_or_config(game_path);
             let area = area_or_config(area);
+            #[cfg(not(target_os = "windows"))]
+            let wine = wine.as_deref();
+            #[cfg(target_os = "windows")]
+            let wine: Option<&std::path::Path> = None;
             cmd_launch(
                 &game_path,
                 &area,
@@ -1428,20 +1434,38 @@ enum ConfigValueKind {
 }
 
 /// 允许通过 `eoz config` 读写的配置键。
+///
+/// Wine/DXVK/`env` 只在 Linux/macOS 存在；Windows 上这些键视为未知键。
 fn config_key_spec(key: &str) -> Option<ConfigValueKind> {
     if let Some(env) = key.strip_prefix("env.") {
+        #[cfg(target_os = "windows")]
+        {
+            let _ = env;
+            return None;
+        }
+        #[cfg(not(target_os = "windows"))]
         return (!env.is_empty()).then_some(ConfigValueKind::String);
     }
 
     Some(match key {
-        "game_path" | "area" | "startup_type" | "custom_path" | "prefix" | "debug_vars"
-        | "dxvk.hud" | "dalamud.load_method" | "dalamud.track" | "dalamud.beta_key"
+        "game_path" | "area" | "dalamud.load_method" | "dalamud.track" | "dalamud.beta_key"
         | "dalamud.install_root" => ConfigValueKind::String,
-        "esync" | "fsync" | "msync" | "gamemode" | "dxvk.enabled" | "dalamud.enabled"
-        | "dalamud.no_plugins" | "dalamud.no_third_party_plugins"
+        "dalamud.enabled"
+        | "dalamud.no_plugins"
+        | "dalamud.no_third_party_plugins"
         | "dalamud.manage_runtime" => ConfigValueKind::Bool,
-        "dxvk.frame_limit" | "dalamud.delay_initialize_ms" => ConfigValueKind::Uint,
-        "dalamud" | "dxvk" | "env" => ConfigValueKind::Table,
+        "dalamud.delay_initialize_ms" => ConfigValueKind::Uint,
+        "dalamud" => ConfigValueKind::Table,
+        #[cfg(not(target_os = "windows"))]
+        "startup_type" | "custom_path" | "prefix" | "debug_vars" | "dxvk.hud" => {
+            ConfigValueKind::String
+        }
+        #[cfg(not(target_os = "windows"))]
+        "esync" | "fsync" | "msync" | "gamemode" | "dxvk.enabled" => ConfigValueKind::Bool,
+        #[cfg(not(target_os = "windows"))]
+        "dxvk.frame_limit" => ConfigValueKind::Uint,
+        #[cfg(not(target_os = "windows"))]
+        "dxvk" | "env" => ConfigValueKind::Table,
         _ => return None,
     })
 }
@@ -1668,14 +1692,20 @@ mod config_command_tests {
             config_key_spec("dalamud.delay_initialize_ms"),
             Some(ConfigValueKind::Uint)
         );
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(config_key_spec("env.FOO"), Some(ConfigValueKind::String));
+        #[cfg(target_os = "windows")]
+        assert_eq!(config_key_spec("env.FOO"), None);
         assert_eq!(config_key_spec("dalamud"), Some(ConfigValueKind::Table));
         assert_eq!(config_key_spec("dalamud.unknown"), None);
     }
 
     #[test]
     fn test_parse_config_value() {
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(parse_config_value("esync", "yes").unwrap(), toml::Value::Boolean(true));
+        #[cfg(target_os = "windows")]
+        assert!(parse_config_value("esync", "yes").is_err());
         assert_eq!(
             parse_config_value("dalamud.delay_initialize_ms", "250").unwrap(),
             toml::Value::Integer(250)
@@ -1684,6 +1714,7 @@ mod config_command_tests {
             parse_config_value("game_path", "/games/ffxiv").unwrap(),
             toml::Value::String("/games/ffxiv".into())
         );
+        #[cfg(not(target_os = "windows"))]
         assert!(parse_config_value("startup_type", "wrong").is_err());
     }
 
@@ -1691,6 +1722,14 @@ mod config_command_tests {
     fn test_display_config_value() {
         assert_eq!(display_config_value(&toml::Value::Boolean(true)), "true");
         assert_eq!(display_config_value(&toml::Value::Integer(60)), "60");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_windows_launch_has_no_wine_flag() {
+        use clap::Parser;
+        assert!(Cli::try_parse_from(["eoz", "launch", "--wine", "/x"]).is_err());
+        assert!(Cli::try_parse_from(["eoz", "launch", "--game-path", "D:/FFXIV"]).is_ok());
     }
 
     #[test]

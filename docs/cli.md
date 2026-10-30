@@ -142,7 +142,7 @@ eoz areas
 下载并应用补丁。执行阶段：
 
 1. **check**：同上，拿到补丁列表。
-2. **并发下载**（默认 4 并发，信号量控制）到暂存目录；缓存文件名为 `<sha1(url)>-<文件名>.<版本>`，避免跨仓库撞名。已存在的缓存先按补丁元数据做**分块 SHA1 校验**，通过则跳过下载，失败则整体重下（断点续传未实现）。下载后校验字节数与 SHA1。
+2. **并发下载**（默认 4 并发，信号量控制）到暂存目录；缓存文件名为 `<sha1(url)>-<文件名>.<版本>`，避免跨仓库撞名。已存在的缓存先按补丁元数据做**分块 SHA1 校验**：完整且通过则跳过；不完整则校验已有完整块后发 `Range` 续传，服务端不支持 Range 时回退整体重下；前缀损坏或长度超限则截断重下。下载后校验字节数与 SHA1，单个文件失败会退避并续传（最多 5 次）。下载阶段显示一行总进度 + 每个在途补丁一行子进度（`--no-progress` / 非 TTY 下退化为总进度）。
 3. **应用补丁（ZiPatch）**：按列表顺序逐补丁把 chunk 序列写入 `boot/` 或 `game/` 对应仓库；应用前再次 SHA1 校验缓存身份。
 4. **同步版本文件**：写对应的 `.ver`（如 `game/ffxivgame.ver`、`game/sqpack/ex1/ex1.ver`）。
 5. **备份**：全部成功后把各仓库的 `.ver` 复制为 `.bck`。
@@ -210,11 +210,11 @@ eoz launch                          # 默认账号自动登录 + 启动（推荐
 eoz launch --account 你的账号        # 指定已保存账号
 eoz launch --method qr              # 本次手动扫码
 eoz launch --method password --username 你的账号
-eoz launch --wine /opt/wine/bin/wine64   # 本次覆盖 Wine
+eoz launch --wine /opt/wine/bin/wine64   # 本次覆盖 Wine（仅 Linux/macOS）
 eoz launch --dalamud / --no-dalamud      # 本次覆盖 [dalamud].enabled
 ```
 
-选项：`--game-path`、`--area`、`--account`、`--method`、`--username`、`--wine`、`--qr-file`、`--dalamud` / `--no-dalamud`。
+选项：`--game-path`、`--area`、`--account`、`--method`、`--username`、`--qr-file`、`--dalamud` / `--no-dalamud`；`--wine` 仅 Linux/macOS 构建中存在（Windows 原生启动不使用 Wine）。
 
 ---
 
@@ -254,7 +254,7 @@ eoz config list                          # 列出当前生效配置（含默认�
 eoz config path                          # 显示配置文件路径
 ```
 
-写盘前会做完整反序列化校验（类型/枚举错误会被拦下，不会写出坏配置）。可写键：顶层 `game_path`、`area`、全部 Wine 字段、`dxvk.*`、`dalamud.*`，以及任意 `env.<NAME>`。
+写盘前会做完整反序列化校验（类型/枚举错误会被拦下，不会写出坏配置）。可写键：顶层 `game_path`、`area`、`dalamud.*`，以及（仅 Linux/macOS）全部 Wine 字段、`dxvk.*` 与任意 `env.<NAME>`。Windows 上 Wine/DXVK/`env` 键视为未知键，`config list` 也不会输出它们。
 
 ---
 

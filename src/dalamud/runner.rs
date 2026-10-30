@@ -13,7 +13,20 @@ use tracing::{debug, info};
 use super::model::{
     DalamudLoadMethod, DalamudStartInfo, InjectorResult, build_injector_launch_args,
 };
+#[cfg(not(target_os = "windows"))]
 use crate::wine::{WineError, WineTool};
+
+/// Injector 进程启动/通信错误（Wine 与原生 Windows 共用）。
+///
+/// 与 `wine::WineError` 区分：这里只涵盖启动 Injector、读取其 JSON 结果的失败，
+/// 不包含 Wine 检测/下载/prefix/DXVK 等平台相关错误。
+#[derive(Debug, thiserror::Error)]
+pub enum InjectorError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Injector error: {0}")]
+    Message(String),
+}
 
 /// Injector 启动结果。
 #[derive(Debug)]
@@ -27,6 +40,7 @@ pub struct InjectorLaunch {
 /// 通过 winepath 将 Unix 路径转换为 Windows 路径（`Z:\...`）。
 ///
 /// 对应 C# `CompatibilityTools.UnixToWinePath()`。
+#[cfg(not(target_os = "windows"))]
 pub fn unix_to_wine_path(wine: &WineTool, unix_path: &Path) -> Result<String, WineError> {
     wine.ensure_prefix()?;
     let output = Command::new(&wine.wine64_path)
@@ -59,6 +73,7 @@ pub fn unix_to_wine_path(wine: &WineTool, unix_path: &Path) -> Result<String, Wi
 }
 
 /// 批量转换一组路径。
+#[cfg(not(target_os = "windows"))]
 pub fn convert_paths(
     wine: &WineTool,
     paths: &[(&str, &Path)],
@@ -76,6 +91,7 @@ pub fn convert_paths(
 /// `injector_exe`：Injector 的 Unix 路径（Hooks/<ver>/Dalamud.Injector.exe）。
 /// `start` 中的路径须已转换为 Windows 格式。
 /// `game_args`：`--` 之后的游戏启动参数（**逐个传递，不拼接**）。
+#[cfg(not(target_os = "windows"))]
 pub fn launch_through_injector(
     wine: &WineTool,
     injector_exe: &Path,
@@ -84,7 +100,7 @@ pub fn launch_through_injector(
     game_args: &[String],
     without_dalamud: bool,
     env: &[(String, String)],
-) -> Result<InjectorLaunch, WineError> {
+) -> Result<InjectorLaunch, InjectorError> {
     let injector_args = build_injector_launch_args(start, load_method, game_args, without_dalamud);
 
     info!(injector = ?injector_exe, "launching game through Dalamud Injector");
@@ -125,7 +141,7 @@ pub fn launch_through_injector_native(
     game_args: &[String],
     without_dalamud: bool,
     env: &[(String, String)],
-) -> Result<InjectorLaunch, WineError> {
+) -> Result<InjectorLaunch, InjectorError> {
     let injector_args = build_injector_launch_args(start, load_method, game_args, without_dalamud);
 
     info!(injector = ?injector_exe, "launching game through Dalamud Injector (native)");
@@ -144,12 +160,12 @@ pub fn launch_through_injector_native(
 }
 
 /// 启动 Injector 进程并读取其 stdout JSON（Wine/原生 Windows 共用）。
-fn spawn_and_read_result(mut cmd: Command) -> Result<InjectorLaunch, WineError> {
+fn spawn_and_read_result(mut cmd: Command) -> Result<InjectorLaunch, InjectorError> {
     // 捕获 stdout 用于解析 JSON（stderr 独立，避免干扰）
     use std::process::Stdio;
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(WineError::Io)?;
+    let mut child = cmd.spawn().map_err(InjectorError::Io)?;
 
     // stderr 必须持续排空：Injector 的诊断输出可能超过管道缓冲，
     // 若无人读取会阻塞进程，导致永远等不到 stdout 里的 JSON。
@@ -196,7 +212,7 @@ fn spawn_and_read_result(mut cmd: Command) -> Result<InjectorLaunch, WineError> 
 fn read_injector_pid(
     child: &mut std::process::Child,
     stderr_lines: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-) -> Result<u32, WineError> {
+) -> Result<u32, InjectorError> {
     use std::io::BufRead;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
@@ -204,7 +220,7 @@ fn read_injector_pid(
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| WineError::Probe("injector stdout unavailable".into()))?;
+        .ok_or_else(|| InjectorError::Message("injector stdout unavailable".into()))?;
     let (tx, rx) = mpsc::channel::<std::io::Result<String>>();
     std::thread::spawn(move || {
         let reader = std::io::BufReader::new(stdout);
@@ -229,7 +245,7 @@ fn read_injector_pid(
         let now = Instant::now();
         if now >= deadline {
             let _ = child.kill();
-            return Err(WineError::Probe(format!(
+            return Err(InjectorError::Message(format!(
                 "timed out waiting for Injector result{}",
                 format_stderr()
             )));
@@ -246,10 +262,10 @@ fn read_injector_pid(
                 }
                 // 非 JSON 行（诊断输出）继续读
             }
-            Ok(Err(e)) => return Err(WineError::Io(e)),
+            Ok(Err(e)) => return Err(InjectorError::Io(e)),
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(WineError::Probe(format!(
+                return Err(InjectorError::Message(format!(
                     "Injector exited without reporting a result{}",
                     format_stderr()
                 )));

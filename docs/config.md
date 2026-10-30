@@ -1,13 +1,30 @@
 # 配置说明
 
-eorzea 的全部配置落在 `~/.eorzea/`，GUI 与 CLI（`eoz`）共享同一份。本文档列出所有字段；字段的读写方式见 [`cli.md`](cli.md) 的 `eoz config` 一节。
+eorzea 的全部配置落在 `~/.eorzea/`（Windows 上即 `C:\Users\<用户>\.eorzea\`），GUI 与 CLI（`eoz`）共享同一份。本文档列出所有字段；字段的读写方式见 [`cli.md`](cli.md) 的 `eoz config` 一节。
 
 ## 文件总览
 
 | 路径 | 内容 |
 |------|------|
-| `~/.eorzea/config.toml` | 主配置：游戏目录、大区、Wine、DXVK、Dalamud、自定义环境变量 |
+| `~/.eorzea/config.toml` | 主配置：游戏目录、大区、Dalamud；Linux/macOS 另有 Wine、DXVK 与自定义环境变量 |
 | `~/.eorzea/auth.toml` | 已保存账号与自动登录 session key（由 `eoz auth` / GUI 登录页管理） |
+
+### 首次运行
+
+`config.toml` 不存在（也没有可迁移的旧版 `settings.json`）时，GUI 或 `eoz` 第一次读取配置会自动创建一份**只含注释**的模板，列出 `game_path`、`area` 等常用字段。默认值仍由程序内置，模板不会把默认值写死（以后调整默认值时旧文件不会把它“钉住”）。在 GUI 或 `eoz config set` 保存后文件会被重写，模板注释不再保留。`auth.toml` 在首次登录并保存账号时才创建。
+
+### 平台差异
+
+配置文件按平台裁剪（`AppConfig` 的 `settings` 字段在 Windows 上不存在）：
+
+| 平台 | `config.toml` 内容 |
+|------|--------------------|
+| Linux / macOS | `game_path`、`area`、平铺的 Wine 设置（`startup_type`/`custom_path`/`prefix`/`esync`/`fsync`/`msync`/`gamemode`、`[dxvk]`、`[env]`）、`[dalamud]` |
+| Windows | `game_path`、`area`、`[dalamud]`；不写 Wine/DXVK/环境变量，`eoz config set startup_type` 等会报「未知配置键」 |
+
+在 Windows 上读取 Linux/macOS 写出的配置时，Wine 相关键会被忽略；再保存会把它们移除。`eoz config list` 只输出当前平台的字段。
+
+> Windows 上手写路径时注意 TOML 字符串转义：`"G:\FF14\..."` 是非法转义，应写成 `"G:/FF14/..."`（推荐）或 `"G:\\FF14\\..."`。用 GUI 设置页或 `eoz config set game_path` 会自动处理。
 
 ### 旧配置迁移
 
@@ -85,6 +102,16 @@ load_method = "entrypoint"
 [env]
 # 自定义环境变量，最后应用、可覆盖上面的所有项
 WINEDLLOVERRIDES = "msquic=,mscoree=n,b"
+```
+
+Windows 上不需要也不接受 Wine 字段，配置只有游戏路径、大区与 Dalamud：
+
+```toml
+game_path = "G:/FF14/最终幻想XIV"
+area = "1"
+
+[dalamud]
+enabled = true
 ```
 
 ## auth.toml

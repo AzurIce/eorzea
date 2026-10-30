@@ -1,8 +1,10 @@
 //! 主页：账号/大区选择、状态仪表盘（游戏位置/版本、Dalamud、Wine）、检查/更新游戏、启动游戏。
 
+#[cfg(not(target_os = "windows"))]
 use crate::config::WineStartupType;
 use crate::dalamud::{DalamudStatus, InstallState, updater};
 use crate::game_files::{CheckResult, GameFileManager};
+#[cfg(not(target_os = "windows"))]
 use crate::wine::WineTool;
 use dioxus::prelude::*;
 use eorzea_auth::PatchListEntry;
@@ -388,7 +390,8 @@ pub fn HomePage() -> Element {
 
     // Wine 状态卡仅在依赖 wine 的平台展示：Windows 原生启动忽略 wine 参数，
     // 展示"未检测到可用 wine"会被误读为故障。
-    let wine_card = if cfg!(not(target_os = "windows")) {
+    #[cfg(not(target_os = "windows"))]
+    let wine_card = {
         let wine_cfg = state.settings.read().clone();
         let wine_startup = match wine_cfg.startup_type {
             WineStartupType::Auto => "自动",
@@ -409,9 +412,9 @@ pub fn HomePage() -> Element {
                 p { style: "margin: 4px 0 0 0; font-size: 12px; color: {t.text_secondary}; overflow-wrap: anywhere;", "{wine_sub}" }
             }
         }
-    } else {
-        rsx! {}
     };
+    #[cfg(target_os = "windows")]
+    let wine_card = rsx! {};
 
     let update_is_busy = update_state.read().is_busy();
     let launch_button_bg = if launching() {

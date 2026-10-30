@@ -9,11 +9,15 @@
 //! 演示基于 `WineSettings` 的解析流程（不再直接调 `detect/ensure`）：
 //! 配置 → `WineTool::resolve` → `probe`（打印版本）。
 
+#[cfg(not(target_os = "windows"))]
 use tracing::{error, info};
 
+#[cfg(not(target_os = "windows"))]
 use eorzea_lib::config::{WineSettings, WineStartupType};
+#[cfg(not(target_os = "windows"))]
 use eorzea_lib::wine::WineTool;
 
+#[cfg(not(target_os = "windows"))]
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -55,4 +59,9 @@ async fn main() {
             std::process::exit(1);
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn main() {
+    eprintln!("wine_test 仅支持 Linux/macOS（Windows 原生启动不使用 Wine）");
 }

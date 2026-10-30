@@ -100,7 +100,12 @@ pub fn app() -> Element {
     let mut state = AppState {
         tab: use_signal(|| initial_tab),
         auth_cfg: use_signal(|| initial_auth),
+        #[cfg(not(target_os = "windows"))]
         settings: use_signal(|| initial_config.settings.clone()),
+        // Windows 的配置没有 Wine 字段；UI 仍保留一份默认值，
+        // 供隐藏的 Wine 界面代码与 `launch_game` 参数使用（原生分支会忽略）。
+        #[cfg(target_os = "windows")]
+        settings: use_signal(WineSettings::default),
         game_path: use_signal(|| initial_config.game_path.clone()),
         dalamud_cfg: use_signal(|| initial_config.dalamud.clone()),
         areas: use_signal(Vec::new),

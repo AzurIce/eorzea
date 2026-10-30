@@ -105,7 +105,9 @@ impl Default for WineSettings {
 ///
 /// 布局刻意保持扁平：
 /// - `game_path`：游戏根目录（与 Wine 无关，因此放在 AppConfig 顶层而不是 WineSettings 里）
-/// - 其余顶层字段：Wine 设置（`flatten`，兼容旧配置）
+/// - `settings`：平台相关设置。Linux/macOS 为平铺的 Wine 设置（`flatten`，兼容旧配置）；
+///   Windows 原生启动不需要 Wine，该字段**不参与编译**，配置里也不会出现
+///   `startup_type`/`[dxvk]`/`[env]` 等键（读取旧文件时这些键被忽略）。
 /// - `[dalamud]`：Dalamud 设置 section
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -114,10 +116,78 @@ pub struct AppConfig {
     pub game_path: Option<PathBuf>,
     /// 默认大区 ID（如 `1`），CLI 未传 `--area` 时使用。
     pub area: Option<String>,
+    #[cfg(not(target_os = "windows"))]
     #[serde(default, flatten)]
     pub settings: WineSettings,
     #[serde(default)]
     pub dalamud: DalamudSettings,
+}
+
+/// 首次运行写入的配置模板（Linux/macOS）。
+///
+/// 只写注释、不写默认值：默认值始终由 [`AppConfig::default`] 提供，避免以后
+/// 调整默认值时被旧文件里的旧值“钉死”。`game_path` / `area` 也保持注释状态，
+/// 否则空字符串会被当成有效值（`game_path.is_some()` 会误判为已配置）。
+#[cfg(not(target_os = "windows"))]
+const DEFAULT_CONFIG_TEMPLATE: &str = r#"# eorzea 配置（GUI 与 eoz CLI 共用）
+#
+# 游戏根目录：包含 boot/、game/、sdo/ 的目录。也可在 GUI 设置页选择，
+# 或执行 `eoz config set game_path <路径>`。
+# game_path = "D:/Games/FFXIV"
+
+# 默认大区 ID（`eoz areas` 可查），例如 "1"。
+# area = "1"
+
+# 其余字段（Wine、DXVK、Dalamud、环境变量）及默认值见 docs/config.md。
+# Wine 相关设置包含 startup_type/custom_path/prefix/esync/fsync/msync/gamemode、
+# [dxvk] 与 [env]；Windows 原生启动会忽略它们。
+# 在 GUI 或 `eoz config set` 保存后本文件会被重写，以上注释不会保留。
+"#;
+
+/// 首次运行写入的配置模板（Windows）。
+///
+/// Windows 原生启动不使用 Wine，模板不列 Wine/DXVK/环境变量字段。
+#[cfg(target_os = "windows")]
+const DEFAULT_CONFIG_TEMPLATE: &str = r#"# eorzea 配置（GUI 与 eoz CLI 共用）
+#
+# 游戏根目录：包含 boot/、game/、sdo/ 的目录。也可在 GUI 设置页选择，
+# 或执行 `eoz config set game_path <路径>`。
+# game_path = "D:/Games/FFXIV"
+
+# 默认大区 ID（`eoz areas` 可查），例如 "1"。
+# area = "1"
+
+# 其余字段（[dalamud] 等）及默认值见 docs/config.md。
+# 在 GUI 或 `eoz config set` 保存后本文件会被重写，以上注释不会保留。
+"#;
+
+/// 创建默认配置文件（仅当 `path` 不存在）。返回是否实际写入。
+///
+/// 失败（只读 HOME、权限不足等）只记 warn，不影响启动。
+fn ensure_config_file(path: &Path) -> bool {
+    if path.exists() {
+        return false;
+    }
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!(path = %parent.display(), error = %e, "failed to create config directory");
+            return false;
+        }
+    }
+    match std::fs::write(path, DEFAULT_CONFIG_TEMPLATE) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "failed to create default config");
+            false
+        }
+    }
+}
+
+/// 首次运行时在默认位置（`~/.eorzea/config.toml`）创建配置模板。
+///
+/// 已存在时不做任何事；返回是否实际创建。
+pub fn ensure_app_config() -> bool {
+    ensure_config_file(&settings_path())
 }
 
 /// 从指定路径加载整个配置。
@@ -158,13 +228,17 @@ pub fn legacy_settings_path() -> PathBuf {
 }
 
 /// 从指定路径加载 Wine 配置；文件不存在或解析失败时返回默认值。
+///
+/// 仅 Linux/macOS：Windows 的 [`AppConfig`] 没有 `settings` 字段。
+#[cfg(not(target_os = "windows"))]
 pub fn load_settings_from(path: &Path) -> WineSettings {
     load_app(path).settings
 }
 
 /// 加载默认位置（`~/.eorzea/config.toml`）的整个 AppConfig。
 ///
-/// 若新文件不存在但旧版 `settings.json` 存在，自动迁移并保存。
+/// 若新文件不存在但旧版 `settings.json` 存在，自动迁移并保存；
+/// 仍不存在时（首次运行）创建一份带注释的配置模板。
 pub fn load_app_default() -> AppConfig {
     let path = settings_path();
     if !path.exists() {
@@ -178,12 +252,24 @@ pub fn load_app_default() -> AppConfig {
             }
         }
     }
+    ensure_config_file(&path);
     load_app(&path)
 }
 
-/// 加载默认位置的 Wine 设置（兼容旧调用方）。
+/// 加载默认位置的平台设置（兼容旧调用方）。
+///
+/// Linux/macOS 返回 `config.toml` 中的 Wine 设置；Windows 不使用 Wine
+/// （配置里也没有 Wine 字段），返回 [`WineSettings::default`]，
+/// 原生启动分支会忽略它。
 pub fn load_settings() -> WineSettings {
-    load_app_default().settings
+    #[cfg(not(target_os = "windows"))]
+    {
+        load_app_default().settings
+    }
+    #[cfg(target_os = "windows")]
+    {
+        WineSettings::default()
+    }
 }
 
 /// 从旧版 JSON 格式（`settings.json`）加载完整配置。
@@ -201,6 +287,7 @@ fn load_legacy_app(path: &Path) -> AppConfig {
 }
 
 /// 保存 Wine 配置到指定路径（保留 `[dalamud]` section）。
+#[cfg(not(target_os = "windows"))]
 pub fn save_settings_to(path: &Path, settings: &WineSettings) -> Result<(), std::io::Error> {
     let mut app = load_app(path);
     app.settings = settings.clone();
@@ -208,6 +295,7 @@ pub fn save_settings_to(path: &Path, settings: &WineSettings) -> Result<(), std:
 }
 
 /// 保存配置到默认位置。
+#[cfg(not(target_os = "windows"))]
 pub fn save_settings(settings: &WineSettings) -> Result<(), std::io::Error> {
     save_settings_to(&settings_path(), settings)
 }
@@ -217,7 +305,7 @@ pub fn load_dalamud_settings() -> DalamudSettings {
     load_app_default().dalamud
 }
 
-/// 保存 `[dalamud]` 配置到默认位置（保留 Wine 设置）。
+/// 保存 `[dalamud]` 配置到默认位置（保留其他字段）。
 pub fn save_dalamud_settings(settings: &DalamudSettings) -> Result<(), std::io::Error> {
     let path = settings_path();
     let mut app = load_app(&path);
@@ -278,6 +366,7 @@ mod tests {
         assert_eq!(s.prefix, None);
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_save_load_roundtrip() {
         let dir = std::env::temp_dir().join(format!("xlrs-settings-test-{}", std::process::id()));
@@ -302,6 +391,7 @@ mod tests {
         let app: AppConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(app.game_path, Some(PathBuf::from("/games/ffxiv")));
         assert_eq!(app.area, Some("1".to_string()));
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(app.settings.startup_type, WineStartupType::System);
         assert!(app.dalamud.enabled);
 
@@ -316,6 +406,7 @@ mod tests {
         assert_eq!(back, app);
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_load_missing_file_returns_default() {
         let dir =
@@ -323,5 +414,52 @@ mod tests {
         let path = dir.join("nope.toml");
         let s = load_settings_from(&path);
         assert_eq!(s, WineSettings::default());
+    }
+
+    /// Windows 没有 `settings` 字段：旧配置里的 Wine 键被忽略，保存时也不写出。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_windows_ignores_and_omits_wine_fields() {
+        let toml_str = "game_path = \"D:/Games/FFXIV\"\nstartup_type = \"system\"\nesync = true\n\n[dxvk]\nenabled = false\n\n[env]\nFOO = \"bar\"\n\n[dalamud]\nenabled = true\n";
+        let app: AppConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(app.game_path, Some(PathBuf::from("D:/Games/FFXIV")));
+        assert!(app.dalamud.enabled);
+
+        let text = toml::to_string_pretty(&app).unwrap();
+        for key in ["startup_type", "esync", "[dxvk]", "[env]"] {
+            assert!(!text.contains(key), "Windows 配置不应写出 {key}：\n{text}");
+        }
+        assert!(text.contains("game_path"));
+        assert!(text.contains("[dalamud]"));
+    }
+
+    #[test]
+    fn test_default_config_template_parses_to_default() {
+        // 模板只含注释：解析结果必须等于内置默认值，避免注释里写错 TOML
+        let app: AppConfig = toml::from_str(DEFAULT_CONFIG_TEMPLATE).unwrap();
+        assert_eq!(app, AppConfig::default());
+
+        // 注释掉的 game_path 不能被解析成 Some("")，否则首次启动会误判为已配置
+        assert!(app.game_path.is_none());
+        assert!(app.area.is_none());
+    }
+
+    #[test]
+    fn test_ensure_config_file_creates_once() {
+        let dir = std::env::temp_dir().join(format!("xlrs-settings-ensure-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(ensure_config_file(&path));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            DEFAULT_CONFIG_TEMPLATE
+        );
+        // 已存在（即使内容不同）时不再覆盖
+        std::fs::write(&path, "area = \"2\"\n").unwrap();
+        assert!(!ensure_config_file(&path));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "area = \"2\"\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

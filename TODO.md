@@ -12,6 +12,7 @@
 - [x] **实现 `generate_device_id()`**：格式为 `{MD5_UPPER(MAC)}:{MD5_UPPER(CPU_ID)}:{MD5_UPPER(磁盘序列号)}` — `sdo_device::get_device_id()`
 - [x] **实现 `generate_mac_id()`**：格式为 `MD5_UPPER(MAC地址)` — `sdo_device::get_mac_address_hash()`
 - [x] **跨平台硬件信息采集**：macOS 用 `ioreg` + `diskutil`，Linux 用 `/etc/machine-id` + `/proc/cpuinfo` + `lsblk`
+- [ ] **Windows 设备指纹采集**：C# 用 P/Invoke `iphlpapi!GetAdaptersInfo`（MAC）、CPUID 指令（CPU）、WMI `Win32_DiskDrive.SerialNumber`（磁盘）；Rust 三者目前全部走 `HOSTNAME-USER` fallback。Windows 上 `HOSTNAME`/`USER` 通常不存在，实际得到 `unknown-<USERNAME>`（用户名变更/换用户即漂移）。详见 [`docs/notes/auth.md`](./docs/notes/auth.md)
 - [x] **集成到 `SdoAuth`**：`SdoAuth::new()` 自动采集，`common_query()` 使用自身存储的值，`SdoContext` 不再需要调用方传入
 
 > C# 参考：`SdoUtils.cs` — `GetMacAddress()`, `GetCPUId()`, `GetDiskSerialNumber()`, `GetDeviceId()`, `GetMD5()`
@@ -97,7 +98,12 @@
 - [x] **补丁应用**（ZiPatch）：`src/game_files/zpatch/` 完整移植 C# `ZiPatch` 解析与应用（FHDR/APLY/SQPK:T/F/A/D/E/H/I/X/ADIR/DELD/EOF），`RemotePatchInstaller` 流程（应用 → `SetVer` → `VerToBck`）；已用修复后的唯一缓存键重放 11 个补丁（877.50 MiB），版本检查通过且实际启动进入游戏
 - [ ] **Boot 版本检查**：国服无需实现（C# `CheckBootVersion` 对 CN 直接 `return Array.Empty`）
 - [x] **完整性校验**（`game verify`）：`game_files/verify.rs` 文件级校验（.ver 一致性、关键文件存在性、sqpack 魔数/header/数据块结构、movie）；注：C# `PatchVerifier` 依赖 ottercorp S3 的 `.patch.index`（国际服专用，国服无此服务），故不做逐文件 hash 校验
-- [ ] **断点续传**（Range）：当前不完整文件整体重下，部分下载续传待加
+- [x] **断点续传**（Range）：不完整缓存直接作为 `.part` 使用；下次启动先按块 SHA1 校验已有完整前缀（损坏/超长则截断），再发 `Range: bytes=<offset>-` 续传。服务端忽略 Range 返回 200 时自动清空重下；每个文件最多 5 次尝试，失败保留已下载部分（2026-10-30）
+- [ ] **单文件多连接下载**：当前每个补丁 1 条连接、全局最多 4 条；C# 默认 aria2 每文件 `max-connection-per-server=8`（4 文件最多 32 条），NetDownloader 也按 `ChunkCount=8` 分块并行。需按 Range 分块 + 随机写盘，否则大补丁只能吃单连接带宽
+- [x] **实时下载进度**：`download_patches` 用 `JoinSet` 乱序收任务，主任务每 120ms 上报一次；`DownloadProgress` 同时给出总字节和每个在途补丁的子进度。CLI 用 `DownloadView` 绘制一行总进度 + 每个补丁一行子进度（`--no-progress` / 非 TTY 自动退化为总量）。已存在/跳过文件也计入总进度（2026-10-30）
+- [x] **下载超时与重试**：`reqwest::Client` 配 `connect_timeout=15s` / `read_timeout=30s`；单文件最多 5 次尝试，失败后退避并从当前文件长度续传。仍保留“任一文件最终失败则中止整批”的行为（2026-10-30）
+- [ ] **边下边装**：C# `PatchManager` 的 `RunApplyQueue` 在下载队列之外同步应用已完成补丁；当前 `eoz game update` 必须等 97.9 GiB 全部下完才开始应用，进入游戏的总等待时间更长
+- [x] **SHA1 流式校验**：`verify_patch_sha1` 改为 `BufReader` 分块读取，不再把 1.4 GiB 补丁整文件读入内存；校验通过 `spawn_blocking` 移出 tokio worker，文件写入改用 `tokio::fs`（2026-10-30）
 - [ ] **UID 缓存**：缺失 `IUniqueIdCache` 实现（`X-Patch-Unique-Id` 缓存）
 
 ### P2-4 Wine 配置与启动环境 (`WineSettings.cs` / `CompatibilityTools.cs` → `src/wine.rs` + `src/config.rs`)
@@ -198,11 +204,25 @@
 - [x] **设置页开关在原生 blitz 下保存无效**：blitz 对 checkbox 点击只派发 input 事件（无 change），`onchange` 桌面端永不触发——勾选只是控件自身视觉切换、草稿 signal 不更新，保存实际写入旧值（实测启用 Dalamud 后 config.toml 仍为 `enabled = false`）；`Checkbox` 改用 `oninput`（web 端 checkbox 点击同样触发 input；dioxus-web 与 blitz 均把 value 归一为 "true"/"false"，`FormData::checked()` 两端可用） (resolved: 2026-09-12)
 - [x] **设置页补全剩余配置项**：新增「默认大区」（`AppConfig.area`，此前设置页无此输入框、保存时只能原样保留；GUI 启动拉取大区列表后默认选中该大区，CLI `launch` 未传 `--area` 时也用它）与 Dalamud「安装目录」（`install_root`，留空用默认 `~/.eorzea/dalamud`） (resolved: 2026-09-12)
 - [x] **设置页 Dalamud 项无说明**：加载方式/更新通道/安装目录/初始化延迟/插件禁用开关逐项补充说明文字（按注入器 `--mode`/`--without-dalamud`/`--no-plugin`/`--no-3rd-plugin`/`--dalamud-delay-initialize` 实际行为撰写）；「默认大区」下方动态列出可用大区 ID 对照（如 8=豆豆柴 · 1=陆行鸟） (resolved: 2026-09-12)
+- [x] **首次运行创建配置模板**：`config.toml` 不存在时，`load_app_default`（GUI 与 `eoz` 共用）创建只含注释的模板，避免用户找不到配置文件位置；不写默认值，防止以后改默认值时被旧文件钉死；模板按平台区分（Windows 不列 Wine/DXVK/环境变量） (2026-10-30)
 
 ### P4-3 错误处理
 
 - [x] **`SdoLoginData` 补全 `AccountArray` / `SndaIdArray`**：扫码成功后返回的账号列表（字段早已存在，现由 `get_account_group` 实际消费）
 - [ ] **DC 跨服传送 API** (`DcTraveler.cs`)：`ff14bjz.sdo.com` 下的旅行/回归 API，暂不在 P0 范围内
+
+### P4-4 Windows 平台
+
+- [x] **编译与单元测试**：Windows（MSVC）上 `cargo check --workspace --all-targets` 通过、`cargo test --workspace` 全绿（根 crate / eorzea-auth / eoz 全部通过，2026-10-30 复核）
+- [x] **Wine 模块按平台裁剪**：`src/wine.rs` 在 Windows 上不参与编译（`lib.rs` 的 `pub mod wine` 加 `cfg(not(windows))`）；Injector 启动/通信错误改用平台无关的 `dalamud::runner::InjectorError`（`WineError` 留在 wine 模块，原生 Windows 路径不再借用它）；`runner` 的 winepath/Injector-over-Wine 函数、`home` 的 Wine 状态卡、`wine_test` 示例均在 Windows 上不编译；`eoz launch --wine` 在 Windows 上不存在
+- [x] **原生启动分支**：`game.rs` 的 `cfg(target_os = "windows")` 分支直启 `ffxiv_dx11.exe`，或原生运行 `Dalamud.Injector.exe`（无 winepath / `XL_WINEON*` / `WINEPREFIX`）；Wine 设置区块与主页 Wine 状态卡在 UI 隐藏
+- [x] **GUI 启动冒烟**：`target/debug/eorzea.exe` 在 Windows 上保持运行、渲染后端为 wgpu/Vulkan（2026-10-30）
+- [ ] **真机端到端验证**：Windows 上实际登录 → 启动游戏 → Dalamud 注入尚未验证（与 C# `WindowsDalamudRunner` 的行为差异需实机确认）
+- [ ] **Windows 设备指纹**：见 P0-1（当前 fallback 为 `unknown-<USERNAME>`）
+- [ ] **发布版日志**：`windows_subsystem = "windows"` 后 GUI 无控制台，`tracing` 只写 stderr → release 版没有日志可查；需要文件日志（如滚动写到 `~/.eorzea/logs/`）
+- [ ] **配置目录**：当前 `~/.eorzea`（`C:\Users\<用户>\.eorzea`），与 C# 的 `%APPDATA%\XIVLauncher` 不同，也不读取 C# 旧配置；是否改用 `dirs::config_dir()` 待定
+- [ ] **打包/CI**：仓库没有 Windows 安装包或构建工作流，目前只能本机 `cargo build`
+- [x] **配置按平台拆分**：Windows 的 `AppConfig` 不含 Wine 字段（`#[cfg(not(windows))]`），`config.toml` 不写 `startup_type`/`custom_path`/`prefix`/`esync`/`fsync`/`msync`/`gamemode`/`[dxvk]`/`[env]`，`eoz config set` 对 Wine 键报「未知配置键」；读取 Linux/macOS 写出的配置时忽略这些键，`eoz config list` 只输出当前平台字段；首次运行模板也按平台区分（2026-10-30）
 
 ---
 

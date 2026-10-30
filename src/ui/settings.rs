@@ -118,6 +118,7 @@ pub fn SettingsPage() -> Element {
             } else {
                 Some(area_id)
             },
+            #[cfg(not(target_os = "windows"))]
             settings: s.clone(),
             dalamud: d.clone(),
         };
