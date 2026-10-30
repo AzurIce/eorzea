@@ -15,6 +15,7 @@
 //! `E`(ExpandData) `H`(Header) `I`(Index) `X`(PatchInfo)。
 
 use std::fmt;
+use std::io::Read;
 
 pub mod apply;
 
@@ -641,6 +642,57 @@ pub fn parse_file(path: &std::path::Path) -> Result<Vec<ZiPatchChunk>, ZiPatchEr
     parse(&data)
 }
 
+/// 从流中读取一个 chunk，返回 `(chunk, 本次消费的字节数)`。
+///
+/// 正常读到文件末尾（恰好没有下一个 chunk）返回 `Ok(None)`。
+/// 用于安装时流式解析，避免把 1.4 GiB 的补丁整体读进内存。
+pub(crate) fn read_chunk<R: Read>(
+    reader: &mut R,
+) -> Result<Option<(ZiPatchChunk, u64)>, ZiPatchError> {
+    let mut size_buf = [0u8; 4];
+    let mut filled = 0;
+    while filled < size_buf.len() {
+        match reader.read(&mut size_buf[filled..]) {
+            Ok(0) if filled == 0 => return Ok(None),
+            Ok(0) => return Err(ZiPatchError::UnexpectedEof),
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                return Err(ZiPatchError::Io {
+                    path: String::new(),
+                    source: e,
+                });
+            }
+        }
+    }
+
+    let size = u32::from_be_bytes(size_buf);
+    let mut chunk_type = [0u8; 4];
+    read_chunk_exact(reader, &mut chunk_type)?;
+
+    let mut content = vec![0u8; size as usize];
+    read_chunk_exact(reader, &mut content)?;
+
+    let mut checksum = [0u8; 4];
+    read_chunk_exact(reader, &mut checksum)?;
+
+    let chunk = parse_chunk_data(&chunk_type, &content)?;
+    Ok(Some((chunk, 4 + 4 + size as u64 + 4)))
+}
+
+fn read_chunk_exact<R: Read>(reader: &mut R, buf: &mut [u8]) -> Result<(), ZiPatchError> {
+    reader.read_exact(buf).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            ZiPatchError::UnexpectedEof
+        } else {
+            ZiPatchError::Io {
+                path: String::new(),
+                source: e,
+            }
+        }
+    })
+}
+
 /// 从内存数据解析完整的 ZiPatch chunk 列表。
 pub fn parse(data: &[u8]) -> Result<Vec<ZiPatchChunk>, ZiPatchError> {
     if data.len() < 12 {
@@ -796,5 +848,51 @@ mod tests {
             })
         ));
         assert!(matches!(chunks[2], ZiPatchChunk::EndOfFile));
+    }
+
+    #[test]
+    fn test_read_chunk_stream_matches_parse() {
+        let data = build_small_patch();
+        let mut reader = std::io::Cursor::new(&data);
+        reader.set_position(12); // 跳过 magic，read_chunk 从第一个 chunk 开始
+        let mut chunks = Vec::new();
+        while let Some((chunk, consumed)) = read_chunk(&mut reader).unwrap() {
+            let is_eof = matches!(chunk, ZiPatchChunk::EndOfFile);
+            chunks.push((chunk, consumed));
+            if is_eof {
+                break;
+            }
+        }
+
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(
+            chunks.iter().map(|(_, consumed)| *consumed).sum::<u64>(),
+            data.len() as u64 - 12
+        );
+        assert!(matches!(chunks[2].0, ZiPatchChunk::EndOfFile));
+    }
+
+    #[test]
+    fn test_apply_streaming_reports_progress() {
+        let data = build_small_patch();
+        let dir = std::env::temp_dir().join(format!("xl-rs-zpatch-stream-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let patch_path = dir.join("small.patch");
+        std::fs::write(&patch_path, &data).unwrap();
+
+        let mut progress = Vec::new();
+        let ctx = apply::apply_patch_file_with_progress(&patch_path, &dir, |done, total| {
+            progress.push((done, total));
+        })
+        .unwrap();
+
+        assert!(!progress.is_empty());
+        assert_eq!(
+            progress.last().copied(),
+            Some((data.len() as u64, data.len() as u64))
+        );
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

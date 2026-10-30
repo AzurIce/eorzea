@@ -57,3 +57,9 @@ getrandom = { version = "0.2", features = ["js"] }
 name = "sdo_launch"
 path = "examples/sdo_launch.rs"
 required-features = ["eorzea-auth/sdo"]
+
+# `cargo run`（dev profile）下载补丁时也会做大文件 SHA1。debug 下 SHA1
+# 可能只有几十 MB/s，会把 1.4 GiB 补丁的校验拖到几分钟；只让 SHA1
+# 依赖开优化，不影响项目自身 debug 编译速度。
+[profile.dev.package.sha1]
+opt-level = 3

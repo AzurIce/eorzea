@@ -4,7 +4,7 @@
 //! 将解析出的 chunk 序列应用到游戏目录（`game/` 或 `boot/` 子目录）。
 
 use std::collections::HashMap;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
@@ -395,13 +395,73 @@ impl Drop for ApplyContext {
 
 /// 将 ZiPatch 补丁文件应用到 `base_dir`（`game_root/boot` 或 `game_root/game`）。
 pub fn apply_patch_file(patch_path: &Path, base_dir: &Path) -> Result<ApplyContext, ZiPatchError> {
-    let chunks = super::parse_file(patch_path)?;
-    let mut ctx = ApplyContext::new(base_dir);
-    for chunk in &chunks {
-        ctx.apply_chunk(chunk)?;
+    apply_patch_file_with_progress(patch_path, base_dir, |_, _| {})
+}
+
+/// 流式应用补丁，并通过 `on_progress(已读字节, 文件总字节)` 回调进度。
+///
+/// 相比 `parse_file` 先整体读入内存，这里一次只保留一个 chunk，
+/// 避免 1.4 GiB 补丁的整文件缓冲和 block 复制。
+pub fn apply_patch_file_with_progress(
+    patch_path: &Path,
+    base_dir: &Path,
+    mut on_progress: impl FnMut(u64, u64),
+) -> Result<ApplyContext, ZiPatchError> {
+    let metadata = std::fs::metadata(patch_path).map_err(|e| ZiPatchError::Io {
+        path: patch_path.display().to_string(),
+        source: e,
+    })?;
+    let total = metadata.len();
+
+    let file = std::fs::File::open(patch_path).map_err(|e| ZiPatchError::Io {
+        path: patch_path.display().to_string(),
+        source: e,
+    })?;
+    let mut reader = BufReader::with_capacity(1 << 20, file);
+
+    let mut magic = [0u8; 12];
+    reader
+        .read_exact(&mut magic)
+        .map_err(|e| map_read_error(patch_path, e))?;
+    for (i, expected) in super::ZIPATCH_MAGIC.iter().enumerate() {
+        let bytes = &magic[i * 4..i * 4 + 4];
+        let value = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        if &value != expected {
+            return Err(ZiPatchError::BadMagic);
+        }
     }
+
+    let mut ctx = ApplyContext::new(base_dir);
+    let mut processed = 12u64;
+    on_progress(processed, total);
+
+    loop {
+        let Some((chunk, consumed)) = super::read_chunk(&mut reader)? else {
+            break;
+        };
+        let is_eof = matches!(chunk, ZiPatchChunk::EndOfFile);
+        ctx.apply_chunk(&chunk)?;
+        processed = (processed + consumed).min(total);
+        on_progress(processed, total);
+        if is_eof {
+            break;
+        }
+    }
+
     ctx.flush_all();
+    on_progress(total, total);
     Ok(ctx)
+}
+
+fn map_read_error(path: &Path, error: std::io::Error) -> ZiPatchError {
+    if error.kind() == std::io::ErrorKind::UnexpectedEof {
+        ZiPatchError::UnexpectedEof
+    } else {
+        ZiPatchError::Io {
+            path: path.display().to_string(),
+            source: error,
+        }
+    }
 }
 
 #[cfg(test)]

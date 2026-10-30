@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use console::style;
 use eorzea_auth::sdo::SdoAuth;
-use eorzea_lib::game_files::{version, GameFileManager};
+use eorzea_lib::game_files::{GameFileManager, default_patch_dir, version};
 use eorzea_lib::launcher::{Launcher, LauncherError};
 use eorzea_lib::term_img;
 
@@ -120,7 +120,6 @@ enum Command {
         /// 强制禁用 Dalamud（覆盖 [dalamud].enabled）
         #[arg(long, conflicts_with = "dalamud")]
         no_dalamud: bool,
-
     },
 }
 
@@ -170,7 +169,7 @@ enum GameCommand {
         #[arg(long)]
         repair: bool,
 
-        /// 补丁暂存目录（默认 ~/.eorzea/patches）
+        /// 补丁暂存目录（默认 <游戏目录>/.eorzea/patches）
         #[arg(long)]
         patch_dir: Option<PathBuf>,
 
@@ -271,7 +270,6 @@ enum AuthCommand {
         /// 二维码保存路径（qr 方式，默认 ~/xiv_qr.png）
         #[arg(long)]
         qr_file: Option<PathBuf>,
-
     },
 
     /// 显示已保存的账号和默认账号
@@ -366,20 +364,10 @@ async fn main() {
                 username,
                 session_key,
                 qr_file,
-            } => {
-                cmd_auth_login(
-                    method,
-                    username.as_deref(),
-                    session_key.as_deref(),
-                    qr_file,
-                )
-                .await
-            }
+            } => cmd_auth_login(method, username.as_deref(), session_key.as_deref(), qr_file).await,
             AuthCommand::Status {} => cmd_auth_status(),
             AuthCommand::Default { account } => cmd_auth_default(&account),
-            AuthCommand::Logout { account } => {
-                cmd_auth_logout(account.as_deref())
-            }
+            AuthCommand::Logout { account } => cmd_auth_logout(account.as_deref()),
         },
         Command::Launch {
             game_path,
@@ -520,12 +508,7 @@ async fn find_area(area_id: &str) -> Result<eorzea_auth::SdoArea, String> {
         .ok_or_else(|| format!("找不到大区 ID '{area_id}'，用 `eoz areas` 查看"))
 }
 
-async fn cmd_check(
-    game_path: &std::path::Path,
-    area_id: &str,
-    max_expansion: i32,
-    repair: bool,
-) {
+async fn cmd_check(game_path: &std::path::Path, area_id: &str, max_expansion: i32, repair: bool) {
     let mgr = GameFileManager::new();
     let sp = ui::Spinner::new("解析大区 / 获取服务器列表");
     let area = match find_area(area_id).await {
@@ -536,7 +519,11 @@ async fn cmd_check(
         Err(e) => die(e),
     };
 
-    banner(format!("检查更新  {}  ·  {}", area.area_name, game_path.display()));
+    banner(format!(
+        "检查更新  {}  ·  {}",
+        area.area_name,
+        game_path.display()
+    ));
     let sp = ui::Spinner::new("对比本地与服务端版本");
     let result = mgr
         .check_update(&area, game_path, repair, max_expansion)
@@ -551,10 +538,7 @@ async fn cmd_check(
                 ok(format!("已是最新版本（X-Patch-Unique-Id: {unique_id}）"));
             }
         }
-        Ok(eorzea_lib::game_files::CheckResult::NeedsPatch {
-            patches,
-            unique_id,
-        }) => {
+        Ok(eorzea_lib::game_files::CheckResult::NeedsPatch { patches, unique_id }) => {
             let total: u64 = patches.iter().map(|p| p.length).sum();
             ok(format!(
                 "需要下载 {} 个补丁，共 {}",
@@ -562,17 +546,10 @@ async fn cmd_check(
                 human_bytes(total)
             ));
             ui::line("");
-            ui::row(
-                &["大小".into(), "版本".into(), "URL".into()],
-                &[10, 18, 0],
-            );
+            ui::row(&["大小".into(), "版本".into(), "URL".into()], &[10, 18, 0]);
             for p in &patches {
                 ui::row(
-                    &[
-                        human_bytes(p.length),
-                        p.version.to_string(),
-                        p.url.clone(),
-                    ],
+                    &[human_bytes(p.length), p.version.to_string(), p.url.clone()],
                     &[10, 18, 0],
                 );
             }
@@ -604,13 +581,13 @@ async fn cmd_update(
         Err(e) => die(e),
     };
 
-    let patch_dir = patch_dir.unwrap_or_else(|| {
-        dirs::home_dir()
-            .map(|h| h.join(".eorzea/patches"))
-            .unwrap_or_else(|| PathBuf::from("./patches"))
-    });
+    let patch_dir = patch_dir.unwrap_or_else(|| default_patch_dir(game_path));
 
-    banner(format!("更新游戏  {}  ·  {}", area.area_name, game_path.display()));
+    banner(format!(
+        "更新游戏  {}  ·  {}",
+        area.area_name,
+        game_path.display()
+    ));
 
     let sp = ui::Spinner::new("对比本地与服务端版本");
     let check = match mgr
@@ -643,24 +620,30 @@ async fn cmd_update(
     kv("暂存目录", patch_dir.display());
 
     let start = std::time::Instant::now();
-    let bar = ui::ByteBar::new("下载补丁");
+    let mut view = ui::DownloadView::new("下载补丁");
     match mgr
-        .download(&patches, &patch_dir, concurrency, bar.callback())
+        .download(&patches, &patch_dir, concurrency, |progress| {
+            view.update(&progress)
+        })
         .await
     {
         Ok(summary) => {
-            bar.finish(format!(
+            view.finish(format!(
                 "下载完成：{} 个新下载 / {} 个已存在跳过，用时 {:.1}s",
                 summary.downloaded.len(),
                 summary.skipped,
                 start.elapsed().as_secs_f64()
             ));
-            let sp = ui::Spinner::new("应用补丁");
-            match mgr.install(&patches, &patch_dir, game_path).await {
+            let mut install_view = ui::InstallView::new("应用补丁");
+            match mgr
+                .install_verified(&patches, &patch_dir, game_path, |progress| {
+                    install_view.update(&progress)
+                })
+                .await
+            {
                 Ok(install_summary) => {
                     let installed = install_summary.installed.len();
-                    sp.clear();
-                    ok(format!(
+                    install_view.finish(format!(
                         "安装完成：{installed} 个补丁已应用 / {} 个跳过（缺文件）",
                         install_summary.skipped
                     ));
@@ -668,16 +651,18 @@ async fn cmd_update(
                         hint("版本文件已同步；用 `eoz game status` 确认");
                     }
                 }
-                Err(e) => die(format!("安装失败: {e}")),
+                Err(e) => {
+                    install_view.fail(e.to_string());
+                    std::process::exit(1);
+                }
             }
         }
         Err(e) => {
-            bar.fail(e.to_string());
+            view.fail(e.to_string());
             std::process::exit(1);
         }
     }
 }
-
 
 /// `game verify`：校验游戏文件完整性 + 版本状态。
 async fn cmd_verify(game_path: &std::path::Path) {
@@ -773,7 +758,9 @@ async fn show_qr_code(
     // 终端直接显示图片（kitty / iTerm2）
     match term_img::display_png(qr.image_data()) {
         Ok(()) => hint("请用叨鱼 App 扫描上方二维码"),
-        Err(e) => hint(format!("终端不支持图片显示（{e}），请打开上面的图片文件扫码")),
+        Err(e) => hint(format!(
+            "终端不支持图片显示（{e}），请打开上面的图片文件扫码"
+        )),
     }
 
     Ok(qr)
@@ -793,11 +780,12 @@ async fn do_login(
 
     match method {
         AuthMethod::Password => {
-            let account = username.map(|s| s.to_string()).unwrap_or_else(|| prompt("账号"));
+            let account = username
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| prompt("账号"));
             ui::line("  密码（输入不回显）:");
-            let password = rpassword::read_password().map_err(|e| {
-                LauncherError::Auth(format!("读取密码失败: {e}"))
-            })?;
+            let password = rpassword::read_password()
+                .map_err(|e| LauncherError::Auth(format!("读取密码失败: {e}")))?;
             let sp = ui::Spinner::new("密码登录 / 换取会话");
             let r = launcher.login_password(&account, &password).await;
             sp.clear();
@@ -881,7 +869,12 @@ fn cmd_auth_status() {
         return;
     }
     ui::row(
-        &["账号".into(), "snda_id".into(), "自动登录".into(), "".into()],
+        &[
+            "账号".into(),
+            "snda_id".into(),
+            "自动登录".into(),
+            "".into(),
+        ],
         &[18, 12, 10, 0],
     );
     for acc in &cfg.accounts {
@@ -923,9 +916,7 @@ fn cmd_auth_default(account: &str) {
 
     match found {
         Some(acc) => {
-            cfg.default_account = Some(
-                acc.username.clone().unwrap_or_else(|| acc.snda_id.clone()),
-            );
+            cfg.default_account = Some(acc.username.clone().unwrap_or_else(|| acc.snda_id.clone()));
             if let Err(e) = eorzea_lib::auth::save(&cfg_path, &cfg) {
                 die(format!("保存配置失败: {e}"));
             }
@@ -1054,7 +1045,9 @@ async fn cmd_launch(
                 b.clear();
             }
             ui::fail(e);
-            ui::fail("本次不会启动游戏。修复后重试，或用 `eoz launch --no-dalamud` 本次跳过（也可在设置里关闭 Dalamud）。");
+            ui::fail(
+                "本次不会启动游戏。修复后重试，或用 `eoz launch --no-dalamud` 本次跳过（也可在设置里关闭 Dalamud）。",
+            );
             std::process::exit(1);
         }
     };
@@ -1070,7 +1063,9 @@ async fn cmd_launch(
             "password" => AuthMethod::Password,
             "qr" => AuthMethod::Qr,
             "auto" => AuthMethod::Auto,
-            other => die(format!("未知登录方式 '{other}'，可选: password | qr | auto")),
+            other => die(format!(
+                "未知登录方式 '{other}'，可选: password | qr | auto"
+            )),
         };
         match do_login(&method_enum, username, None, qr_file).await {
             Ok(t) => t,
@@ -1095,15 +1090,11 @@ async fn cmd_launch(
                                 if let Some(new_key) = &t.auto_login_session_key {
                                     let cfg_path = eorzea_lib::auth::config_path();
                                     let mut cfg = eorzea_lib::auth::load(&cfg_path);
-                                    if let Some(acc) = cfg
-                                        .accounts
-                                        .iter_mut()
-                                        .find(|a| a.snda_id == t.snda_id)
+                                    if let Some(acc) =
+                                        cfg.accounts.iter_mut().find(|a| a.snda_id == t.snda_id)
                                     {
                                         acc.auto_login_session_key = Some(new_key.clone());
-                                        if let Err(e) =
-                                            eorzea_lib::auth::save(&cfg_path, &cfg)
-                                        {
+                                        if let Err(e) = eorzea_lib::auth::save(&cfg_path, &cfg) {
                                             ui::fail(format!("更新 session key 失败: {e}"));
                                         }
                                     }
@@ -1218,7 +1209,6 @@ async fn check_update_status(game_path: &std::path::Path) -> Result<String, Stri
     }
 }
 
-
 /// `dalamud status`：release 版本、本机安装、游戏版本兼容性。
 async fn cmd_dalamud_status(game_path: &std::path::Path) {
     use eorzea_lib::dalamud::{InstallState, updater};
@@ -1292,17 +1282,23 @@ async fn cmd_dalamud_status(game_path: &std::path::Path) {
             }
         }
         InstallState::OutOfDate => ui::em(style("已安装但版本不匹配游戏").yellow().to_string()),
-        InstallState::Unsupported => {
-            ui::em(style("release 尚未支持当前游戏版本（等待发布）").red().to_string())
+        InstallState::Unsupported => ui::em(
+            style("release 尚未支持当前游戏版本（等待发布）")
+                .red()
+                .to_string(),
+        ),
+        InstallState::RuntimeMissing => {
+            ui::em("Windows .NET runtime 未安装（启动时自动下载）".to_string())
         }
-        InstallState::RuntimeMissing => ui::em("Windows .NET runtime 未安装（启动时自动下载）".to_string()),
         InstallState::AssetsMissing => ui::em("assets 未安装（启动时自动下载）".to_string()),
         InstallState::Failed(msg) => ui::em(style(format!("安装失败: {msg}")).red().to_string()),
     };
     kv("状态", state_label);
 
     if !st.remote_supported() {
-        hint("游戏更新、release 未跟进的期间，`eoz launch` 会直接报错，可用 `--no-dalamud` 先进游戏");
+        hint(
+            "游戏更新、release 未跟进的期间，`eoz launch` 会直接报错，可用 `--no-dalamud` 先进游戏",
+        );
     }
 }
 
@@ -1422,7 +1418,6 @@ async fn cmd_dalamud_launch(
     .await;
 }
 
-
 // ── eoz config：类似 git config 的 config.toml 读写 ─────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1448,7 +1443,11 @@ fn config_key_spec(key: &str) -> Option<ConfigValueKind> {
     }
 
     Some(match key {
-        "game_path" | "area" | "dalamud.load_method" | "dalamud.track" | "dalamud.beta_key"
+        "game_path"
+        | "area"
+        | "dalamud.load_method"
+        | "dalamud.track"
+        | "dalamud.beta_key"
         | "dalamud.install_root" => ConfigValueKind::String,
         "dalamud.enabled"
         | "dalamud.no_plugins"
@@ -1610,7 +1609,8 @@ fn load_config_document_for_write() -> Result<toml::Value, String> {
 fn save_config_document(doc: &toml::Value) -> Result<(), String> {
     let path = eorzea_lib::config::settings_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("创建 {} 失败: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建 {} 失败: {e}", parent.display()))?;
     }
     let text = toml::to_string_pretty(doc).map_err(|e| format!("序列化配置失败: {e}"))?;
     std::fs::write(&path, text).map_err(|e| format!("写入 {} 失败: {e}", path.display()))
@@ -1671,11 +1671,12 @@ fn cmd_config(sub: ConfigCommand) {
             }
         }
         // list 输出完整 TOML，保持原文（可重定向保存）
-        ConfigCommand::List {} => match toml::to_string_pretty(&eorzea_lib::config::load_app_default())
-        {
-            Ok(text) => ui::line(text.trim_end()),
-            Err(e) => die(format!("序列化配置失败: {e}")),
-        },
+        ConfigCommand::List {} => {
+            match toml::to_string_pretty(&eorzea_lib::config::load_app_default()) {
+                Ok(text) => ui::line(text.trim_end()),
+                Err(e) => die(format!("序列化配置失败: {e}")),
+            }
+        }
         ConfigCommand::Path {} => ui::line(eorzea_lib::config::settings_path().display()),
     }
 }
@@ -1687,7 +1688,10 @@ mod config_command_tests {
     #[test]
     fn test_config_key_specs() {
         assert_eq!(config_key_spec("game_path"), Some(ConfigValueKind::String));
-        assert_eq!(config_key_spec("dalamud.enabled"), Some(ConfigValueKind::Bool));
+        assert_eq!(
+            config_key_spec("dalamud.enabled"),
+            Some(ConfigValueKind::Bool)
+        );
         assert_eq!(
             config_key_spec("dalamud.delay_initialize_ms"),
             Some(ConfigValueKind::Uint)
@@ -1703,7 +1707,10 @@ mod config_command_tests {
     #[test]
     fn test_parse_config_value() {
         #[cfg(not(target_os = "windows"))]
-        assert_eq!(parse_config_value("esync", "yes").unwrap(), toml::Value::Boolean(true));
+        assert_eq!(
+            parse_config_value("esync", "yes").unwrap(),
+            toml::Value::Boolean(true)
+        );
         #[cfg(target_os = "windows")]
         assert!(parse_config_value("esync", "yes").is_err());
         assert_eq!(
@@ -1735,18 +1742,8 @@ mod config_command_tests {
     #[test]
     fn test_set_get_unset_dotted_paths() {
         let mut root = toml::Value::Table(toml::map::Map::new());
-        set_config_path(
-            &mut root,
-            "dalamud.enabled",
-            toml::Value::Boolean(true),
-        )
-        .unwrap();
-        set_config_path(
-            &mut root,
-            "env.WINEESYNC",
-            toml::Value::String("1".into()),
-        )
-        .unwrap();
+        set_config_path(&mut root, "dalamud.enabled", toml::Value::Boolean(true)).unwrap();
+        set_config_path(&mut root, "env.WINEESYNC", toml::Value::String("1".into())).unwrap();
         assert_eq!(
             get_config_path(&root, "dalamud.enabled"),
             Some(&toml::Value::Boolean(true))

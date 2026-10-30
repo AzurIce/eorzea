@@ -14,7 +14,7 @@
 //! # 尚未实现
 //!
 //! - 完整性校验（对应 C# `PatchVerifier`）——需要 IndexedZiPatch 索引或逐文件 hash
-//! - 断点续传（Range）——目前不完整文件整体重下
+//! - 单文件多连接分块下载——目前每个补丁一条连接；Range 续传已实现
 //! - UID 缓存（`X-Patch-Unique-Id`）——服务器目前返回空值，优先级低
 
 pub mod patch_list;
@@ -28,7 +28,8 @@ use std::path::Path;
 use tracing::{debug, info, instrument, warn};
 
 use self::patch_manager::{
-    DownloadSummary, PatchDownloadError, download_patches, patch_cache_path, verify_patch_sha1,
+    DownloadProgress, DownloadSummary, PatchDownloadError, download_patches, patch_cache_path,
+    verify_patch_sha1_with_progress,
 };
 use self::version::{LocalVersions, build_version_report, read_local_versions};
 use self::zpatch::ZiPatchError;
@@ -110,6 +111,39 @@ pub struct InstallSummary {
     pub skipped: usize,
 }
 
+/// 单个补丁的安装阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallPhase {
+    /// 安装前重新校验缓存 SHA1。
+    Verifying,
+    /// 正在把 ZiPatch 应用到游戏目录。
+    Applying,
+}
+
+/// 当前正在安装的补丁进度。
+#[derive(Debug, Clone)]
+pub struct InstallPatchProgress {
+    pub index: usize,
+    pub version: String,
+    pub phase: InstallPhase,
+    /// 当前阶段已处理字节。
+    pub done: u64,
+    /// 当前补丁大小。
+    pub total: u64,
+}
+
+/// 安装进度快照。
+#[derive(Debug, Clone, Default)]
+pub struct InstallProgress {
+    /// 已完成补丁的字节数 + 当前补丁已应用字节。
+    pub done: u64,
+    pub total: u64,
+    /// 已处理补丁数（含缺文件跳过）。
+    pub completed: usize,
+    pub total_patches: usize,
+    pub current: Option<InstallPatchProgress>,
+}
+
 /// 版本检查结果。
 #[derive(Debug)]
 pub enum CheckResult {
@@ -129,6 +163,14 @@ pub enum CheckResult {
     NeedsPatchBoot,
 }
 
+/// 默认补丁暂存目录：`{game_root}/.eorzea/patches`。
+///
+/// 放在游戏所在磁盘，避免默认把约 100 GiB 的补丁缓存写进系统盘；
+/// CLI `--patch-dir` 可覆盖。
+pub fn default_patch_dir(game_root: &Path) -> std::path::PathBuf {
+    game_root.join(".eorzea").join("patches")
+}
+
 /// 游戏文件管理器。
 pub struct GameFileManager {
     client: reqwest::Client,
@@ -146,6 +188,10 @@ impl GameFileManager {
         Self {
             client: reqwest::Client::builder()
                 .user_agent(PATCHER_USER_AGENT)
+                .connect_timeout(std::time::Duration::from_secs(15))
+                // 单次读超时：连接卡死时让下载任务失败并进入续传重试，
+                // 避免进度条永久停在 0 B/s。
+                .read_timeout(std::time::Duration::from_secs(30))
                 .build()
                 .expect("failed to build HTTP client"),
         }
@@ -249,7 +295,7 @@ impl GameFileManager {
         patches: &[PatchListEntry],
         patch_dir: &Path,
         concurrency: usize,
-        mut on_progress: impl FnMut(u64, u64),
+        mut on_progress: impl FnMut(DownloadProgress),
     ) -> Result<DownloadSummary, GameFileError> {
         download_patches(
             &self.client,
@@ -271,17 +317,48 @@ impl GameFileManager {
     /// 4. 全部完成后将 `.ver` 备份为 `.bck`（对应 `VerToBck`）
     ///
     /// 返回 `(已安装版本列表, 补丁文件是否存在)`。
-    #[instrument(skip(self, patches, game_root))]
+    #[instrument(skip(self, patches, game_root, on_progress))]
     pub async fn install(
         &self,
         patches: &[PatchListEntry],
         patch_dir: &Path,
         game_root: &Path,
+        on_progress: impl FnMut(InstallProgress),
     ) -> Result<InstallSummary, GameFileError> {
+        self.install_inner(patches, patch_dir, game_root, true, on_progress)
+            .await
+    }
+
+    /// 与 [`Self::install`] 相同，但信任调用方已经校验过缓存
+    /// （`download` 成功后即可），跳过安装前的重复整文件 SHA1。
+    #[instrument(skip(self, patches, game_root, on_progress))]
+    pub async fn install_verified(
+        &self,
+        patches: &[PatchListEntry],
+        patch_dir: &Path,
+        game_root: &Path,
+        on_progress: impl FnMut(InstallProgress),
+    ) -> Result<InstallSummary, GameFileError> {
+        self.install_inner(patches, patch_dir, game_root, false, on_progress)
+            .await
+    }
+
+    async fn install_inner(
+        &self,
+        patches: &[PatchListEntry],
+        patch_dir: &Path,
+        game_root: &Path,
+        verify: bool,
+        mut on_progress: impl FnMut(InstallProgress),
+    ) -> Result<InstallSummary, GameFileError> {
+        let total_bytes: u64 = patches.iter().map(|p| p.length).sum();
+        let total_patches = patches.len();
+        let mut completed_bytes = 0u64;
+        let mut completed = 0usize;
         let mut installed = Vec::new();
         let mut skipped = 0;
 
-        for patch in patches {
+        for (index, patch) in patches.iter().enumerate() {
             let repo = repo_from_url(&patch.url);
             let patch_file = patch_cache_path(patch_dir, patch);
 
@@ -291,15 +368,69 @@ impl GameFileManager {
                     "patch file missing, skipping (run update to download first)"
                 );
                 skipped += 1;
+                completed_bytes += patch.length;
+                completed += 1;
+                on_progress(InstallProgress {
+                    done: completed_bytes,
+                    total: total_bytes,
+                    completed,
+                    total_patches,
+                    current: None,
+                });
                 continue;
             }
 
-            if !verify_patch_sha1(&patch_file, patch)? {
+            let metadata = std::fs::metadata(&patch_file).map_err(|e| GameFileError::Io {
+                path: patch_file.clone(),
+                source: e,
+            })?;
+            if metadata.len() != patch.length {
                 return Err(GameFileError::PatchIdentityMismatch {
                     path: patch_file,
                     url: patch.url.clone(),
                 });
             }
+
+            let patch_progress = |phase: InstallPhase, done: u64| InstallPatchProgress {
+                index,
+                version: patch.version.clone(),
+                phase,
+                done: done.min(patch.length),
+                total: patch.length,
+            };
+
+            if verify {
+                on_progress(InstallProgress {
+                    done: completed_bytes,
+                    total: total_bytes,
+                    completed,
+                    total_patches,
+                    current: Some(patch_progress(InstallPhase::Verifying, 0)),
+                });
+                let mut verify_progress = |done: u64| {
+                    on_progress(InstallProgress {
+                        done: completed_bytes,
+                        total: total_bytes,
+                        completed,
+                        total_patches,
+                        current: Some(patch_progress(InstallPhase::Verifying, done)),
+                    });
+                };
+                if !verify_patch_sha1_with_progress(&patch_file, patch, &mut verify_progress)? {
+                    return Err(GameFileError::PatchIdentityMismatch {
+                        path: patch_file,
+                        url: patch.url.clone(),
+                    });
+                }
+            }
+
+            on_progress(InstallProgress {
+                done: completed_bytes,
+                total: total_bytes,
+                completed,
+                total_patches,
+                current: Some(patch_progress(InstallPhase::Applying, 0)),
+            });
 
             let base_dir = game_root.join(repo.install_subdir());
             info!(
@@ -309,7 +440,22 @@ impl GameFileManager {
                 "installing patch"
             );
 
-            zpatch::apply::apply_patch_file(&patch_file, &base_dir).map_err(GameFileError::from)?;
+            let mut apply_progress = |done: u64, _total: u64| {
+                let done = done.min(patch.length);
+                on_progress(InstallProgress {
+                    done: (completed_bytes + done).min(total_bytes),
+                    total: total_bytes,
+                    completed,
+                    total_patches,
+                    current: Some(patch_progress(InstallPhase::Applying, done)),
+                });
+            };
+            zpatch::apply::apply_patch_file_with_progress(
+                &patch_file,
+                &base_dir,
+                &mut apply_progress,
+            )
+            .map_err(GameFileError::from)?;
 
             // 写版本文件（对应 `Repository.SetVer`）
             let ver_path = repo.ver_path(game_root);
@@ -326,6 +472,15 @@ impl GameFileManager {
             debug!(path = %ver_path.display(), version = %patch.version, "wrote version file");
 
             installed.push(patch.version.clone());
+            completed_bytes += patch.length;
+            completed += 1;
+            on_progress(InstallProgress {
+                done: completed_bytes,
+                total: total_bytes,
+                completed,
+                total_patches,
+                current: None,
+            });
         }
 
         // 全部完成后备份版本文件（对应 `VerToBck`）
@@ -436,7 +591,7 @@ mod tests {
         std::fs::write(&cached, b"short").unwrap();
 
         let result = GameFileManager::new()
-            .install(std::slice::from_ref(&patch), &patch_dir, &game_root)
+            .install(std::slice::from_ref(&patch), &patch_dir, &game_root, |_| {})
             .await;
         assert!(matches!(
             result,
@@ -445,5 +600,13 @@ mod tests {
         assert!(!game_root.join("game/ffxivgame.ver").exists());
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_default_patch_dir_lives_under_game_root() {
+        let root = Path::new("G:/FF14/game");
+        let patch_dir = default_patch_dir(root);
+        assert!(patch_dir.starts_with(root));
+        assert!(patch_dir.ends_with("patches"));
     }
 }

@@ -96,11 +96,18 @@
 - [x] **eoz auth**：多账号管理 — `auth login qr|password|auto` / `auth status` / `auth default <账号>` / `auth logout`；配置持久化到 `~/.eorzea/auth.toml`（`--config` 或 `XIV_LAUNCHER_RS_CONFIG` 覆盖）；`launch` 未指定账号时用默认账号自动登录
 - [x] **eoz login/launch**：登录 + 启动游戏；扫码二维码通过终端图片协议直接显示（kitty graphics protocol / iTerm2 OSC 1337，`src/term_img.rs`），无协议时 fallback 保存 PNG
 - [x] **补丁应用**（ZiPatch）：`src/game_files/zpatch/` 完整移植 C# `ZiPatch` 解析与应用（FHDR/APLY/SQPK:T/F/A/D/E/H/I/X/ADIR/DELD/EOF），`RemotePatchInstaller` 流程（应用 → `SetVer` → `VerToBck`）；已用修复后的唯一缓存键重放 11 个补丁（877.50 MiB），版本检查通过且实际启动进入游戏
+- [x] **安装进度与流式应用（2026-10-30）**：`InstallProgress` / `InstallPhase` 上报总进度和当前补丁的「校验中/应用中」；ZiPatch 改为 `read_chunk` 流式解析（一次只保留一个 chunk），不再把 1.4 GiB 补丁整文件读入内存；CLI 用 `InstallView` 显示总进度 + 当前补丁子进度
+- [x] **跳过安装前重复 SHA1**：新增 `install_verified()`；`download` 成功后的 CLI/GUI 安装跳过第二次整文件 SHA1，仅做长度检查，避免 84 GiB 缓存被重复读一遍；独立调用 `install()` 仍保留完整校验
 - [ ] **Boot 版本检查**：国服无需实现（C# `CheckBootVersion` 对 CN 直接 `return Array.Empty`）
 - [x] **完整性校验**（`game verify`）：`game_files/verify.rs` 文件级校验（.ver 一致性、关键文件存在性、sqpack 魔数/header/数据块结构、movie）；注：C# `PatchVerifier` 依赖 ottercorp S3 的 `.patch.index`（国际服专用，国服无此服务），故不做逐文件 hash 校验
 - [x] **断点续传**（Range）：不完整缓存直接作为 `.part` 使用；下次启动先按块 SHA1 校验已有完整前缀（损坏/超长则截断），再发 `Range: bytes=<offset>-` 续传。服务端忽略 Range 返回 200 时自动清空重下；每个文件最多 5 次尝试，失败保留已下载部分（2026-10-30）
 - [ ] **单文件多连接下载**：当前每个补丁 1 条连接、全局最多 4 条；C# 默认 aria2 每文件 `max-connection-per-server=8`（4 文件最多 32 条），NetDownloader 也按 `ChunkCount=8` 分块并行。需按 Range 分块 + 随机写盘，否则大补丁只能吃单连接带宽
-- [x] **实时下载进度**：`download_patches` 用 `JoinSet` 乱序收任务，主任务每 120ms 上报一次；`DownloadProgress` 同时给出总字节和每个在途补丁的子进度。CLI 用 `DownloadView` 绘制一行总进度 + 每个补丁一行子进度（`--no-progress` / 非 TTY 自动退化为总量）。已存在/跳过文件也计入总进度（2026-10-30）
+- [x] **默认暂存目录改到游戏目录**：`default_patch_dir()` 返回 `<游戏目录>/.eorzea/patches`，避免把约 100 GiB 补丁缓存写进系统盘；CLI `--patch-dir` 仍可覆盖（2026-10-30）
+- [ ] **下载前磁盘空间检查**：C# `PatchManager.PatchAsync` 会检查补丁目录/游戏目录剩余空间并抛 `NotEnoughSpaceException`；当前没有检查，补丁目录写满后会在写入/重试阶段表现为卡住或失败
+- [x] **实时下载进度**：`download_patches` 用 `JoinSet` 乱序收任务，主任务每 120ms 上报一次；`DownloadProgress` 同时给出总字节和每个在途补丁的子进度。CLI 用 `DownloadView` 绘制一行总进度 + 每个补丁一行子进度（`--no-progress` / 非 TTY 自动退化为总量）。已存在/跳过文件也计入总进度；子进度条先挂到 `MultiProgress` 再设置样式/消息，避免 `set_message` 的即时绘制留下重复行（2026-10-30）
+- [x] **校验不占下载槽位**：网络下载完成后先释放信号量，再执行 SHA1 校验；否则 4 个大补丁同时校验时所有槽位被占住，网络空转，表现为“每批下完停一段时间 / 越下越慢”（2026-10-30）
+- [x] **校验阶段进度显示**：`PatchProgress.phase` 区分 `Downloading` / `Verifying`；子进度在后者把速度列换成「校验中」，总进度在没有下载任务时也显示「校验中」，不再用 0 B/s 和超大 ETA 误导（2026-10-30）
+- [x] **dev profile SHA1 优化**：`[profile.dev.package.sha1] opt-level = 3`；否则 debug 版 SHA1 只有约十几 MiB/s，1.4 GiB 补丁的校验会占用几分钟 CPU。实测优化后约 269 MiB/s（2026-10-30）
 - [x] **下载超时与重试**：`reqwest::Client` 配 `connect_timeout=15s` / `read_timeout=30s`；单文件最多 5 次尝试，失败后退避并从当前文件长度续传。仍保留“任一文件最终失败则中止整批”的行为（2026-10-30）
 - [ ] **边下边装**：C# `PatchManager` 的 `RunApplyQueue` 在下载队列之外同步应用已完成补丁；当前 `eoz game update` 必须等 97.9 GiB 全部下完才开始应用，进入游戏的总等待时间更长
 - [x] **SHA1 流式校验**：`verify_patch_sha1` 改为 `BufReader` 分块读取，不再把 1.4 GiB 补丁整文件读入内存；校验通过 `spawn_blocking` 移出 tokio worker，文件写入改用 `tokio::fs`（2026-10-30）

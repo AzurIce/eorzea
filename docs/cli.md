@@ -37,7 +37,7 @@ cargo install --path packages/eorzea-cli   # 安装到 ~/.cargo/bin
 |------|------|
 | `~/.eorzea/config.toml` | 主配置（字段详见 [`config.md`](config.md)） |
 | `~/.eorzea/auth.toml` | 已保存账号与自动登录 session key |
-| `~/.eorzea/patches/` | 补丁下载暂存目录 |
+| `<游戏目录>/.eorzea/patches/` | 补丁下载暂存目录（跟随游戏所在磁盘；`--patch-dir` 可覆盖） |
 | `~/.eorzea/prefix/` | 默认 Wine prefix |
 | `~/.eorzea/tools/` | 下载的 Wine、DXVK、登录 DLL 缓存 |
 | `~/.eorzea/dalamud/` | Dalamud 安装目录（详见 [`dalamud.md`](dalamud.md)） |
@@ -142,12 +142,14 @@ eoz areas
 下载并应用补丁。执行阶段：
 
 1. **check**：同上，拿到补丁列表。
-2. **并发下载**（默认 4 并发，信号量控制）到暂存目录；缓存文件名为 `<sha1(url)>-<文件名>.<版本>`，避免跨仓库撞名。已存在的缓存先按补丁元数据做**分块 SHA1 校验**：完整且通过则跳过；不完整则校验已有完整块后发 `Range` 续传，服务端不支持 Range 时回退整体重下；前缀损坏或长度超限则截断重下。下载后校验字节数与 SHA1，单个文件失败会退避并续传（最多 5 次）。下载阶段显示一行总进度 + 每个在途补丁一行子进度（`--no-progress` / 非 TTY 下退化为总进度）。
-3. **应用补丁（ZiPatch）**：按列表顺序逐补丁把 chunk 序列写入 `boot/` 或 `game/` 对应仓库；应用前再次 SHA1 校验缓存身份。
+2. **并发下载**（默认 4 并发，信号量控制）到暂存目录；缓存文件名为 `<sha1(url)>-<文件名>.<版本>`，避免跨仓库撞名。已存在的缓存先按补丁元数据做**分块 SHA1 校验**：完整且通过则跳过；不完整则校验已有完整块后发 `Range` 续传，服务端不支持 Range 时回退整体重下；前缀损坏或长度超限则截断重下。下载后校验字节数与 SHA1，单个文件失败会退避并续传（最多 5 次）。网络下载完成后会先释放并发槽位再校验，避免大文件校验阻塞后续补丁下载。下载阶段显示一行总进度 + 每个在途补丁一行子进度（`--no-progress` / 非 TTY 下退化为总进度）；处于 SHA1 校验的文件把速度列显示为「校验中」，没有下载任务时总进度也显示「校验中」。
+3. **应用补丁（ZiPatch）**：按列表顺序流式解析 ZiPatch（一次只保留一个 chunk），把数据写入 `boot/` 或 `game/` 对应仓库。`download` 成功后的安装跳过第二次整文件 SHA1，仅检查文件长度；单独调用 `install()` 时仍保留完整校验。安装阶段显示一行总进度 + 当前补丁一行子进度（「应用中」/「校验中」）。
 4. **同步版本文件**：写对应的 `.ver`（如 `game/ffxivgame.ver`、`game/sqpack/ex1/ex1.ver`）。
 5. **备份**：全部成功后把各仓库的 `.ver` 复制为 `.bck`。
 
-选项：`--area`、`--max-expansion`、`--repair`、`--patch-dir <path>`（默认 `~/.eorzea/patches`）、`--concurrency <n>`（默认 4）。
+选项：`--area`、`--max-expansion`、`--repair`、`--patch-dir <path>`（默认 `<游戏目录>/.eorzea/patches`）、`--concurrency <n>`（默认 4）。
+
+> 注：`Cargo.toml` 的 dev profile 已给 `sha1` 依赖单独开 `opt-level = 3`。否则 debug 版 SHA1 可能只有十几 MiB/s，1.4 GiB 补丁的校验会被拖到几分钟。正式下载仍建议 `cargo run --release -p eorzea-cli -- game update`。
 
 ### `eoz game verify`
 

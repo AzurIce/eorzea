@@ -12,12 +12,15 @@
 //!   管道与 CI 里输出干净可读。
 
 use std::cell::Cell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::io::{self, IsTerminal};
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use console::style;
+use eorzea_lib::game_files::patch_manager::{DownloadProgress, PatchPhase, PatchProgress};
+use eorzea_lib::game_files::{InstallPatchProgress, InstallPhase, InstallProgress};
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use tracing_indicatif::IndicatifWriter;
 use tracing_subscriber::EnvFilter;
@@ -167,11 +170,7 @@ pub fn display_width(s: &str) -> usize {
                 || (0xFF00..=0xFF60).contains(&cp)
                 || (0xFFE0..=0xFFE6).contains(&cp)
                 || (0x20000..=0x3FFFD).contains(&cp);
-            if wide {
-                2
-            } else {
-                1
-            }
+            if wide { 2 } else { 1 }
         })
         .sum()
 }
@@ -202,11 +201,48 @@ fn byte_style() -> ProgressStyle {
     .progress_chars("=> ")
 }
 
+fn byte_verify_style() -> ProgressStyle {
+    ProgressStyle::with_template(
+        "{spinner:.cyan} {msg:<20} [{bar:26.cyan/blue}] {binary_bytes:>10}/{binary_total_bytes:>10} 校验中",
+    )
+    .expect("valid template")
+    .progress_chars("=> ")
+}
+
 fn byte_unknown_style() -> ProgressStyle {
     ProgressStyle::with_template(
         "{spinner:.cyan} {msg:<20} {binary_bytes:>10} {binary_bytes_per_sec:>12}",
     )
     .expect("valid template")
+}
+
+/// 单个补丁的子进度条（比总进度窄一些，避免多行时溢出）。
+fn file_style(phase: PatchPhase) -> ProgressStyle {
+    let template = match phase {
+        PatchPhase::Downloading => {
+            "{msg:<26} [{bar:16.cyan/blue}] {binary_bytes:>9}/{binary_total_bytes:>9} {binary_bytes_per_sec:>10}"
+        }
+        PatchPhase::Verifying => {
+            "{msg:<26} [{bar:16.cyan/blue}] {binary_bytes:>9}/{binary_total_bytes:>9} 校验中"
+        }
+    };
+    ProgressStyle::with_template(template)
+        .expect("valid template")
+        .progress_chars("=> ")
+}
+
+fn install_file_style(phase: InstallPhase) -> ProgressStyle {
+    let template = match phase {
+        InstallPhase::Applying => {
+            "{msg:<26} [{bar:16.cyan/blue}] {binary_bytes:>9}/{binary_total_bytes:>9} 应用中"
+        }
+        InstallPhase::Verifying => {
+            "{msg:<26} [{bar:16.cyan/blue}] {binary_bytes:>9}/{binary_total_bytes:>9} 校验中"
+        }
+    };
+    ProgressStyle::with_template(template)
+        .expect("valid template")
+        .progress_chars("=> ")
 }
 
 fn spinner_style() -> ProgressStyle {
@@ -219,6 +255,8 @@ pub struct ByteBar {
     label: String,
     /// 首次拿到总量时切换到「有总量」样式（只切一次）。
     styled_known: Cell<bool>,
+    /// 当前是否处于纯校验阶段（此时把速度/ETA 换成「校验中」）。
+    verifying: Cell<bool>,
 }
 
 impl ByteBar {
@@ -236,6 +274,7 @@ impl ByteBar {
             bar,
             label,
             styled_known: Cell::new(false),
+            verifying: Cell::new(false),
         }
     }
 
@@ -243,12 +282,32 @@ impl ByteBar {
     pub fn set_progress(&self, done: u64, total: u64) {
         if total > 0 {
             if !self.styled_known.get() {
-                self.bar.set_style(byte_style());
                 self.styled_known.set(true);
+                self.bar.set_style(if self.verifying.get() {
+                    byte_verify_style()
+                } else {
+                    byte_style()
+                });
             }
             self.bar.set_length(total);
         }
         self.bar.set_position(done);
+    }
+
+    /// 纯校验阶段隐藏速度/ETA，改为显示「校验中」。
+    pub fn set_verifying(&self, verifying: bool) {
+        if self.verifying.get() == verifying {
+            return;
+        }
+        self.verifying.set(verifying);
+        let style = if verifying {
+            byte_verify_style()
+        } else if self.styled_known.get() {
+            byte_style()
+        } else {
+            byte_unknown_style()
+        };
+        self.bar.set_style(style);
     }
 
     /// 生成可直接传给库里 `on_progress(done, total)` 回调的闭包。
@@ -260,6 +319,7 @@ impl ByteBar {
     pub fn finish(self, msg: impl Display) {
         let bytes = self.bar.position();
         self.bar.finish_and_clear();
+        progress().remove(&self.bar);
         if bars_hidden() && bytes > 0 {
             ok(format!("{}（{}）", msg, human_bytes(bytes)));
         } else {
@@ -276,13 +336,179 @@ impl ByteBar {
     /// 只清掉动态行，不输出结果（后面还有别的输出时用）。
     pub fn clear(self) {
         self.bar.finish_and_clear();
+        progress().remove(&self.bar);
     }
 
     /// 阶段失败：清掉动态行，打一行 `✗ 阶段名: 原因`（不退出，由调用方决定）。
     pub fn fail(self, msg: impl Display) {
         self.bar.finish_and_clear();
+        progress().remove(&self.bar);
         fail(format!("{}: {msg}", self.label));
     }
+}
+
+/// 下载阶段视图：一行总进度 + 每个在途补丁一行子进度。
+///
+/// 总进度和子进度都挂在同一个 [`MultiProgress`] 上，日志仍由
+/// [`IndicatifWriter`] 统一避让，不会把多行进度打断。
+pub struct DownloadView {
+    overall: ByteBar,
+    files: BTreeMap<usize, FileBar>,
+}
+
+struct FileBar {
+    bar: ProgressBar,
+    phase: PatchPhase,
+}
+
+impl DownloadView {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            overall: ByteBar::new(label),
+            files: BTreeMap::new(),
+        }
+    }
+
+    /// 根据库回调更新总进度和子进度。
+    pub fn update(&mut self, snapshot: &DownloadProgress) {
+        self.overall.set_progress(snapshot.done, snapshot.total);
+        let downloading = snapshot
+            .active
+            .iter()
+            .any(|file| file.phase == PatchPhase::Downloading);
+        let verifying = !downloading
+            && snapshot
+                .active
+                .iter()
+                .any(|file| file.phase == PatchPhase::Verifying);
+        self.overall.set_verifying(verifying);
+
+        if bars_hidden() {
+            return;
+        }
+
+        let active: BTreeSet<usize> = snapshot.active.iter().map(|p| p.index).collect();
+        let stale: Vec<usize> = self
+            .files
+            .keys()
+            .copied()
+            .filter(|index| !active.contains(index))
+            .collect();
+        for index in stale {
+            if let Some(file) = self.files.remove(&index) {
+                file.bar.finish_and_clear();
+                progress().remove(&file.bar);
+            }
+        }
+
+        for file in &snapshot.active {
+            let entry = self.files.entry(file.index).or_insert_with(|| {
+                // 必须先挂到 MultiProgress 再 set_style/set_message：
+                // set_message 会立即 draw 一次，未挂载时会直接在 stderr 留下
+                // 一行“孤儿”进度条，之后每轮 update 又会重复追加。
+                let bar = progress().add(ProgressBar::new(file.total));
+                bar.set_style(file_style(file.phase));
+                bar.set_message(file_label(file));
+                FileBar {
+                    bar,
+                    phase: file.phase,
+                }
+            });
+            if entry.phase != file.phase {
+                entry.bar.set_style(file_style(file.phase));
+                entry.phase = file.phase;
+            }
+            entry.bar.set_length(file.total);
+            entry.bar.set_message(file_label(file));
+            entry.bar.set_position(file.done);
+        }
+    }
+
+    /// 完成：清掉所有子进度，总进度打一行 `✓ 结果`。
+    pub fn finish(mut self, msg: impl Display) {
+        self.clear_files();
+        self.overall.finish(msg);
+    }
+
+    /// 失败：清掉所有动态行，打一行错误。
+    pub fn fail(mut self, msg: impl Display) {
+        self.clear_files();
+        self.overall.fail(msg);
+    }
+
+    fn clear_files(&mut self) {
+        for (_, file) in std::mem::take(&mut self.files) {
+            file.bar.finish_and_clear();
+            progress().remove(&file.bar);
+        }
+    }
+}
+
+fn file_label(file: &PatchProgress) -> String {
+    let resumed = if file.resumed_from > 0 { " ↻" } else { "" };
+    format!("  {:>3} {}{resumed}", file.index + 1, file.version)
+}
+
+/// 安装阶段视图：总进度 + 当前补丁的应用/校验进度。
+pub struct InstallView {
+    overall: ByteBar,
+    current: Option<(ProgressBar, InstallPhase)>,
+}
+
+impl InstallView {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            overall: ByteBar::new(label),
+            current: None,
+        }
+    }
+
+    pub fn update(&mut self, snapshot: &InstallProgress) {
+        self.overall.set_progress(snapshot.done, snapshot.total);
+        if bars_hidden() {
+            return;
+        }
+
+        match &snapshot.current {
+            Some(current) => {
+                let (bar, phase) = self.current.get_or_insert_with(|| {
+                    let bar = progress().add(ProgressBar::new(current.total));
+                    bar.set_style(install_file_style(current.phase));
+                    bar.set_message(install_file_label(current));
+                    (bar, current.phase)
+                });
+                if *phase != current.phase {
+                    bar.set_style(install_file_style(current.phase));
+                    *phase = current.phase;
+                }
+                bar.set_length(current.total);
+                bar.set_message(install_file_label(current));
+                bar.set_position(current.done);
+            }
+            None => self.clear_current(),
+        }
+    }
+
+    pub fn finish(mut self, msg: impl Display) {
+        self.clear_current();
+        self.overall.finish(msg);
+    }
+
+    pub fn fail(mut self, msg: impl Display) {
+        self.clear_current();
+        self.overall.fail(msg);
+    }
+
+    fn clear_current(&mut self) {
+        if let Some((bar, _)) = self.current.take() {
+            bar.finish_and_clear();
+            progress().remove(&bar);
+        }
+    }
+}
+
+fn install_file_label(file: &InstallPatchProgress) -> String {
+    format!("  {:>3} {}", file.index + 1, file.version)
 }
 
 /// 转圈提示：时长不确定的等待（登录、校验、启动游戏等）。
@@ -306,12 +532,14 @@ impl Spinner {
     /// 结束并输出一行 `✓ 结果`。
     pub fn finish(self, msg: impl Display) {
         self.bar.finish_and_clear();
+        progress().remove(&self.bar);
         ok(msg);
     }
 
     /// 只清掉动态行，不输出任何结果。
     pub fn clear(self) {
         self.bar.finish_and_clear();
+        progress().remove(&self.bar);
     }
 }
 
@@ -354,7 +582,16 @@ mod tests {
     /// 在模板写错时会 panic，这个测试保证不再等到真实下载时才炸。
     #[test]
     fn test_progress_templates_are_valid() {
-        for style in [byte_style(), byte_unknown_style(), spinner_style()] {
+        for style in [
+            byte_style(),
+            byte_verify_style(),
+            byte_unknown_style(),
+            file_style(PatchPhase::Downloading),
+            file_style(PatchPhase::Verifying),
+            install_file_style(InstallPhase::Applying),
+            install_file_style(InstallPhase::Verifying),
+            spinner_style(),
+        ] {
             let bar = ProgressBar::new(100);
             bar.set_style(style);
             bar.set_message("template");

@@ -1,13 +1,13 @@
 //! 主页：账号/大区选择、状态仪表盘（游戏位置/版本、Dalamud、Wine）、检查/更新游戏、启动游戏。
 
+use dioxus::prelude::*;
+use eorzea_auth::PatchListEntry;
 #[cfg(not(target_os = "windows"))]
 use crate::config::WineStartupType;
 use crate::dalamud::{DalamudStatus, InstallState, updater};
-use crate::game_files::{CheckResult, GameFileManager};
+use crate::game_files::{CheckResult, GameFileManager, default_patch_dir};
 #[cfg(not(target_os = "windows"))]
 use crate::wine::WineTool;
-use dioxus::prelude::*;
-use eorzea_auth::PatchListEntry;
 
 use super::login::{ActionButton, ErrorRow, Section};
 use super::settings::Checkbox;
@@ -121,15 +121,13 @@ pub fn HomePage() -> Element {
         if list.is_empty() {
             return;
         }
-        let patch_dir = dirs::home_dir()
-            .map(|h| h.join(".eorzea/patches"))
-            .unwrap_or_else(|| "patches".into());
+        let patch_dir = default_patch_dir(&root);
         update_state.set(UpdateState::Downloading(0, 0));
         spawn(async move {
             let mgr = GameFileManager::new();
             let downloaded = mgr
-                .download(&list, &patch_dir, 4, |done, total| {
-                    update_state.set(UpdateState::Downloading(done, total));
+                .download(&list, &patch_dir, 4, |progress| {
+                    update_state.set(UpdateState::Downloading(progress.done, progress.total));
                 })
                 .await;
             if let Err(e) = downloaded {
@@ -137,7 +135,7 @@ pub fn HomePage() -> Element {
                 return;
             }
             update_state.set(UpdateState::Installing);
-            match mgr.install(&list, &patch_dir, &root).await {
+            match mgr.install_verified(&list, &patch_dir, &root, |_| {}).await {
                 Ok(summary) => {
                     patches.set(Vec::new());
                     update_state.set(UpdateState::Done(format!(
@@ -239,7 +237,10 @@ pub fn HomePage() -> Element {
                                         },
                                         false,
                                     );
-                                    let _ = crate::auth::save(&crate::auth::config_path(), &cfg);
+                                    let _ = crate::auth::save(
+                                        &crate::auth::config_path(),
+                                        &cfg,
+                                    );
                                     state.auth_cfg.set(cfg);
                                     state.tokens.write().insert(t.snda_id.clone(), t.clone());
                                     Some(t)
