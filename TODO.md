@@ -27,6 +27,7 @@
 - [x] **`getPromotionInfo` 请求/响应对齐**：请求已补全 `common_query()` 和完整 CAS Cookie，并解析 JSON、检查 `return_code`/`error_type`；激活失败会中止登录
 - [x] **`macId` 参数语义对齐**：`common_query()` 发送 `SdoUtils.GetMac()` 对应的原始设备标识，密码登录 `mac` 和 `CASCID` 继续使用其 MD5
 - [x] **请求头 `Host`**：所有 SDO 请求添加 `Host: cas.sdo.com`
+- [x] **SDO HTTP/2 兼容性（2026-10-31 实测）**：本机 `reqwest` 自动协商 HTTP/2 时，主/备用域名的 `getGuid.json` 均返回 HTTP 567 + HTML；同一请求强制 HTTP/1.1 后均返回 HTTP 200、`return_code=0`。移除环境代理后仍可复现 HTTP/2 失败。原生 `SdoAuth` 客户端已限制 HTTP/1.1，三个 JSON 请求辅助方法均在解析前检查 HTTP 状态（错误不附带含凭据的 URL），并添加 HTTP 567 HTML 响应回归测试；CLI 不再将上下文/网络失败统一提示为 session key 过期。
 
 ### P0-3 SDO 错误处理完善
 

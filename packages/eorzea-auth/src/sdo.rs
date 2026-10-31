@@ -200,7 +200,8 @@ impl SdoAuth {
         let mut builder = Client::builder();
         #[cfg(not(target_arch = "wasm32"))]
         {
-            builder = builder.cookie_store(true);
+            // SDO 当前会对 HTTP/2 请求返回 HTTP 567 + HTML，固定 HTTP/1.1。
+            builder = builder.cookie_store(true).http1_only();
         }
         Ok(Self {
             client: builder.build()?,
@@ -853,6 +854,7 @@ impl SdoAuth {
             .send()
             .await?;
 
+        let resp = resp.error_for_status().map_err(|e| e.without_url())?;
         resp.json::<SdoResponse<T>>().await.map_err(Into::into)
     }
 
@@ -874,6 +876,7 @@ impl SdoAuth {
             .send()
             .await?;
 
+        let resp = resp.error_for_status().map_err(|e| e.without_url())?;
         resp.json::<SdoResponse<T>>().await.map_err(Into::into)
     }
 
@@ -894,6 +897,7 @@ impl SdoAuth {
             .send()
             .await?;
 
+        let resp = resp.error_for_status().map_err(|e| e.without_url())?;
         resp.json::<T>().await.map_err(Into::into)
     }
 
@@ -1010,5 +1014,41 @@ mod tests {
         let cookie = test_auth().build_cookie_header();
         assert!(cookie.contains("CASCID=CIDHASHEDMAC"));
         assert!(cookie.contains("SECURE_CASCID=CIDHASHEDMAC"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn http_errors_are_reported_before_json_decoding_without_sensitive_urls() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/?tgt=secret", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for _ in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                socket.read(&mut request).await.unwrap();
+                socket.write_all(b"HTTP/1.1 567 Unknown\r\nContent-Type: text/html\r\nContent-Length: 13\r\nConnection: close\r\n\r\n<html></html>").await.unwrap();
+            }
+        });
+        let mut auth = test_auth();
+        auth.client = Client::builder().no_proxy().build().unwrap();
+        let errors = [
+            auth.get_json_with_cookies::<serde_json::Value>(&url).await.unwrap_err(),
+            auth.get_json::<serde_json::Value>(&url).await.unwrap_err(),
+            auth.get_json_raw::<serde_json::Value>(&url).await.unwrap_err(),
+        ];
+        for error in errors {
+            match error {
+                AuthError::Network(error) => {
+                    assert!(error.is_status());
+                    assert_eq!(error.status().unwrap().as_u16(), 567);
+                    assert!(error.url().is_none());
+                    assert!(!error.to_string().contains("secret"));
+                }
+                error => panic!("expected HTTP status error, got {error}"),
+            }
+        }
+        server.await.unwrap();
     }
 }

@@ -1111,8 +1111,8 @@ async fn cmd_launch(
                             }
                             Err(e) => {
                                 sp.clear();
-                                ui::fail(format!("自动登录失败（session key 可能过期）: {e}"));
-                                die("请重新登录: `eoz auth login qr` 或 `eoz launch --method qr`");
+                                ui::fail(format!("自动登录失败: {e}"));
+                                die("请先检查上方错误；若 session key 已过期，用 `eoz auth login qr` 或 `eoz launch --method qr` 重新登录");
                             }
                         }
                     }
