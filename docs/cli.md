@@ -49,7 +49,7 @@ CLI 的构建与安装不会编译 dioxus/blitz。
 ## 全局约定
 
 - `--game-path` 指向**游戏根目录**（含 `boot/`、`game/`、`sdo/`）；提供时覆盖 `config.toml` 的 `game_path`。
-- `--area` 为大区 ID（如 `1` = 陆行鸟，`eoz areas` 查询）；提供时覆盖 `config.toml` 的 `area`。
+- `--area` 为大区名称（如 `陆行鸟`，`eoz areas` 查询；仍兼容旧数字 ID）。缺省按「账号的 `area` → 旧 `config.toml` 的 `area` → 大区列表第一个」解析；`game check/update/launch` 都适用。
 - `eoz config` 的布尔值接受 `true/false`、`1/0`、`yes/no`、`on/off`。
 - 游戏路径含非 ASCII 字符时启动前直接报错（避免游戏内误导性的 5003「帐号认证发生了错误」）。
 
@@ -105,7 +105,7 @@ eoz config get|set|unset|list|path # 读写 config.toml
 
 ## `eoz areas`
 
-从 SDO 服务器获取大区列表，输出大区 ID、`area_lobby`（ lobby 地址）与 `area_patch`（补丁服务器地址）——后两者是 `game check/update` 和 `launch` 的内部输入。
+从 SDO 服务器获取大区列表，输出大区名称、`area_lobby`（lobby 地址）与 `area_patch`（补丁服务器地址）——后两者是 `game check/update` 和 `launch` 的内部输入。名称可直接用于 `--area`，数字 ID 只在内部使用。
 
 ```bash
 eoz areas
@@ -195,9 +195,9 @@ eoz areas
 
 登录并启动游戏。这是最复杂的命令，执行阶段如下（每步失败都有明确报错；启用 Dalamud 时**不会静默降级**）：
 
-1. **大区解析**：获取大区列表，按 `--area`/配置找到目标大区（ID 写错在这里就报错，不会浪费一次登录）。
+1. **大区解析**：`--area` → 指定账号（缺省默认账号）的 `area` → 旧 `config.toml` 的 `area` → 大区列表第一个；名称写错在这里就报错，不会浪费一次登录。
 2. **Dalamud 准备**：启用时按需补齐 release / runtime / assets（下载显示进度条）；失败则**报错且不启动游戏**，提示用 `--no-dalamud` 本次跳过。必须在登录之前完成，否则失败会让一次性 session key 作废。
-3. **登录**：未指定 `--method` 时，用 `--account` 或默认账号的 session key 自动登录（新 key 写回 `auth.toml`，并显示剩余有效期）；`--method qr|password|auto` 则本次手动登录（流程同 `eoz auth login`）。
+3. **登录**：用 `--account` 或默认账号的 session key 自动登录（新 key 写回 `auth.toml`，并显示剩余有效期）。`launch` 不再提供登录方式参数；新账号或 key 过期时先用 `eoz auth login qr` / `password` 登录。
 4. **登录 DLL 检查**：确保 `sdo/sdologin/sdologinentry64.dll` 是 ottercorp 修改版——缺失则下载（缓存于 `~/.eorzea/tools/`），是原版则备份为 `sdologinentry64.sdo.dll` 后替换。
 5. **Wine 准备**：按 `startup_type` 解析 Wine（必要时自动下载）→ `wine64 --version` 探针 → 确保 prefix 存在且为 64 位（详见 [`wine.md`](wine.md)）。
 6. **DXVK 检查**：`dxvk.enabled` 时确保 DXVK 已装入 prefix（未装则下载安装）。
@@ -209,15 +209,14 @@ eoz areas
 成功后输出游戏 PID 与日志文件路径；失败时打印首行摘要并提示 `-v` 看完整输出。
 
 ```bash
+eoz auth login qr                   # 新账号或 key 过期时先登录
 eoz launch                          # 默认账号自动登录 + 启动（推荐日常用法）
 eoz launch --account 你的账号        # 指定已保存账号
-eoz launch --method qr              # 本次手动扫码
-eoz launch --method password --username 你的账号
 eoz launch --wine /opt/wine/bin/wine64   # 本次覆盖 Wine（仅 Linux/macOS）
 eoz launch --dalamud / --no-dalamud      # 本次覆盖 [dalamud].enabled
 ```
 
-选项：`--game-path`、`--area`、`--account`、`--method`、`--username`、`--qr-file`、`--dalamud` / `--no-dalamud`；`--wine` 仅 Linux/macOS 构建中存在（Windows 原生启动不使用 Wine）。
+选项：`--game-path`、`--area`、`--account`、`--dalamud` / `--no-dalamud`；`--wine` 仅 Linux/macOS 构建中存在（Windows 原生启动不使用 Wine）。
 
 ---
 
@@ -257,7 +256,7 @@ eoz config list                          # 列出当前生效配置（含默认�
 eoz config path                          # 显示配置文件路径
 ```
 
-写盘前会做完整反序列化校验（类型/枚举错误会被拦下，不会写出坏配置）。可写键：顶层 `game_path`、`area`、`dalamud.*`，以及（仅 Linux/macOS）全部 Wine 字段、`dxvk.*` 与任意 `env.<NAME>`。Windows 上 Wine/DXVK/`env` 键视为未知键，`config list` 也不会输出它们。
+写盘前会做完整反序列化校验（类型/枚举错误会被拦下，不会写出坏配置）。可写键：顶层 `game_path`、`area`（旧版全局回退值，默认大区已改为账号级）、`dalamud.*`，以及（仅 Linux/macOS）全部 Wine 字段、`dxvk.*` 与任意 `env.<NAME>`。Windows 上 Wine/DXVK/`env` 键视为未知键，`config list` 也不会输出它们。
 
 ---
 
@@ -267,7 +266,7 @@ eoz config path                          # 显示配置文件路径
 
 ```bash
 eoz config set game_path /games/ffxiv
-eoz config set area 1
+eoz auth login qr       # 账号会记住该次使用的大区
 eoz game check          # 需要更新则 eoz game update
 ```
 

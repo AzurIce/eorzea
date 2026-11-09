@@ -17,7 +17,8 @@ base64 = "0.22"
 dirs = "5"
 # 扫描大区/补丁列表等轻量请求；与核心库同源（rustls，无系统 OpenSSL）
 reqwest = { version = "0.12", features = ["rustls-tls", "gzip"], default-features = false }
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", features = ["rt", "time"] }
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

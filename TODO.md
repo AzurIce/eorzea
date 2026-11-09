@@ -124,6 +124,9 @@
 - [x] **每次启动指定不同 wine**：`Launcher::with_wine_settings`（持久）+ `Launcher::launch_with_wine`（单次覆盖）
 - [x] **Wine 非 ASCII 游戏路径预检**：Linux/macOS 启动前拒绝包含非 ASCII 字符的完整游戏路径并返回明确错误，避免游戏内报误导性的 5003「帐号认证发生了错误」
 - [ ] **DXVK 变体选择**：当前固定 dxvk-async 1.10.1（CN 镜像）；上游已切换 dxvk-gplasync，未实现
+- [ ] **同步设置的平台能力统一**：GUI 已按平台隐藏不支持的开关（esync/fsync、gamemode 仅 Linux 显示，msync 仅 macOS 显示；配置字段仍跨平台保留），esync/fsync 在模型层合并为互斥的 `SyncMode` 枚举（配置文件仍写 `esync`/`fsync` 两个 bool，旧配置同时为 true 时按 fsync 读入，GUI 用「关 / esync / fsync」三档滑块表示）；剩余不一致：GUI 在 macOS 隐藏 esync（上游 Linux/macOS 都传 WINEESYNC，仍依赖所选 Wine 构建支持），CLI 在 Linux/macOS 均接受 esync/fsync/msync/gamemode，运行时 fsync 未限制 Linux。应统一能力规则（fsync/gamemode 仅 Linux、msync 仅 macOS、esync 依 Wine 构建），导入其他平台配置时保留且提示忽略，显式修改不支持的项时拒绝或明确告警，并覆盖按平台测试。
+- [ ] **现代 Wine 的 NTSYNC 识别**：Wine 10.16 开发版/11.0 稳定版已集成 NTSYNC，Linux 主线 6.14 起提供驱动，但实际可用还依赖 Wine 构建、内核配置/模块、/dev/ntsync 权限等。当前只有 esync/fsync/msync 三个布尔字段，不足以表达“Wine 默认选择”与“强制传统 wineserver”；三个字段全关不能据此推断 NTSYNC 关闭。需区分用户请求、环境能力和实际后端，不依据 Wine 或内核版本号单独承诺可用。
+- [ ] **跨平台配置保真与语义校验**：Windows 的 AppConfig 忽略 Wine 字段，但 GUI/save_app 整体序列化后会丢弃这些外平台字段；CLI 原始 TOML 保存路径则可保留，行为不一致。类型校验不能保证其他平台的 game_path/install_root 等路径可用。需明确保留外平台配置的策略，并在实际使用本平台设置前校验路径与能力；不能把“能解析”当作“当前平台可用”。
 - [ ] **NixOS 适配**（详见 `docs/notes/nixos.md`）：
   - [ ] `Auto`/`Managed` 下 `probe()` 失败回退系统 wine 并给出 NixOS 提示
   - [ ] 托管 wine 跑不起来且 PATH 有 `steam-run` 时自动用 steam-run 包装（需 `unset TZ` 规避 nixpkgs#279893）
@@ -194,7 +197,30 @@
 
 ### P4-2.5 GUI UX 修正
 
+- [ ] **GUI 产品级主路径与恢复设计**：审查与建议见 [`docs/gui-ux-review.md`](docs/gui-ux-review.md)。首次配置需按缺失条件引导；主操作首屏可见；登录失效提供绑定原账号的重新登录入口；错误应有原位恢复动作，而非只写可被覆盖的全局状态字符串。
+- [ ] **GUI 更新任务生命周期与启动互斥**：更新状态/补丁列表仍属主页局部 signal，检查/下载/安装使用页面 scope 的 spawn；切页卸载存在取消任务、丢失进度和中断安装风险。需改应用级任务并定义安全退出/取消边界；更新与启动当前只分别防自身重入，须按游戏目录互斥，禁止安装与启动冲突。
+- [ ] **GUI 登录持久化失败的真实状态**：on_login_success 保存失败仍更新内存账号、缓存 token 并关闭弹窗；主页自动登录轮换 key 后忽略保存错误。需区分本次可用与已持久化，失败保留恢复入口，避免下次启动凭据失效却无解释。
+- [ ] **GUI 设置草稿保护与字段校验**：设置切页后局部草稿会丢失，无离开确认；初始化延迟非法输入静默回退且 dirty 判断可能忽略非法值，缺少毫秒单位。需保护草稿、标注单位、字段报错并阻止非法保存；开关/同步选项补键盘操作与可访问名称。
+- [ ] **GUI 状态准确性**：区域列表请求失败后空列表仍显示加载中；游戏版本 memo 仅依赖路径，更新完成需主动刷新；Wine 摘要 detect 与所选 startup_type 解析不完全等价；Dalamud 摘要需与本次加载覆盖一致。
+- [ ] **GUI 账号组选择**：核心支持账号组与 poll/finalize，但 GUI 使用 wait_for_scan/wait_for_confirm 直接完成默认账号；多账号组应提供选择步骤，单账号不增加操作。
+
+- [x] **空输入框默认值提示**：placeholder 只显示实际非空默认值，没有默认值的游戏目录、自定义 Wine 路径、账号和密码保持空白，说明放在框外。共享输入框在原生端为缺少 placeholder 绘制支持的 Blitz 补充提示层；空值显示，输入后隐藏，清空恢复，提示不写入 value。浏览器保留原生 placeholder。Prefix、Dalamud 安装目录与初始化延迟的 placeholder 直接读取运行时默认路径及 DalamudSettings::default()，不在 UI 硬编码默认值。
+
+- [x] **默认大区改为账号级（2026-11-02）**：`auth.toml` 的每个账号新增可选 `area`；GUI 主页「大区」下拉框直接读写当前账号，切换账号时自动套用；设置页移除全局「默认大区」输入（旧 `config.toml` 的 `area` 仅作回退保留，不再编辑）。解析顺序：`--area` → 账号 `area` → 旧 `config.toml.area` → 大区列表第一个（隐式选择并提示）。新账号继承添加时选中的大区，session key 刷新不会清掉已保存的 area。
+- [x] **大区只暴露名称（2026-11-02）**：`auth.toml` / 旧 `config.toml` 的 `area` 现在保存并展示大区名称（对齐 XIVLauncherCN 的 `AreaName`），数字 `Areaid` 只在内部构造 `-AreaID` 和补丁地址时使用；兼容读取旧数字 ID。`eoz areas` 不再输出 ID 列，`--area` 接受名称。GUI 新建账号、切换账号、修改大区都按名称读写。
+- [x] **`eoz launch` 不再提供登录参数（2026-11-02）**：移除 `--method` / `--username` / `--qr-file`，启动统一使用已保存 session key 自动登录；新账号或 key 过期时先用 `eoz auth login qr|password`。错误提示同步指向 `auth login`。
+- [ ] **CLI 新账号未继承大区**：`eoz auth login` 保存新账号时 `area` 为空（GUI 会继承当前选中大区）；下次 `launch` 会走隐式回退。可在登录时记录本次解析的大区，或在 `auth status` 中展示并允许设置。
+- [x] **账号管理卡片与添加弹窗**：账号以卡片展示，移除冗余的手动自动登录按钮，当前默认按钮禁用并显示「默认」；扫码/推送/密码收进添加弹窗，默认自动获取二维码、可刷新，密码表单提供明确标签。切换方式或关闭弹窗取消本地任务，登录成功后留在账号页；设默认/删除失败不更新内存为成功状态。
+- [x] **添加账号方式标签**：三个等宽按钮显式水平/垂直居中，名称明确为「叨鱼扫码登录」「叨鱼推送登录」「密码登录」。
+
+- [x] **下拉菜单视觉改进**：SVG 箭头固定右侧，当前选项显示勾选；长标签用块级元素换行，不再使用 span 裁剪结构；展开时强调外框，支持 Escape 收起，保留 Blitz 兼容的内联展开方式。
+- [ ] **原生文字区域细线**：用户截图显示淡色横线，清除装饰线及改用 overflow: clip 均无效；生产 GUI 的 span 已全部换为 div，需原生运行确认，根因尚未确定。上游未找到完全一致 issue，相关 Blitz #256/#340/#888 不能视作相同根因；调查与无凭据对照示例见 [`docs/notes/gui-span-rendering.md`](docs/notes/gui-span-rendering.md)。
+
+- [x] **图标侧边栏**：导航收窄至 72px，游戏/账号使用 SVG 图标，设置固定底部；保留按钮名称、悬停提示与当前页语义，移除亮/暗主题切换入口。页面内容和登录流程不变。
+
 - [x] **首次启动默认登录页**：无账号或无 `game_path` 时默认 Tab 为登录页，而不是空主页
+- [x] **启动流程不阻塞且跨页面保持（2026-11-09）**：启动任务改用 root scope 的 `spawn_forever`，`launching` 移入 `AppState`；启动中切到账号/设置页再回来，按钮仍显示「启动中…」，任务不会随主页卸载被取消。
+- [x] **主页运行日志（2026-11-09）**：新增 `logging.rs`（`tracing` Layer + 1000 行环形缓冲），INFO/WARN/ERROR 增量汇入 `AppState.logs`，主页新增「运行日志（最新在上）」区域并按级别着色；默认只开本项目 INFO 级日志，`RUST_LOG` 可覆盖。
 - [x] **密码安全与重复提交**：密码登录成功后清空密码；登录/启动/检查更新增加 busy 防重入
 - [x] **删除账号二次确认**：避免误触立即删除本地账号配置
 - [x] **更新进度可读**：补丁下载进度显示 MiB/GiB 而非裸字节
@@ -229,7 +255,7 @@
 - [ ] **Windows 设备指纹**：见 P0-1（当前 fallback 为 `unknown-<USERNAME>`）
 - [ ] **发布版日志**：`windows_subsystem = "windows"` 后 GUI 无控制台，`tracing` 只写 stderr → release 版没有日志可查；需要文件日志（如滚动写到 `~/.eorzea/logs/`）
 - [ ] **配置目录**：当前 `~/.eorzea`（`C:\Users\<用户>\.eorzea`），与 C# 的 `%APPDATA%\XIVLauncher` 不同，也不读取 C# 旧配置；是否改用 `dirs::config_dir()` 待定
-- [ ] **打包/CI**：仓库没有 Windows 安装包或构建工作流，目前只能本机 `cargo build`（拆分后 `cargo install --path packages/eorzea-cli` 不再连带编译 dioxus/blitz）
+- [ ] **安装包**：`v*` tag 会触发 `.github/workflows/release.yml`，构建 Linux/Windows/macOS 的 `eorzea` + `eoz` 压缩包并发布 GitHub Release（macOS 任务暂设 `continue-on-error`，未真机验证）；手动 Run workflow 更新 Development build pre-release，自动移动 `dev-build` tag 并替换附件，可选平台失败时移除其旧包（不随 push `main` 构建）。仍没有 Windows 安装器（MSI/NSIS）与代码签名，用户需解压后运行 `eorzea.exe`。
 - [x] **配置按平台拆分**：Windows 的 `AppConfig` 不含 Wine 字段（`#[cfg(not(windows))]`），`config.toml` 不写 `startup_type`/`custom_path`/`prefix`/`esync`/`fsync`/`msync`/`gamemode`/`[dxvk]`/`[env]`，`eoz config set` 对 Wine 键报「未知配置键」；读取 Linux/macOS 写出的配置时忽略这些键，`eoz config list` 只输出当前平台字段；首次运行模板也按平台区分（2026-10-30）
 
 ---

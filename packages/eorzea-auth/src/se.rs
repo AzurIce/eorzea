@@ -38,7 +38,9 @@ impl SeAuth {
         {
             builder = builder.cookie_store(true);
         }
-        Ok(Self { client: builder.build()? })
+        Ok(Self {
+            client: builder.build()?,
+        })
     }
 
     /// 完整的国际服 OAuth 登录流程。

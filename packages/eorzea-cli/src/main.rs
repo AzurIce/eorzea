@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use console::style;
 use eorzea_auth::sdo::SdoAuth;
-use eorzea_lib::game_files::{GameFileManager, default_patch_dir, version};
+use eorzea_lib::game_files::{default_patch_dir, version, GameFileManager};
 use eorzea_lib::launcher::{Launcher, LauncherError};
 use eorzea_lib::term_img;
 
@@ -55,7 +55,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// 列出所有大区（用于查询 --area 的 ID）
+    /// 列出所有大区（--area 使用大区名称，如 陆行鸟）
     Areas,
 
     /// 游戏文件管理
@@ -88,7 +88,7 @@ enum Command {
         #[arg(long)]
         game_path: Option<PathBuf>,
 
-        /// 大区 ID（用 `eoz areas` 查看；缺省读取 config.toml 的 area）
+        /// 大区名称（如 陆行鸟，用 `eoz areas` 查看；缺省用账号的默认大区，其次旧 config.toml 的 area）
         #[arg(long)]
         area: Option<String>,
 
@@ -96,22 +96,10 @@ enum Command {
         #[arg(long)]
         account: Option<String>,
 
-        /// 登录方式: password | qr | auto（未指定账号/默认账号时使用）
-        #[arg(long)]
-        method: Option<String>,
-
-        /// 密码登录的账号名
-        #[arg(long)]
-        username: Option<String>,
-
         /// 自定义 Wine 路径（仅 Linux/macOS）
         #[cfg(not(target_os = "windows"))]
         #[arg(long)]
         wine: Option<PathBuf>,
-
-        /// 二维码保存路径（qr 方式，默认 ~/xiv_qr.png）
-        #[arg(long)]
-        qr_file: Option<PathBuf>,
 
         /// 强制启用 Dalamud（覆盖 [dalamud].enabled）
         #[arg(long)]
@@ -138,7 +126,7 @@ enum GameCommand {
         #[arg(long)]
         game_path: Option<PathBuf>,
 
-        /// 大区 ID（用 `eoz areas` 查看；缺省读取 config.toml 的 area）
+        /// 大区名称（如 陆行鸟，用 `eoz areas` 查看；缺省用账号的默认大区，其次旧 config.toml 的 area）
         #[arg(long)]
         area: Option<String>,
 
@@ -157,7 +145,7 @@ enum GameCommand {
         #[arg(long)]
         game_path: Option<PathBuf>,
 
-        /// 大区 ID（用 `eoz areas` 查看；缺省读取 config.toml 的 area）
+        /// 大区名称（如 陆行鸟，用 `eoz areas` 查看；缺省用账号的默认大区，其次旧 config.toml 的 area）
         #[arg(long)]
         area: Option<String>,
 
@@ -237,7 +225,7 @@ enum DalamudCommand {
         #[arg(long)]
         game_path: Option<PathBuf>,
 
-        /// 大区 ID（缺省读取 config.toml 的 area）
+        /// 大区名称（如 陆行鸟；缺省用账号的默认大区，其次旧 config.toml 的 area）
         #[arg(long)]
         area: Option<String>,
 
@@ -309,16 +297,35 @@ fn game_path_or_config(game_path: Option<PathBuf>) -> PathBuf {
     }
 }
 
-/// `--area` 缺省时从 config.toml 顶层 `area` 读取。
-fn area_or_config(area: Option<String>) -> String {
+/// 解析启动/更新使用的大区。
+///
+/// 优先级：`--area` → 指定账号（缺省默认账号）的 `area` → 旧 `config.toml` 的 `area`
+/// → 服务端大区列表第一个（隐式选择，不再要求显式配置）。
+async fn resolve_area(area: Option<String>, account: Option<&str>) -> String {
     if let Some(area) = area {
         return area;
     }
-    match eorzea_lib::config::load_app_default().area {
-        Some(area) => area,
-        None => die(
-            "未指定 --area，且 config.toml 中没有 area（用 `eoz config set area <大区ID>`，或在命令中传 --area）",
-        ),
+    let cfg = eorzea_lib::auth::load(&eorzea_lib::auth::config_path());
+    if let Some(area) = cfg.area_for(account) {
+        return area;
+    }
+    if let Some(area) = eorzea_lib::config::load_app_default().area {
+        return area;
+    }
+    let mut areas = match SdoAuth::fetch_server_list().await {
+        Ok(list) => list,
+        Err(e) => die(format!("未指定 --area，且获取大区列表失败: {e}")),
+    };
+    areas.sort_by_key(|a| a.area_order);
+    match areas.first() {
+        Some(area) => {
+            ui::hint(format!(
+                "未指定 --area，隐式使用第一个大区 {}",
+                area.area_name
+            ));
+            area.area_name.clone()
+        }
+        None => die("服务端未返回任何大区，请用 --area 指定"),
     }
 }
 
@@ -347,7 +354,7 @@ async fn main() {
                 no_dalamud,
             } => {
                 let game_path = game_path_or_config(game_path);
-                let area = area_or_config(area);
+                let area = resolve_area(area, None).await;
                 let override_enabled = if dalamud {
                     Some(true)
                 } else if no_dalamud {
@@ -373,11 +380,8 @@ async fn main() {
             game_path,
             area,
             account,
-            method,
-            username,
             #[cfg(not(target_os = "windows"))]
             wine,
-            qr_file,
             dalamud,
             no_dalamud,
         } => {
@@ -389,7 +393,7 @@ async fn main() {
                 None
             };
             let game_path = game_path_or_config(game_path);
-            let area = area_or_config(area);
+            let area = resolve_area(area, account.as_deref()).await;
             #[cfg(not(target_os = "windows"))]
             let wine = wine.as_deref();
             #[cfg(target_os = "windows")]
@@ -398,10 +402,7 @@ async fn main() {
                 &game_path,
                 &area,
                 account.as_deref(),
-                method.as_deref(),
-                username.as_deref(),
                 wine.as_deref(),
-                qr_file,
                 override_enabled,
             )
             .await;
@@ -418,7 +419,7 @@ async fn main() {
                 repair,
             } => {
                 let game_path = game_path_or_config(game_path);
-                let area = area_or_config(area);
+                let area = resolve_area(area, None).await;
                 cmd_check(&game_path, &area, max_expansion, repair).await
             }
             GameCommand::Update {
@@ -430,7 +431,7 @@ async fn main() {
                 concurrency,
             } => {
                 let game_path = game_path_or_config(game_path);
-                let area = area_or_config(area);
+                let area = resolve_area(area, None).await;
                 cmd_update(
                     &game_path,
                     &area,
@@ -452,20 +453,17 @@ async fn main() {
 async fn cmd_areas() {
     let sp = ui::Spinner::new("获取大区列表");
     match SdoAuth::fetch_server_list().await {
-        Ok(areas) => {
+        Ok(mut areas) => {
+            areas.sort_by_key(|a| a.area_order);
             sp.finish(format!("大区列表（{} 个）", areas.len()));
-            ui::row(
-                &["ID".into(), "大区".into(), "lobby / patch".into()],
-                &[4, 12, 0],
-            );
+            ui::row(&["大区".into(), "lobby / patch".into()], &[12, 0]);
             for a in &areas {
                 ui::row(
                     &[
-                        a.area_id.clone(),
                         a.area_name.clone(),
                         ui::dim(format!("{} · {}", a.area_lobby, a.area_patch)).to_string(),
                     ],
-                    &[4, 12, 0],
+                    &[12, 0],
                 );
             }
         }
@@ -498,14 +496,29 @@ fn cmd_status(game_path: &std::path::Path) {
     }
 }
 
-async fn find_area(area_id: &str) -> Result<eorzea_auth::SdoArea, String> {
-    let areas = SdoAuth::fetch_server_list()
+/// 按大区名称查找（同时兼容旧配置里的数字 ID，但对外只展示名称）。
+async fn find_area(name_or_id: &str) -> Result<eorzea_auth::SdoArea, String> {
+    let mut areas = SdoAuth::fetch_server_list()
         .await
         .map_err(|e| format!("获取大区列表失败: {e}"))?;
-    areas
-        .into_iter()
-        .find(|a| a.area_id == area_id)
-        .ok_or_else(|| format!("找不到大区 ID '{area_id}'，用 `eoz areas` 查看"))
+    let found = areas
+        .iter()
+        .find(|a| a.area_name == name_or_id || a.area_id == name_or_id)
+        .cloned();
+    match found {
+        Some(area) => Ok(area),
+        None => {
+            areas.sort_by_key(|a| a.area_order);
+            let names = areas
+                .iter()
+                .map(|a| a.area_name.as_str())
+                .collect::<Vec<_>>()
+                .join("、");
+            Err(format!(
+                "找不到大区 '{name_or_id}'，可用大区：{names}（`eoz areas` 查看）"
+            ))
+        }
+    }
 }
 
 async fn cmd_check(game_path: &std::path::Path, area_id: &str, max_expansion: i32, repair: bool) {
@@ -666,7 +679,7 @@ async fn cmd_update(
 
 /// `game verify`：校验游戏文件完整性 + 版本状态。
 async fn cmd_verify(game_path: &std::path::Path) {
-    use eorzea_lib::game_files::verify::{IssueSeverity, verify_game};
+    use eorzea_lib::game_files::verify::{verify_game, IssueSeverity};
 
     banner(format!("校验游戏文件  {}", game_path.display()));
     let sp = ui::Spinner::new("扫描 SQPack 索引与文件大小");
@@ -836,6 +849,7 @@ async fn cmd_auth_login(
             snda_id: token.snda_id.clone(),
             username,
             auto_login_session_key: token.auto_login_session_key.clone(),
+            area: None,
         },
         make_default,
     );
@@ -966,16 +980,13 @@ fn cmd_auth_logout(account: Option<&str>) {
 #[allow(clippy::too_many_arguments)]
 async fn cmd_launch(
     game_path: &std::path::Path,
-    area_id: &str,
+    area: &str,
     account: Option<&str>,
-    method: Option<&str>,
-    username: Option<&str>,
     wine: Option<&std::path::Path>,
-    qr_file: Option<PathBuf>,
     dalamud_override: Option<bool>,
 ) {
     // 先定位游戏 + 解析大区 + 准备 Dalamud，再登录：
-    // - 大区 ID 写错时不必先消耗掉一次性 session key
+    // - 大区名称写错时不必先消耗掉一次性 session key
     // - 启用 Dalamud 时准备失败要立刻报错退出，同样发生在换取 SSO ticket 之前
     let exe = game_path.join("game/ffxiv_dx11.exe");
     if !exe.exists() {
@@ -990,7 +1001,7 @@ async fn cmd_launch(
     }
 
     let sp = ui::Spinner::new("解析大区 / 获取服务器列表");
-    let area = match find_area(area_id).await {
+    let area = match find_area(area).await {
         Ok(a) => a,
         Err(e) => {
             sp.clear();
@@ -1052,81 +1063,62 @@ async fn cmd_launch(
         }
     };
 
-    // 确定登录方式：
-    // 1. --account 指定（或配置默认账号）且该账号有 session key → auto 登录
-    // 2. --method 手动登录
+    // 启动只做自动登录：登录入口统一到 `eoz auth login`，避免两套参数。
+    // 账号：--account 指定 → 默认账号
     let cfg_path = eorzea_lib::auth::config_path();
     let cfg = eorzea_lib::auth::load(&cfg_path);
 
-    let token = if let Some(m) = method {
-        let method_enum = match m {
-            "password" => AuthMethod::Password,
-            "qr" => AuthMethod::Qr,
-            "auto" => AuthMethod::Auto,
-            other => die(format!(
-                "未知登录方式 '{other}'，可选: password | qr | auto"
-            )),
-        };
-        match do_login(&method_enum, username, None, qr_file).await {
-            Ok(t) => t,
-            Err(e) => die(format!("登录失败: {e}")),
-        }
-    } else {
-        // 自动登录：--account > 默认账号
-        let target = account.or(cfg.default_account.as_deref());
-        match target {
-            Some(id) => {
-                let acc = cfg.find_by_identifier(id);
-                match acc {
-                    Some(a) if a.can_auto_login() => {
-                        let name = a.display_name().to_string();
-                        let key = a.auto_login_session_key.clone().unwrap();
-                        let sp = ui::Spinner::new(format!("自动登录 {name}"));
-                        match launcher.login_auto(&key).await {
-                            Ok(t) => {
-                                sp.clear();
-                                // autoLogin.json 返回新的 session key（旧 key 立即作废），
-                                // 立即更新配置，否则下次自动登录会过期
-                                if let Some(new_key) = &t.auto_login_session_key {
-                                    let cfg_path = eorzea_lib::auth::config_path();
-                                    let mut cfg = eorzea_lib::auth::load(&cfg_path);
-                                    if let Some(acc) =
-                                        cfg.accounts.iter_mut().find(|a| a.snda_id == t.snda_id)
-                                    {
-                                        acc.auto_login_session_key = Some(new_key.clone());
-                                        if let Err(e) = eorzea_lib::auth::save(&cfg_path, &cfg) {
-                                            ui::fail(format!("更新 session key 失败: {e}"));
-                                        }
+    let target = account.or(cfg.default_account.as_deref());
+    let token = match target {
+        Some(id) => {
+            let acc = cfg.find_by_identifier(id);
+            match acc {
+                Some(a) if a.can_auto_login() => {
+                    let name = a.display_name().to_string();
+                    let key = a.auto_login_session_key.clone().unwrap();
+                    let sp = ui::Spinner::new(format!("自动登录 {name}"));
+                    match launcher.login_auto(&key).await {
+                        Ok(t) => {
+                            sp.clear();
+                            // autoLogin.json 返回新的 session key（旧 key 立即作废），
+                            // 立即更新配置，否则下次自动登录会过期
+                            if let Some(new_key) = &t.auto_login_session_key {
+                                let cfg_path = eorzea_lib::auth::config_path();
+                                let mut cfg = eorzea_lib::auth::load(&cfg_path);
+                                if let Some(acc) =
+                                    cfg.accounts.iter_mut().find(|a| a.snda_id == t.snda_id)
+                                {
+                                    acc.auto_login_session_key = Some(new_key.clone());
+                                    if let Err(e) = eorzea_lib::auth::save(&cfg_path, &cfg) {
+                                        ui::fail(format!("更新 session key 失败: {e}"));
                                     }
                                 }
-                                // 显示剩余有效期（autoLoginMaxAge，秒）
-                                if let Some(age) = t.auto_login_max_age {
-                                    hint(format!(
-                                        "session key 已刷新，剩余有效期 {:.1} 天",
-                                        age as f64 / 86400.0
-                                    ));
-                                }
-                                kv("账号", name);
-                                t
                             }
-                            Err(e) => {
-                                sp.clear();
-                                ui::fail(format!("自动登录失败: {e}"));
-                                die("请先检查上方错误；若 session key 已过期，用 `eoz auth login qr` 或 `eoz launch --method qr` 重新登录");
+                            // 显示剩余有效期（autoLoginMaxAge，秒）
+                            if let Some(age) = t.auto_login_max_age {
+                                hint(format!(
+                                    "session key 已刷新，剩余有效期 {:.1} 天",
+                                    age as f64 / 86400.0
+                                ));
                             }
+                            kv("账号", name);
+                            t
+                        }
+                        Err(e) => {
+                            sp.clear();
+                            ui::fail(format!("自动登录失败: {e}"));
+                            die("请先检查上方错误；若 session key 已过期，用 `eoz auth login qr` 重新登录");
                         }
                     }
-                    Some(_) => die(format!(
-                        "账号 '{}' 没有保存 session key，无法自动登录（用 `eoz auth login qr`，或 `eoz launch --method qr`）",
-                        a_display(&cfg, id)
-                    )),
-                    None => die(format!("找不到账号 '{id}'，用 `eoz auth status` 查看")),
                 }
+                Some(_) => die(format!(
+                    "账号 '{}' 没有保存 session key，无法自动登录（用 `eoz auth login qr` 登录）",
+                    a_display(&cfg, id)
+                )),
+                None => die(format!("找不到账号 '{id}'，用 `eoz auth status` 查看")),
             }
-            None => die(
-                "未指定账号且没有默认账号：用 `eoz auth login qr` 登录并设置默认，或 `eoz launch --method qr`",
-            ),
         }
+        None => die("未指定账号且没有默认账号：用 `eoz auth login qr` 登录后再启动"),
     };
 
     match &dalamud_cfg {
@@ -1187,7 +1179,7 @@ fn a_display(cfg: &eorzea_lib::auth::AuthConfig, id: &str) -> String {
 /// 检查游戏版本状态，返回可读的一行摘要（不带 emoji，样式由调用方决定）。
 async fn check_update_status(game_path: &std::path::Path) -> Result<String, String> {
     let mgr = GameFileManager::new();
-    let area_id = area_or_config(None);
+    let area_id = resolve_area(None, None).await;
     let area = find_area(&area_id).await?;
 
     match mgr.check_update(&area, game_path, false, 5).await {
@@ -1211,7 +1203,7 @@ async fn check_update_status(game_path: &std::path::Path) -> Result<String, Stri
 
 /// `dalamud status`：release 版本、本机安装、游戏版本兼容性。
 async fn cmd_dalamud_status(game_path: &std::path::Path) {
-    use eorzea_lib::dalamud::{InstallState, updater};
+    use eorzea_lib::dalamud::{updater, InstallState};
 
     let settings = eorzea_lib::config::load_dalamud_settings();
     let install_root = settings
@@ -1402,20 +1394,10 @@ async fn cmd_dalamud_install(game_path: &std::path::Path) {
 /// `dalamud launch`：通过 Injector 启动游戏（版本门控：启用即强制，未就绪直接报错）。
 async fn cmd_dalamud_launch(
     game_path: &std::path::Path,
-    area_id: &str,
+    area: &str,
     dalamud_override: Option<bool>,
 ) {
-    cmd_launch(
-        game_path,
-        area_id,
-        None,
-        None,
-        None,
-        None,
-        None,
-        dalamud_override.or(Some(true)),
-    )
-    .await;
+    cmd_launch(game_path, area, None, None, dalamud_override.or(Some(true))).await;
 }
 
 // ── eoz config：类似 git config 的 config.toml 读写 ─────────────────────

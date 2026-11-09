@@ -1,0 +1,245 @@
+name: Release
+
+# 稳定版：推送 v* tag 构建三平台产物并发布 GitHub Release。
+# Dev 版：手动 Run workflow（默认发布），构建后覆盖固定的 `dev-build` pre-release；
+#         不随 push main 自动构建。手动关闭 publish_dev 时只上传 Actions artifact。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_dev:
+        description: "发布/更新 Development build（固定 tag: dev-build，替换旧资产）"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+# 手动构建共用一组，避免不同分支同时修改滚动 Release。
+# 不取消进行中的任务，防止附件上传到一半被中断。
+concurrency:
+  group: release-${{ github.event_name == 'push' && github.ref_name || 'development-build' }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.plan.outputs.channel }}
+      publish: ${{ steps.plan.outputs.publish }}
+      version: ${{ steps.plan.outputs.version }}
+      short_sha: ${{ steps.plan.outputs.short_sha }}
+      date: ${{ steps.plan.outputs.date }}
+    steps:
+      - id: plan
+        shell: bash
+        env:
+          DEV_RELEASE: ${{ inputs.publish_dev }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          date="$(date -u +'%Y-%m-%d %H:%M UTC')"
+          if [ "$EVENT_NAME" = "push" ] && [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            channel=stable
+            publish=true
+            version="$GITHUB_REF_NAME"
+          elif [ "$DEV_RELEASE" = "true" ]; then
+            channel=dev
+            publish=true
+            # 固定版本号 => 资产名固定（eorzea-dev-<os>），下次构建直接替换
+            version=dev
+          else
+            channel=none
+            publish=false
+            version="dev-$short_sha"
+          fi
+          {
+            echo "channel=$channel"
+            echo "publish=$publish"
+            echo "version=$version"
+            echo "short_sha=$short_sha"
+            echo "date=$date"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build (${{ matrix.name }})
+    needs: plan
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 用 22.04 构建以保持较低的 glibc 下限（22.04 = 2.35）。
+          - os: ubuntu-22.04
+            name: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            experimental: false
+          - os: windows-latest
+            name: windows-x86_64
+            target: x86_64-pc-windows-msvc
+            experimental: false
+          # macOS 尚未在真机上验证，失败不阻塞 Linux/Windows 发布。
+          - os: macos-14
+            name: macos-aarch64
+            target: aarch64-apple-darwin
+            experimental: true
+    continue-on-error: ${{ matrix.experimental }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # 构建期需要：pkg-config；openssl（blitz-net 的 reqwest 走 native-tls）；
+      # fontconfig（fontique 的 Linux 后端，build.rs 用 pkg-config 探测）。
+      # wayland/xkbcommon 走 dlopen，运行时才需要，构建阶段不用装。
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev libfontconfig1-dev
+
+      - name: Build release binaries
+        run: >
+          cargo build --release --locked
+          --target ${{ matrix.target }}
+          -p eorzea-app -p eorzea-cli
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          name="eorzea-${{ needs.plan.outputs.version }}-${{ matrix.name }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/eorzea" "dist/$name/"
+          cp "target/${{ matrix.target }}/release/eoz" "dist/$name/"
+          cp README.md "dist/$name/"
+          strip "dist/$name/eorzea" "dist/$name/eoz" || true
+          tar -C dist -czf "$name.tar.gz" "$name"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "eorzea-${{ needs.plan.outputs.version }}-${{ matrix.name }}"
+          $out = "dist\$name"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\eorzea.exe" $out
+          Copy-Item "target\${{ matrix.target }}\release\eoz.exe" $out
+          Copy-Item "README.md" $out
+          Compress-Archive -Path $out -DestinationPath "$name.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            *.tar.gz
+            *.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: publish release
+    needs: [plan, build]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # 仅在构建成功后移动滚动 tag；不操作同名分支。
+      - name: Update development build tag
+        if: needs.plan.outputs.channel == 'dev'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const repo = context.repo;
+            const ref = 'tags/dev-build';
+            try {
+              await github.rest.git.getRef({ ...repo, ref });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await github.rest.git.createRef({
+                ...repo, ref: `refs/${ref}`, sha: context.sha,
+              });
+              return;
+            }
+            await github.rest.git.updateRef({
+              ...repo, ref, sha: context.sha, force: true,
+            });
+
+      - name: Get UTC release date
+        if: needs.plan.outputs.channel == 'dev'
+        id: release_date
+        shell: bash
+        run: echo "date=$(date -u +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+
+      # 固定附件名，下载链接不会随构建改变。
+      - name: Publish dev pre-release
+        if: needs.plan.outputs.channel == 'dev'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev-build
+          target_commitish: ${{ github.sha }}
+          name: Dev Build ${{ steps.release_date.outputs.date }}
+          body: |
+            `${{ github.ref_name }}` 的 dev 构建，**非稳定版本**。
+
+            - 提交：${{ github.sha }}
+            - 时间：${{ needs.plan.outputs.date }}
+            - 构建：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            资产会在下一次 dev build 时被替换；需要稳定版请使用 `v*` tag 的 Release。
+          prerelease: true
+          make_latest: false
+          files: dist/*
+          fail_on_unmatched_files: true
+
+      # macOS 为可选任务：本次失败时移除其旧包，避免混入上次构建。
+      - name: Remove stale development assets
+        if: needs.plan.outputs.channel == 'dev'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const names = new Set(fs.readdirSync('dist'));
+            const repo = context.repo;
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              ...repo, tag: 'dev-build',
+            });
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              ...repo, release_id: release.id, per_page: 100,
+            });
+            for (const asset of assets) {
+              if (!names.has(asset.name)) {
+                await github.rest.repos.deleteReleaseAsset({ ...repo, asset_id: asset.id });
+              }
+            }
+
+      - name: Publish stable release
+        if: needs.plan.outputs.channel == 'stable'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          # v0.2.0-beta.1 这类 tag 自动标为 pre-release
+          prerelease: ${{ contains(github.ref_name, '-') }}

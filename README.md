@@ -21,10 +21,21 @@ cargo run -p eorzea-app
 
 # 典型流程：设置游戏目录 → 扫码登录 → 启动
 eoz config set game_path /games/ffxiv
-eoz config set area 1
 eoz auth login qr
 eoz launch
 ```
+
+## 发布构建
+
+推送 `v*` tag 会触发 `.github/workflows/release.yml`，构建三平台产物并创建 GitHub Release：
+Linux x86_64（Ubuntu 22.04 构建）、Windows x86_64、macOS arm64（暂未真机验证），
+每个压缩包内包含 GUI `eorzea` 与 CLI `eoz`。
+
+Dev 构建不随 push `main` 自动触发：在 Actions → Release → Run workflow 手动运行，
+默认发布/更新名为 **Dev Build YYYY-MM-DD** 的 pre-release（UTC 发布日期，固定 tag：`dev-build`，非稳定版）；
+CI 自动将该 tag 移到本次成功构建的提交并替换附件，不影响 `dev` 分支。
+固定下载入口为 [Development build](https://github.com/AzurIce/eorzea/releases/tag/dev-build)。
+关闭 `publish_dev` 时只构建并上传 Actions artifact。这样平时的提交不会为 blitz/wgpu 编译买单。
 
 ## 目录结构
 

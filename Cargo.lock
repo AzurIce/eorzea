@@ -2339,6 +2339,7 @@ dependencies = [
  "reqwest",
  "rfd",
  "tokio",
+ "tracing",
  "tracing-subscriber",
 ]
 

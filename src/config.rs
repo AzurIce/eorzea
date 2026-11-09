@@ -32,6 +32,78 @@ pub enum WineStartupType {
     System,
 }
 
+/// Wine 的线程同步后端。
+///
+/// esync 与 fsync 互斥（同时开启时 Wine 实际优先 fsync），用枚举在类型层面
+/// 排除「两个都开」的无效状态。`msync` 是 macOS 独立开关，不在这里。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncMode {
+    /// 不启用，使用 Wine 的服务器同步。
+    #[default]
+    None,
+    /// eventfd 同步（`WINEESYNC=1`）。
+    Esync,
+    /// futex2 同步（`WINEFSYNC=1`）。
+    Fsync,
+}
+
+/// [`SyncMode`] 的配置包装。
+///
+/// 对外仍序列化成旧的 `esync` / `fsync` 两个 bool 键（保持 `config.toml` 与
+/// `eoz config` 的兼容性），内部只保存一个互斥的模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SyncSettings(SyncMode);
+
+impl SyncSettings {
+    pub fn mode(self) -> SyncMode {
+        self.0
+    }
+}
+
+impl From<SyncMode> for SyncSettings {
+    fn from(mode: SyncMode) -> Self {
+        Self(mode)
+    }
+}
+
+impl Serialize for SyncSettings {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("SyncSettings", 2)?;
+        s.serialize_field("esync", &(self.0 == SyncMode::Esync))?;
+        s.serialize_field("fsync", &(self.0 == SyncMode::Fsync))?;
+        s.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for SyncSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // 旧配置可能两个都为 true；Wine 实际优先 fsync，这里也按 fsync 读入。
+        #[derive(Deserialize, Default)]
+        #[serde(default)]
+        struct Flags {
+            esync: bool,
+            fsync: bool,
+        }
+
+        let flags = Flags::deserialize(deserializer)?;
+        Ok(Self(if flags.fsync {
+            SyncMode::Fsync
+        } else if flags.esync {
+            SyncMode::Esync
+        } else {
+            SyncMode::None
+        }))
+    }
+}
+
 /// DXVK 相关设置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -56,8 +128,10 @@ impl Default for DxvkSettings {
 
 /// Wine 运行配置。
 ///
-/// 字段对齐 C# `WineSettings.cs`（StartupType / CustomBinPath / Prefix /
+/// 大体对齐 C# `WineSettings.cs`（StartupType / CustomBinPath / Prefix /
 /// EsyncOn / FsyncOn / DebugVars / Env / LogFile），并补充 `System` 类型与 DXVK 设置。
+/// 其中 esync / fsync 在 C# 是两个独立 bool，这里合并为互斥的 [`SyncMode`]
+/// 枚举；序列化时仍写回 `esync` / `fsync` 两个键，保持配置与 CLI 兼容。
 /// 所有字段都有默认值，`serde(default)` 保证旧配置文件缺字段也能解析。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -68,10 +142,9 @@ pub struct WineSettings {
     pub custom_path: Option<PathBuf>,
     /// Wine prefix 目录；`None` 使用默认 `~/.eorzea/prefix`
     pub prefix: Option<PathBuf>,
-    /// 启用 esync（`WINEESYNC=1`）
-    pub esync: bool,
-    /// 启用 fsync（`WINEFSYNC=1`）
-    pub fsync: bool,
+    /// 同步后端（esync / fsync 互斥）；TOML 中仍序列化为 `esync`/`fsync` 两个 bool
+    #[serde(flatten)]
+    pub sync: SyncSettings,
     /// 启用 msync（`WINEMSYNC=1`，仅 macOS 生效）
     pub msync: bool,
     /// `WINEDEBUG` 值；`None` 不设置
@@ -90,8 +163,7 @@ impl Default for WineSettings {
             startup_type: WineStartupType::Auto,
             custom_path: None,
             prefix: None,
-            esync: false,
-            fsync: false,
+            sync: SyncSettings::default(),
             msync: false,
             debug_vars: None,
             env: BTreeMap::new(),
@@ -114,7 +186,7 @@ impl Default for WineSettings {
 pub struct AppConfig {
     /// 游戏根目录（含 `boot/`、`game/`、`sdo/`）。
     pub game_path: Option<PathBuf>,
-    /// 默认大区 ID（如 `1`），CLI 未传 `--area` 时使用。
+    /// 旧版全局默认大区（如 `陆行鸟`，也兼容旧数字 ID），CLI 未传 `--area` 时使用。
     pub area: Option<String>,
     #[cfg(not(target_os = "windows"))]
     #[serde(default, flatten)]
@@ -135,8 +207,9 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# eorzea 配置（GUI 与 eoz CLI 共�
 # 或执行 `eoz config set game_path <路径>`。
 # game_path = "D:/Games/FFXIV"
 
-# 默认大区 ID（`eoz areas` 可查），例如 "1"。
-# area = "1"
+# 旧版全局默认大区（仅作为回退）。默认大区现在按账号保存在 auth.toml；
+# 仅当账号未设置 area 时使用此值。
+# area = "陆行鸟"
 
 # 其余字段（Wine、DXVK、Dalamud、环境变量）及默认值见 docs/config.md。
 # Wine 相关设置包含 startup_type/custom_path/prefix/esync/fsync/msync/gamemode、
@@ -154,8 +227,9 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# eorzea 配置（GUI 与 eoz CLI 共�
 # 或执行 `eoz config set game_path <路径>`。
 # game_path = "D:/Games/FFXIV"
 
-# 默认大区 ID（`eoz areas` 可查），例如 "1"。
-# area = "1"
+# 旧版全局默认大区（仅作为回退）。默认大区现在按账号保存在 auth.toml；
+# 仅当账号未设置 area 时使用此值。
+# area = "陆行鸟"
 
 # 其余字段（[dalamud] 等）及默认值见 docs/config.md。
 # 在 GUI 或 `eoz config set` 保存后本文件会被重写，以上注释不会保留。
@@ -323,7 +397,8 @@ mod tests {
         assert_eq!(s.startup_type, WineStartupType::Auto);
         assert!(s.custom_path.is_none());
         assert!(s.prefix.is_none());
-        assert!(!s.esync && !s.fsync && !s.msync);
+        assert_eq!(s.sync.mode(), SyncMode::None);
+        assert!(!s.msync);
         assert!(s.dxvk.enabled);
         assert!(!s.gamemode);
     }
@@ -337,8 +412,7 @@ mod tests {
             startup_type: WineStartupType::Custom,
             custom_path: Some(PathBuf::from("/opt/wine/bin")),
             prefix: Some(PathBuf::from("/tmp/myprefix")),
-            esync: true,
-            fsync: false,
+            sync: SyncMode::Esync.into(),
             msync: false,
             debug_vars: Some("+seh".to_string()),
             env,
@@ -361,9 +435,26 @@ mod tests {
         let toml_str = "startup_type = \"custom\"\ncustom_path = \"/opt/wine\"\n";
         let s: WineSettings = toml::from_str(toml_str).unwrap();
         assert_eq!(s.startup_type, WineStartupType::Custom);
-        assert!(!s.esync);
+        assert_eq!(s.sync.mode(), SyncMode::None);
         assert!(s.dxvk.enabled);
         assert_eq!(s.prefix, None);
+    }
+
+    #[test]
+    fn test_sync_mode_serializes_as_legacy_bools() {
+        let esync: WineSettings = toml::from_str("esync = true").unwrap();
+        assert_eq!(esync.sync.mode(), SyncMode::Esync);
+        let fsync: WineSettings = toml::from_str("fsync = true").unwrap();
+        assert_eq!(fsync.sync.mode(), SyncMode::Fsync);
+        // 旧配置两个都开：Wine 实际优先 fsync
+        let both: WineSettings = toml::from_str("esync = true\nfsync = true").unwrap();
+        assert_eq!(both.sync.mode(), SyncMode::Fsync);
+
+        let mut s = WineSettings::default();
+        s.sync = SyncMode::Fsync.into();
+        let text = toml::to_string(&s).unwrap();
+        assert!(text.contains("esync = false"));
+        assert!(text.contains("fsync = true"));
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -375,7 +466,7 @@ mod tests {
 
         let s = WineSettings {
             startup_type: WineStartupType::System,
-            esync: true,
+            sync: SyncMode::Esync.into(),
             ..Default::default()
         };
         save_settings_to(&path, &s).unwrap();

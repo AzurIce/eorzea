@@ -30,6 +30,9 @@ pub struct Account {
     /// 自动登录 session key（`SdoLoginData.auto_login_session_key`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_login_session_key: Option<String>,
+    /// 该账号的默认大区 ID；未设置时回退 config.toml 的 `area` 或第一个大区。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<String>,
 }
 
 impl Account {
@@ -75,6 +78,17 @@ impl AuthConfig {
             .and_then(|id| self.find_by_identifier(id))
     }
 
+    /// 取账号的默认大区：`identifier` 为 `None` 时使用默认账号。
+    ///
+    /// 指定了标识但找不到对应账号时不回退默认账号，避免选错账号后静默套用别人的大区。
+    pub fn area_for(&self, identifier: Option<&str>) -> Option<String> {
+        let account = match identifier {
+            Some(id) => self.find_by_identifier(id),
+            None => self.default_account(),
+        };
+        account.and_then(|a| a.area.clone())
+    }
+
     /// 更新（或新增）账号记录，并可选设为默认。
     pub fn upsert(&mut self, account: Account, make_default: bool) {
         match self
@@ -88,6 +102,10 @@ impl AuthConfig {
                 }
                 if account.auto_login_session_key.is_some() {
                     existing.auto_login_session_key = account.auto_login_session_key.clone();
+                }
+                // 更新凭据时未提供 area，不能清掉已保存的默认大区
+                if account.area.is_some() {
+                    existing.area = account.area.clone();
                 }
                 if make_default {
                     // 默认标识优先 username（可读），无 username 回退 snda_id
@@ -209,6 +227,7 @@ mod tests {
                 snda_id: "1".into(),
                 username: Some("user1".into()),
                 auto_login_session_key: Some("key1".into()),
+                area: None,
             },
             true,
         );
@@ -221,6 +240,60 @@ mod tests {
     }
 
     #[test]
+    fn test_account_area_is_per_account() {
+        let mut cfg = AuthConfig::default();
+        cfg.upsert(
+            Account {
+                snda_id: "1".into(),
+                username: Some("user1".into()),
+                auto_login_session_key: None,
+                area: Some("6".into()),
+            },
+            true,
+        );
+        cfg.upsert(
+            Account {
+                snda_id: "2".into(),
+                username: Some("user2".into()),
+                auto_login_session_key: None,
+                area: Some("7".into()),
+            },
+            false,
+        );
+        assert_eq!(cfg.area_for(Some("1")).as_deref(), Some("6"));
+        // 未指定账号时取默认账号
+        assert_eq!(cfg.area_for(None).as_deref(), Some("6"));
+        // 找不到的标识不回退默认账号
+        assert_eq!(cfg.area_for(Some("missing")), None);
+    }
+
+    #[test]
+    fn test_upsert_keeps_area_when_refreshing_credentials() {
+        let mut cfg = AuthConfig::default();
+        cfg.upsert(
+            Account {
+                snda_id: "1".into(),
+                username: None,
+                auto_login_session_key: Some("old".into()),
+                area: Some("6".into()),
+            },
+            true,
+        );
+        cfg.upsert(
+            Account {
+                snda_id: "1".into(),
+                username: None,
+                auto_login_session_key: Some("new".into()),
+                area: None,
+            },
+            false,
+        );
+        let account = cfg.find("1").unwrap();
+        assert_eq!(account.auto_login_session_key.as_deref(), Some("new"));
+        assert_eq!(account.area.as_deref(), Some("6"));
+    }
+
+    #[test]
     fn test_upsert_without_username_defaults_to_snda_id() {
         let mut cfg = AuthConfig::default();
         cfg.upsert(
@@ -228,6 +301,7 @@ mod tests {
                 snda_id: "1".into(),
                 username: None,
                 auto_login_session_key: None,
+                area: None,
             },
             true,
         );
@@ -243,6 +317,7 @@ mod tests {
                 snda_id: "1".into(),
                 username: Some("user1".into()),
                 auto_login_session_key: Some("k1".into()),
+                area: None,
             },
             true,
         );
@@ -259,6 +334,7 @@ mod tests {
                 snda_id: "1".into(),
                 username: Some("a".into()),
                 auto_login_session_key: Some("k1".into()),
+                area: None,
             },
             true,
         );
@@ -267,6 +343,7 @@ mod tests {
                 snda_id: "1".into(),
                 username: None,
                 auto_login_session_key: Some("k2".into()),
+                area: None,
             },
             false,
         );
@@ -288,6 +365,7 @@ mod tests {
                 snda_id: "1".into(),
                 username: None,
                 auto_login_session_key: None,
+                area: None,
             },
             true,
         );
@@ -304,6 +382,7 @@ mod tests {
             snda_id: "1".into(),
             username: Some("user".into()),
             auto_login_session_key: Some("key".into()),
+            area: None,
         });
         let toml_str = toml::to_string_pretty(&cfg).unwrap();
         let back: AuthConfig = toml::from_str(&toml_str).unwrap();

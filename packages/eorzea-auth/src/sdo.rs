@@ -378,7 +378,10 @@ impl SdoAuth {
         );
 
         let result: SdoLoginResult = self.get_json_raw(&full_url).await?;
-        debug!(return_code = result.return_code, "pushMessageLogin response");
+        debug!(
+            return_code = result.return_code,
+            "pushMessageLogin response"
+        );
         match result.return_code {
             0 => {
                 if result.data.next_action == Some(0) {
@@ -548,7 +551,11 @@ impl SdoAuth {
             .into_iter()
             .zip(names)
             .map(|(snda_id, name)| SdoAccount {
-                account_name: if name.is_empty() { snda_id.clone() } else { name },
+                account_name: if name.is_empty() {
+                    snda_id.clone()
+                } else {
+                    name
+                },
                 snda_id,
             })
             .collect())
@@ -582,21 +589,23 @@ impl SdoAuth {
         debug!(url = %url, "accountGroupLogin request");
 
         let result: SdoLoginResult = self.get_json_raw(&url).await?;
-        debug!(return_code = result.return_code, "accountGroupLogin response");
+        debug!(
+            return_code = result.return_code,
+            "accountGroupLogin response"
+        );
         self.check_sdo_error(&result, false)?;
 
         let new_tgt = result.data.tgt.ok_or_else(|| {
             AuthError::InvalidResponse("accountGroupLogin: no tgt in response".into())
         })?;
         let session_key = result.data.auto_login_session_key.ok_or_else(|| {
-            AuthError::InvalidResponse("accountGroupLogin: no auto_login_session_key in response".into())
+            AuthError::InvalidResponse(
+                "accountGroupLogin: no auto_login_session_key in response".into(),
+            )
         })?;
 
         info!(
-            auto_login_max_age_h = result
-                .data
-                .auto_login_max_age
-                .map(|s| s as f32 / 3600.0),
+            auto_login_max_age_h = result.data.auto_login_max_age.map(|s| s as f32 / 3600.0),
             "accountGroupLogin successful"
         );
         Ok((new_tgt, session_key))
@@ -713,7 +722,11 @@ impl SdoAuth {
             .header("Host", "cas.sdo.com")
             .header(
                 "Cookie",
-                format!("CASTGC={}; CAS_LOGIN_STATE=1; {}", tgt, self.build_cookie_header()),
+                format!(
+                    "CASTGC={}; CAS_LOGIN_STATE=1; {}",
+                    tgt,
+                    self.build_cookie_header()
+                ),
             )
             .send()
             .await?
@@ -924,7 +937,8 @@ impl SdoAuth {
                     return Err(AuthError::AutoLoginExpired);
                 }
                 code => {
-                    let remove_auto = matches!(result.data.auto_login_session_key.as_deref(), Some("0"));
+                    let remove_auto =
+                        matches!(result.data.auto_login_session_key.as_deref(), Some("0"));
                     error!(
                         code = code,
                         fail_reason = ?result.data.fail_reason,
@@ -933,7 +947,12 @@ impl SdoAuth {
                     );
                     return Err(AuthError::SdoError {
                         code,
-                        message: result.data.fail_reason.as_deref().unwrap_or("unknown").to_string(),
+                        message: result
+                            .data
+                            .fail_reason
+                            .as_deref()
+                            .unwrap_or("unknown")
+                            .to_string(),
                         remove_auto_login: remove_auto,
                     });
                 }
@@ -1034,9 +1053,13 @@ mod tests {
         let mut auth = test_auth();
         auth.client = Client::builder().no_proxy().build().unwrap();
         let errors = [
-            auth.get_json_with_cookies::<serde_json::Value>(&url).await.unwrap_err(),
+            auth.get_json_with_cookies::<serde_json::Value>(&url)
+                .await
+                .unwrap_err(),
             auth.get_json::<serde_json::Value>(&url).await.unwrap_err(),
-            auth.get_json_raw::<serde_json::Value>(&url).await.unwrap_err(),
+            auth.get_json_raw::<serde_json::Value>(&url)
+                .await
+                .unwrap_err(),
         ];
         for error in errors {
             match error {

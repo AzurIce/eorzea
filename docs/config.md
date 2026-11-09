@@ -1,5 +1,7 @@
 # 配置说明
 
+Notist 配置手册分为 [`config.toml`](../book/config.not) 与 [`auth.toml`](../book/auth.not) 两页；在仓库根目录运行 `notist serve` 可预览。
+
 eorzea 的全部配置落在 `~/.eorzea/`（Windows 上即 `C:\Users\<用户>\.eorzea\`），GUI 与 CLI（`eoz`）共享同一份。本文档列出所有字段；字段的读写方式见 [`cli.md`](cli.md) 的 `eoz config` 一节。
 
 ## 文件总览
@@ -11,7 +13,7 @@ eorzea 的全部配置落在 `~/.eorzea/`（Windows 上即 `C:\Users\<用户>\.e
 
 ### 首次运行
 
-`config.toml` 不存在（也没有可迁移的旧版 `settings.json`）时，GUI 或 `eoz` 第一次读取配置会自动创建一份**只含注释**的模板，列出 `game_path`、`area` 等常用字段。默认值仍由程序内置，模板不会把默认值写死（以后调整默认值时旧文件不会把它“钉住”）。在 GUI 或 `eoz config set` 保存后文件会被重写，模板注释不再保留。`auth.toml` 在首次登录并保存账号时才创建。
+`config.toml` 不存在（也没有可迁移的旧版 `settings.json`）时，GUI 或 `eoz` 第一次读取配置会自动创建一份**只含注释**的模板，列出 `game_path` 等常用字段。默认值仍由程序内置，模板不会把默认值写死（以后调整默认值时旧文件不会把它“钉住”）。在 GUI 或 `eoz config set` 保存后文件会被重写，模板注释不再保留。`auth.toml` 在首次登录并保存账号时才创建。
 
 ### 平台差异
 
@@ -19,8 +21,8 @@ eorzea 的全部配置落在 `~/.eorzea/`（Windows 上即 `C:\Users\<用户>\.e
 
 | 平台 | `config.toml` 内容 |
 |------|--------------------|
-| Linux / macOS | `game_path`、`area`、平铺的 Wine 设置（`startup_type`/`custom_path`/`prefix`/`esync`/`fsync`/`msync`/`gamemode`、`[dxvk]`、`[env]`）、`[dalamud]` |
-| Windows | `game_path`、`area`、`[dalamud]`；不写 Wine/DXVK/环境变量，`eoz config set startup_type` 等会报「未知配置键」 |
+| Linux / macOS | `game_path`、可选的 `area`、平铺的 Wine 设置（`startup_type`/`custom_path`/`prefix`/`esync`/`fsync`/`msync`/`gamemode`、`[dxvk]`、`[env]`）、`[dalamud]` |
+| Windows | `game_path`、可选的 `area`、`[dalamud]`；不写 Wine/DXVK/环境变量，`eoz config set startup_type` 等会报「未知配置键」 |
 
 在 Windows 上读取 Linux/macOS 写出的配置时，Wine 相关键会被忽略；再保存会把它们移除。`eoz config list` 只输出当前平台的字段。
 
@@ -39,7 +41,7 @@ eorzea 的全部配置落在 `~/.eorzea/`（Windows 上即 `C:\Users\<用户>\.e
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
 | `game_path` | path | 无 | 游戏根目录（含 `boot/`、`game/`、`sdo/`）。CLI 的 `--game-path` 提供时覆盖此项 |
-| `area` | string | 无 | 默认大区 ID（如 `"1"` = 陆行鸟，`eoz areas` 查询）。CLI 的 `--area` 提供时覆盖此项 |
+| `area` | string | 无 | **旧版全局默认大区**（如 `"陆行鸟"`，`eoz areas` 查询；仍兼容旧数字 ID）。默认大区已改为按账号保存在 `auth.toml` 的 `accounts[].area`，此字段仅在账号未设置时作为回退，GUI 不再编辑。CLI 的 `--area` 仍可单次覆盖 |
 
 ### Wine（顶层平铺）
 
@@ -50,8 +52,8 @@ Wine 字段通过 `#[serde(flatten)]` 直接写在 TOML 顶层（兼容旧格式
 | `startup_type` | string | `"auto"` | Wine 来源：`auto`（custom_path → XIVLauncher 托管 → 系统 → 下载）、`managed`（用/下载官方 wine-xiv）、`custom`（用 `custom_path`）、`system`（PATH 中的 wine） |
 | `custom_path` | path | 无 | `custom` 模式下的 wine 可执行文件或含 `wine64`/`wine` 的目录（含 `bin/` 目录） |
 | `prefix` | path | 无 | `WINEPREFIX`；缺省 `~/.eorzea/prefix` |
-| `esync` | bool | `false` | 设置 `WINEESYNC=1` |
-| `fsync` | bool | `false` | 设置 `WINEFSYNC=1` |
+| `esync` | bool | `false` | 设置 `WINEESYNC=1`；与 `fsync` 二选一（GUI 用「关 / esync / fsync」三档滑块，内部是 `SyncMode` 枚举） |
+| `fsync` | bool | `false` | 设置 `WINEFSYNC=1`；与 `esync` 二选一，同时为 true 时按 `fsync` 读取 |
 | `msync` | bool | `false` | 设置 `WINEMSYNC=1`（仅 macOS 生效） |
 | `debug_vars` | string | 无 | `WINEDEBUG` 值，如 `"+seh"` |
 | `gamemode` | bool | `false` | `LD_PRELOAD` 追加 `libgamemodeauto.so.0` |
@@ -83,7 +85,6 @@ Wine 字段通过 `#[serde(flatten)]` 直接写在 TOML 顶层（兼容旧格式
 
 ```toml
 game_path = "/games/ffxiv"
-area = "1"
 
 # Wine（顶层平铺）
 startup_type = "auto"
@@ -104,11 +105,10 @@ load_method = "entrypoint"
 WINEDLLOVERRIDES = "msquic=,mscoree=n,b"
 ```
 
-Windows 上不需要也不接受 Wine 字段，配置只有游戏路径、大区与 Dalamud：
+Windows 上不需要也不接受 Wine 字段，配置只有游戏路径与 Dalamud（默认大区按账号保存）：
 
 ```toml
 game_path = "G:/FF14/最终幻想XIV"
-area = "1"
 
 [dalamud]
 enabled = true
@@ -125,10 +125,12 @@ default_account = "你的账号名"        # 或 snda_id
 snda_id = "1765973508"
 username = "你的账号名"               # 可空
 auto_login_session_key = "ULSa…"     # 可空；每次自动登录会刷新并写回
+area = "陆行鸟"                       # 可空；该账号的默认大区（名称）
 ```
 
 要点：
 
 - 第一个保存的账号自动成为默认账号；`eoz auth default <账号>` 可更换（支持 snda_id 或 username）。
+- `area` 是该账号的默认大区。GUI 主页的「大区」下拉框直接读写这个字段；切换账号时自动套用该账号的大区。未设置时回退 `config.toml` 的 `area`，再回退到大区列表第一个。CLI 的 `--area` 仍可单次覆盖。
 - 自动登录成功后服务器会下发**新的** session key（旧 key 立即作废），launcher 会立即写回 `auth.toml`，否则下次自动登录会过期。
 - session key 有效期约 30 天（登录时会显示剩余天数）；过期后需重新 `eoz auth login qr` / `password`。

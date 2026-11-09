@@ -1,7 +1,10 @@
 //! 主页：账号/大区选择、状态仪表盘（游戏位置/版本、Dalamud、Wine）、检查/更新游戏、启动游戏。
 
+use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use eorzea_auth::PatchListEntry;
+
+use crate::logging::LogLevel;
 #[cfg(not(target_os = "windows"))]
 use eorzea_lib::config::WineStartupType;
 use eorzea_lib::dalamud::{DalamudStatus, InstallState, updater};
@@ -42,7 +45,8 @@ pub fn HomePage() -> Element {
     let t = (state.theme)();
     let mut update_state = use_signal(|| UpdateState::Idle);
     let mut patches = use_signal(Vec::<PatchListEntry>::new);
-    let mut launching = use_signal(|| false);
+    // 全局信号：切到别的页面再回来，按钮仍保持「启动中…」。
+    let mut launching = state.launching;
     // 「本次启动加载 Dalamud」的会话内覆盖，不写回 config.toml。
     let dalamud_this_launch = use_signal(|| state.dalamud_cfg.read().enabled);
 
@@ -180,7 +184,14 @@ pub fn HomePage() -> Element {
             return;
         };
         launching.set(true);
-        spawn(async move {
+        // root scope：切换页面不会取消正在进行的启动流程。
+        spawn_forever(async move {
+            tracing::info!(
+                account = %snda_id,
+                area = %area.area_name,
+                exe = %exe.display(),
+                "开始启动游戏"
+            );
             // Dalamud 准备放在自动登录**之前**：启用时失败不静默降级（状态栏报错、
             // 不启动游戏），也避免一次失败就消耗掉一次性 session key。
             let dalamud_on = dalamud_this_launch();
@@ -200,11 +211,15 @@ pub fn HomePage() -> Element {
                 })
                 .await
             {
-                Ok(cfg) => cfg,
+                Ok(cfg) => {
+                    tracing::info!(dalamud = cfg.is_some(), "Dalamud 准备完成");
+                    cfg
+                }
                 Err(e) => {
                     state
                         .status
                         .set(format!("{e}（可关闭主页的「本次启动加载 Dalamud」后重试）"));
+                    tracing::error!(error = %e, "Dalamud 准备失败，已中止启动");
                     launching.set(false);
                     return;
                 }
@@ -223,8 +238,10 @@ pub fn HomePage() -> Element {
                     match key {
                         Some(key) => {
                             state.status.set("自动登录中…".into());
+                            tracing::info!("本会话没有 token，开始自动登录");
                             match launcher.login_auto(&key).await {
                                 Ok(t) => {
+                                    tracing::info!(account = %t.snda_id, "自动登录成功");
                                     // 写回轮换后的 session key
                                     let mut cfg = state.auth_cfg.read().clone();
                                     cfg.upsert(
@@ -234,6 +251,8 @@ pub fn HomePage() -> Element {
                                             auto_login_session_key: t
                                                 .auto_login_session_key
                                                 .clone(),
+                                            // None 表示保留账号已保存的大区
+                                            area: None,
                                         },
                                         false,
                                     );
@@ -249,6 +268,7 @@ pub fn HomePage() -> Element {
                                     state
                                         .status
                                         .set(format!("自动登录失败（{e}），请到登录页重新登录"));
+                                    tracing::error!(error = %e, "自动登录失败");
                                     None
                                 }
                             }
@@ -257,6 +277,7 @@ pub fn HomePage() -> Element {
                             state
                                 .status
                                 .set("该账号没有自动登录凭证，请到登录页登录".into());
+                            tracing::warn!("该账号没有自动登录凭证");
                             None
                         }
                     }
@@ -271,10 +292,16 @@ pub fn HomePage() -> Element {
                     .launch_prepared(&wine, dalamud_cfg, &token, area, areas, &exe)
                     .await
                 {
-                    Ok(result) => state
-                        .status
-                        .set(format!("游戏已启动（PID {}）", result.child.id())),
-                    Err(e) => state.status.set(format!("启动失败: {e}")),
+                    Ok(result) => {
+                        state
+                            .status
+                            .set(format!("游戏已启动（PID {}）", result.child.id()));
+                        tracing::info!(pid = result.child.id(), "游戏进程已启动");
+                    }
+                    Err(e) => {
+                        state.status.set(format!("启动失败: {e}"));
+                        tracing::error!(error = %e, "游戏启动失败");
+                    }
                 }
             }
             launching.set(false);
@@ -393,22 +420,28 @@ pub fn HomePage() -> Element {
     // 展示"未检测到可用 wine"会被误读为故障。
     #[cfg(not(target_os = "windows"))]
     let wine_card = {
-        let wine_cfg = state.settings.read().clone();
-        let wine_startup = match wine_cfg.startup_type {
-            WineStartupType::Auto => "自动",
-            WineStartupType::Managed => "托管",
-            WineStartupType::Custom => "自定义",
-            WineStartupType::System => "系统",
-        };
-        // detect 只做本地探测（自定义路径 → 托管目录 → PATH），不会触发下载
-        let wine_tool = WineTool::detect(wine_cfg.custom_path.as_deref());
-        let wine_sub = match &wine_tool {
-            Some(w) if w.is_managed => format!("{}（托管）", w.wine64_path.display()),
-            Some(w) => format!("{}", w.wine64_path.display()),
-            None => "未检测到可用 wine".to_string(),
-        };
+        // 探测会读文件系统/扫描 PATH 并写日志，必须 memo 化：否则日志区每次
+        // 刷新触发的重渲染都会再次探测，日志 → 重渲染 → 日志形成死循环。
+        let (wine_startup, wine_sub) = use_memo(move || {
+            let wine_cfg = state.settings.read().clone();
+            let wine_startup = match wine_cfg.startup_type {
+                WineStartupType::Auto => "自动",
+                WineStartupType::Managed => "托管",
+                WineStartupType::Custom => "自定义",
+                WineStartupType::System => "系统",
+            }
+            .to_string();
+            // detect 只做本地探测（自定义路径 → 托管目录 → PATH），不会触发下载
+            let wine_tool = WineTool::detect(wine_cfg.custom_path.as_deref());
+            let wine_sub = match &wine_tool {
+                Some(w) if w.is_managed => format!("{}（托管）", w.wine64_path.display()),
+                Some(w) => format!("{}", w.wine64_path.display()),
+                None => "未检测到可用 wine".to_string(),
+            };
+            (wine_startup, wine_sub)
+        })();
         rsx! {
-            StatusCard { title: "Wine",
+            StatusCard { title: "Wine", badge: Some("Linux / macOS"),
                 p { style: "margin: 0; font-size: 13px; color: {t.text};", "启动方式：{wine_startup}" }
                 p { style: "margin: 4px 0 0 0; font-size: 12px; color: {t.text_secondary}; overflow-wrap: anywhere;", "{wine_sub}" }
             }
@@ -430,6 +463,24 @@ pub fn HomePage() -> Element {
     };
     let launch_button_cursor = if launching() { "default" } else { "pointer" };
 
+    // 运行日志：最新在最上方（blitz 无法程序化滚动到末尾）。
+    // 先克隆出渲染所需的行并释放读锁，避免与轮询任务的写锁重叠。
+    let log_rows: Vec<(String, &'static str)> = {
+        let entries = state.logs.read();
+        entries
+            .iter()
+            .rev()
+            .map(|entry| {
+                let color = match entry.level {
+                    LogLevel::Info => t.text_secondary,
+                    LogLevel::Warn => t.warning,
+                    LogLevel::Error => t.danger,
+                };
+                (entry.text.clone(), color)
+            })
+            .collect()
+    };
+
     rsx! {
         div {
             // 页面自持滚动（外层不滚，设置页的保存栏才能固定在滚动区外）
@@ -442,7 +493,7 @@ pub fn HomePage() -> Element {
                 div {
                     // flex-start：下拉内联展开撑高行时，标签保持与按钮同顶对齐
                     style: "display: flex; flex-direction: row; align-items: flex-start; gap: 12px; flex-wrap: wrap;",
-                    span { style: "font-size: 14px; color: {t.text_secondary}; padding: 8px 0;", "账号" }
+                    div { style: "font-size: 14px; color: {t.text_secondary}; padding: 8px 0;", "账号" }
                     div {
                         style: "width: 220px;",
                         Dropdown {
@@ -450,9 +501,28 @@ pub fn HomePage() -> Element {
                             items: account_items,
                             selected: state.selected_account,
                             placeholder: "请选择账号",
+                            // 切换账号时应用该账号的默认大区（名称，兼容旧 ID）；
+                            // 账号未设置时保留当前选择
+                            onchange: move |id: String| {
+                                let area = state
+                                    .auth_cfg
+                                    .read()
+                                    .find(&id)
+                                    .and_then(|a| a.area.clone());
+                                let Some(area) = area else { return };
+                                let area_id = state
+                                    .areas
+                                    .read()
+                                    .iter()
+                                    .find(|a| a.area_name == area || a.area_id == area)
+                                    .map(|a| a.area_id.clone());
+                                if let Some(area_id) = area_id {
+                                    state.selected_area.set(Some(area_id));
+                                }
+                            },
                         }
                     }
-                    span { style: "font-size: 14px; color: {t.text_secondary}; padding: 8px 0;", "大区" }
+                    div { style: "font-size: 14px; color: {t.text_secondary}; padding: 8px 0;", "大区" }
                     div {
                         style: "width: 220px;",
                         Dropdown {
@@ -460,6 +530,51 @@ pub fn HomePage() -> Element {
                             items: area_items,
                             selected: state.selected_area,
                             placeholder: area_placeholder,
+                            // 主页的大区选择即当前账号的默认大区，改动立即写回 auth.toml；
+                            // 存名称而不是数字 ID
+                            onchange: move |id: String| {
+                                let Some(account_id) = state.selected_account.read().clone() else {
+                                    return;
+                                };
+                                let area_name = state
+                                    .areas
+                                    .read()
+                                    .iter()
+                                    .find(|a| a.area_id == id)
+                                    .map(|a| a.area_name.clone());
+                                let Some(area_name) = area_name else { return };
+                                let mut cfg = state.auth_cfg.read().clone();
+                                let changed = match cfg
+                                    .accounts
+                                    .iter_mut()
+                                    .find(|a| a.snda_id == account_id)
+                                {
+                                    Some(acc) => {
+                                        if acc.area.as_deref() == Some(area_name.as_str()) {
+                                            false
+                                        } else {
+                                            acc.area = Some(area_name);
+                                            true
+                                        }
+                                    }
+                                    None => false,
+                                };
+                                if !changed {
+                                    return;
+                                }
+                                match eorzea_lib::auth::save(
+                                    &eorzea_lib::auth::config_path(),
+                                    &cfg,
+                                ) {
+                                    Ok(()) => {
+                                        state.auth_cfg.set(cfg);
+                                        state.status.set("默认大区已保存".into());
+                                    }
+                                    Err(e) => {
+                                        state.status.set(format!("保存账号配置失败: {e}"))
+                                    }
+                                }
+                            },
                         }
                     }
                 }
@@ -553,6 +668,25 @@ pub fn HomePage() -> Element {
                         if launching() { "启动中…" } else { "启动游戏" }
                     }
                 }
+
+            // ── 运行日志 ────────────────────────────────────────────────
+            Section { title: "运行日志（最新在上）",
+                div {
+                    // 不指定等宽字体：blitz 缺少逐字符回退，日志里的中文需要
+                    // 继承根节点的 CJK 字体栈，否则会渲染成方块。
+                    style: "height: 200px; overflow-y: auto; background: {t.page_bg}; border: 1px solid {t.border}; border-radius: 6px; padding: 8px 12px; font-size: 12px; line-height: 1.6;",
+                    if log_rows.is_empty() {
+                        p { style: "margin: 0; color: {t.text_secondary}; font-size: 12px;", "暂无日志" }
+                    } else {
+                        for (text , color) in log_rows.iter() {
+                            div {
+                                style: "white-space: pre-wrap; overflow-wrap: anywhere; color: {color};",
+                                "{text}"
+                            }
+                        }
+                    }
+                }
+            }
             }
         }
     }
@@ -566,12 +700,29 @@ fn selected_area(state: &AppState) -> Option<eorzea_auth::SdoArea> {
 
 /// 状态仪表盘小卡片（标题 + 内容，等宽弹性布局）。
 #[component]
-fn StatusCard(title: &'static str, children: Element) -> Element {
+fn StatusCard(
+    title: &'static str,
+    /// 标题右侧的平台提示（如「Linux / macOS」），None 不显示。
+    #[props(default)]
+    badge: Option<&'static str>,
+    children: Element,
+) -> Element {
     let t = (use_context::<AppState>().theme)();
     rsx! {
         div {
             style: "flex: 1; min-width: 180px; background: {t.card_bg}; border: 1px solid {t.border}; border-radius: 8px; padding: 12px 16px;",
-            p { style: "margin: 0 0 6px 0; font-size: 12px; color: {t.text_secondary};", "{title}" }
+            // 同 Section：不用 flex 横排标题和标签，避免 blitz 把文本项按
+            // min-content 换行并算错容器高度。
+            div {
+                style: "margin-bottom: 6px;",
+                p { style: "margin: 0; font-size: 12px; color: {t.text_secondary};", "{title}" }
+                if let Some(badge) = badge {
+                    div {
+                        style: "display: inline-block; margin-top: 4px; padding: 0 7px; border: 1px solid {t.border}; border-radius: 999px; background: {t.active_bg}; color: {t.text_secondary}; font-size: 10px; line-height: 16px; white-space: nowrap;",
+                        "{badge}"
+                    }
+                }
+            }
             {children}
         }
     }

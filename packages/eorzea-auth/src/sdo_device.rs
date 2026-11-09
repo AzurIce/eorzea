@@ -88,7 +88,12 @@ pub fn get_disk_serial_hash() -> String {
 ///
 /// C# 参考: `SdoUtils.GetDeviceId()` — `string.Join(":", GetMacAddress(), GetCPUId(), GetDiskSerialNumber())`
 pub fn get_device_id() -> String {
-    format!("{}:{}:{}", get_mac_address_hash(), get_cpu_id_hash(), get_disk_serial_hash())
+    format!(
+        "{}:{}:{}",
+        get_mac_address_hash(),
+        get_cpu_id_hash(),
+        get_disk_serial_hash()
+    )
 }
 
 // --- Linux ---
@@ -137,13 +142,19 @@ fn get_linux_disk_serial() -> std::io::Result<String> {
             }
         }
     }
-    Err(std::io::Error::new(std::io::ErrorKind::NotFound, "disk serial not found"))
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "disk serial not found",
+    ))
 }
 
 /// 识别根分区所在设备（去掉分区号与 btrfs 子卷后缀）：
 /// `/dev/nvme2n1p4` → `/dev/nvme2n1`，`/dev/sda3[/@root]` → `/dev/sda`。
 fn get_root_device() -> Option<String> {
-    let output = Command::new("findmnt").args(["-n", "-o", "SOURCE", "/"]).output().ok()?;
+    let output = Command::new("findmnt")
+        .args(["-n", "-o", "SOURCE", "/"])
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -174,13 +185,14 @@ fn get_macos_platform_serial() -> std::io::Result<String> {
             }
         }
     }
-    Err(std::io::Error::new(std::io::ErrorKind::NotFound, "IOPlatformSerialNumber not found"))
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "IOPlatformSerialNumber not found",
+    ))
 }
 
 fn get_macos_disk_serial() -> std::io::Result<String> {
-    let output = Command::new("diskutil")
-        .args(["info", "disk0"])
-        .output()?;
+    let output = Command::new("diskutil").args(["info", "disk0"]).output()?;
     let content = String::from_utf8_lossy(&output.stdout);
     for line in content.lines() {
         let line = line.trim();
@@ -193,7 +205,10 @@ fn get_macos_disk_serial() -> std::io::Result<String> {
             }
         }
     }
-    Err(std::io::Error::new(std::io::ErrorKind::NotFound, "disk serial not found"))
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "disk serial not found",
+    ))
 }
 
 // --- Fallback ---
@@ -216,11 +231,24 @@ mod tests {
     fn test_device_id_format() {
         let id = get_device_id();
         let parts: Vec<&str> = id.split(':').collect();
-        assert_eq!(parts.len(), 3, "device_id should have 3 colon-separated parts");
+        assert_eq!(
+            parts.len(),
+            3,
+            "device_id should have 3 colon-separated parts"
+        );
         for part in &parts {
-            assert_eq!(part.len(), 32, "each MD5 hash should be 32 hex chars, got: {}", part);
-            assert!(part.chars().all(|c| c.is_ascii_hexdigit() && c.is_ascii_uppercase() || c.is_ascii_digit()),
-                "each part should be uppercase hex: {}", part);
+            assert_eq!(
+                part.len(),
+                32,
+                "each MD5 hash should be 32 hex chars, got: {}",
+                part
+            );
+            assert!(
+                part.chars()
+                    .all(|c| c.is_ascii_hexdigit() && c.is_ascii_uppercase() || c.is_ascii_digit()),
+                "each part should be uppercase hex: {}",
+                part
+            );
         }
     }
 

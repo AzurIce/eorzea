@@ -1,12 +1,10 @@
-//! 亮/暗双主题（shadcn/ui zinc 色系）。
+//! 界面语义色（shadcn/ui zinc 亮色系）。
 //!
 //! 所有语义色为 hex 字符串，供 rsx `style` 属性 `{}` 插值使用。
 
 /// 一套语义色。
 #[derive(Clone, Copy)]
 pub struct Theme {
-    /// 是否为暗色主题（切换按钮据此决定下一套主题与文案）。
-    pub dark: bool,
     /// 页面底色。
     pub page_bg: &'static str,
     /// 卡片底色（Section、下拉列表）。
@@ -40,32 +38,9 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// 暗色主题（zinc dark）。
-    pub fn dark() -> Self {
-        Self {
-            dark: true,
-            page_bg: "#09090b",
-            card_bg: "#0c0c0f",
-            border: "#27272a",
-            input_border: "#3f3f46",
-            text: "#fafafa",
-            text_secondary: "#a1a1aa",
-            primary_bg: "#fafafa",
-            primary_fg: "#18181b",
-            active_bg: "#27272a",
-            danger: "#ef4444",
-            danger_border: "#7f1d1d",
-            success: "#4ade80",
-            warning: "#fbbf24",
-            progress_track: "#27272a",
-            checkbox_accent: "#18181b",
-        }
-    }
-
     /// 亮色主题（zinc light）。
     pub fn light() -> Self {
         Self {
-            dark: false,
             page_bg: "#ffffff",
             card_bg: "#ffffff",
             border: "#e4e4e7",

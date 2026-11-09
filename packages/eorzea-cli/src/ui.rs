@@ -170,7 +170,11 @@ pub fn display_width(s: &str) -> usize {
                 || (0xFF00..=0xFF60).contains(&cp)
                 || (0xFFE0..=0xFFE6).contains(&cp)
                 || (0x20000..=0x3FFFD).contains(&cp);
-            if wide { 2 } else { 1 }
+            if wide {
+                2
+            } else {
+                1
+            }
         })
         .sum()
 }

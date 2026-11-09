@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tracing::{debug, error, info, warn};
 
-use crate::config::{WineSettings, WineStartupType};
+use crate::config::{SyncMode, WineSettings, WineStartupType};
 
 /// Wine 管理工具。
 #[derive(Debug)]
@@ -32,7 +32,7 @@ impl WineTool {
         // 1. 自定义路径
         if let Some(path) = custom_path {
             if path.exists() {
-                info!(?path, "Found wine at custom path");
+                debug!(?path, "Found wine at custom path");
                 return Some(Self::from_wine64_path(path));
             }
             warn!(?path, "Custom wine path does not exist");
@@ -42,14 +42,14 @@ impl WineTool {
         if let Some(home) = dirs::home_dir() {
             let xlcore_wine = home.join(".xlcore/beta/wine/bin/wine64");
             if xlcore_wine.exists() {
-                info!(?xlcore_wine, "Found wine at XIVLauncher managed path");
+                debug!(?xlcore_wine, "Found wine at XIVLauncher managed path");
                 return Some(Self::from_xlcore_path(&xlcore_wine));
             }
         }
 
         // 3. 系统 wine（wine64 优先，回退 wine——新 WoW64 构建如 nixpkgs 只提供 wine）
         if let Some(path) = find_system_wine() {
-            info!(?path, "Found system wine");
+            debug!(?path, "Found system wine");
             return Some(Self {
                 wine64_path: path,
                 prefix_path: Self::default_prefix_path(),
@@ -617,7 +617,8 @@ impl WineTool {
         Ok(dir)
     }
 
-    fn default_prefix_path() -> PathBuf {
+    /// 运行时实际使用的默认 prefix；供界面展示默认值，避免另写一份路径。
+    pub fn default_prefix_path() -> PathBuf {
         dirs::home_dir()
             .map(|h| h.join(".eorzea/prefix"))
             .unwrap_or_else(|| PathBuf::from("./prefix"))
@@ -682,12 +683,11 @@ pub fn build_launch_env(settings: &WineSettings, tool: &WineTool) -> Vec<(String
     let overrides = format!("msquic=,mscoree=n,b;d3d9,d3d11,d3d10core,dxgi={d3d}");
     env.push(("WINEDLLOVERRIDES".to_string(), overrides));
 
-    // 同步机制
-    if settings.esync {
-        env.push(("WINEESYNC".to_string(), "1".to_string()));
-    }
-    if settings.fsync {
-        env.push(("WINEFSYNC".to_string(), "1".to_string()));
+    // 同步机制：esync / fsync 互斥（同时配置时 Wine 也优先 fsync）
+    match settings.sync.mode() {
+        SyncMode::Esync => env.push(("WINEESYNC".to_string(), "1".to_string())),
+        SyncMode::Fsync => env.push(("WINEFSYNC".to_string(), "1".to_string())),
+        SyncMode::None => {}
     }
     #[cfg(target_os = "macos")]
     if settings.msync {
@@ -878,8 +878,7 @@ mod tests {
     #[test]
     fn test_build_launch_env_toggles() {
         let settings = WineSettings {
-            esync: true,
-            fsync: true,
+            sync: SyncMode::Fsync.into(),
             debug_vars: Some("+seh".to_string()),
             dxvk: crate::config::DxvkSettings {
                 enabled: false,
@@ -895,7 +894,7 @@ mod tests {
         };
         let env = env_map(&build_launch_env(&settings, &tool()));
 
-        assert_eq!(env["WINEESYNC"], "1");
+        assert!(!env.contains_key("WINEESYNC"));
         assert_eq!(env["WINEFSYNC"], "1");
         assert_eq!(env["WINEDEBUG"], "+seh");
         // DXVK 关闭 → wined3d = b，且无 DXVK_* 变量
@@ -915,6 +914,17 @@ mod tests {
         assert_eq!(env["MY_VAR"], "1");
         #[cfg(target_os = "linux")]
         assert!(env["LD_PRELOAD"].contains("libgamemodeauto.so.0"));
+    }
+
+    #[test]
+    fn test_build_launch_env_esync() {
+        let settings = WineSettings {
+            sync: SyncMode::Esync.into(),
+            ..Default::default()
+        };
+        let env = env_map(&build_launch_env(&settings, &tool()));
+        assert_eq!(env["WINEESYNC"], "1");
+        assert!(!env.contains_key("WINEFSYNC"));
     }
 
     #[test]
@@ -955,8 +965,7 @@ mod tests {
             startup_type: WineStartupType::Custom,
             custom_path: Some(bin.clone()),
             prefix: Some(dir.join("myprefix")),
-            esync: true,
-            fsync: true,
+            sync: SyncMode::Fsync.into(),
             debug_vars: Some("+all".to_string()),
             ..Default::default()
         };
@@ -988,7 +997,7 @@ mod tests {
         assert!(content.contains("OVERRIDES=msquic=,mscoree=n,b;d3d11=n;dxgi=n,b"));
         #[cfg(not(target_os = "macos"))]
         assert!(content.contains("OVERRIDES=msquic=,mscoree=n,b;d3d9,d3d11,d3d10core,dxgi=n"));
-        assert!(content.contains("ESYNC=1"));
+        assert!(!content.contains("ESYNC=1"));
         assert!(content.contains("FSYNC=1"));
         assert!(content.contains("DEBUG=+all"));
 

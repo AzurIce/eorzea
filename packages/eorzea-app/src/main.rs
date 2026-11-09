@@ -6,11 +6,12 @@
 // - 桌面：dioxus-native（Blitz 渲染）
 // - wasm：dioxus web（`dx serve --platform web` 浏览器调试）
 
+mod logging;
 mod ui;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
-    tracing_subscriber::fmt::init();
+    logging::init();
     let window = dioxus_native::WindowAttributes::default()
         .with_title("FFXIV 国服启动器")
         .with_inner_size(dioxus_native::LogicalSize::new(720.0, 860.0));

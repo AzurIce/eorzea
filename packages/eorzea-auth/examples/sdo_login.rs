@@ -1,5 +1,5 @@
-use std::io::{self, Write};
 use eorzea_auth::sdo::SdoAuth;
+use std::io::{self, Write};
 
 fn prompt(label: &str) -> String {
     print!("{}: ", label);
@@ -15,7 +15,11 @@ fn prompt_password(label: &str) -> String {
     rpassword::read_password().unwrap()
 }
 
-async fn do_sso_flow(auth: &SdoAuth, ctx: &eorzea_auth::sdo::SdoContext, tgt: &str) -> Option<String> {
+async fn do_sso_flow(
+    auth: &SdoAuth,
+    ctx: &eorzea_auth::sdo::SdoContext,
+    tgt: &str,
+) -> Option<String> {
     println!("\n--- getPromotionInfo ---");
     if let Err(e) = auth.get_promotion_info(tgt).await {
         eprintln!("FAILED: {e}");
@@ -78,7 +82,10 @@ async fn main() {
     let auth = SdoAuth::new().expect("Failed to create SdoAuth client");
 
     println!("Device ID: {}", eorzea_auth::sdo_device::get_device_id());
-    println!("MAC ID:    {}", eorzea_auth::sdo_device::get_mac_address_hash());
+    println!(
+        "MAC ID:    {}",
+        eorzea_auth::sdo_device::get_mac_address_hash()
+    );
 
     println!("\n--- getGuid ---");
     let ctx = match auth.get_context().await {
@@ -103,7 +110,9 @@ async fn main() {
                 Ok(result) => {
                     println!("OK: return_code={}", result.return_code);
                     if let Some(ref fail) = result.data.fail_reason {
-                        if !fail.is_empty() { println!("fail_reason={}", fail); }
+                        if !fail.is_empty() {
+                            println!("fail_reason={}", fail);
+                        }
                     }
                     if let Some(ref sk) = result.data.auto_login_session_key {
                         println!("auto_login_session_key={}", sk);
@@ -115,7 +124,10 @@ async fn main() {
                     if let Some(ref tgt) = result.data.tgt {
                         _ticket = do_sso_flow(&auth, &ctx, tgt).await;
                     } else {
-                        println!("\n[WARN] No tgt in static_login response. Full data: {:?}", result.data);
+                        println!(
+                            "\n[WARN] No tgt in static_login response. Full data: {:?}",
+                            result.data
+                        );
                     }
                 }
                 Err(e) => eprintln!("FAILED: {e}"),
@@ -164,7 +176,11 @@ async fn main() {
                     println!("code_key={}", result.code_key);
                     let qr_path = "/tmp/xiv_qr.png";
                     std::fs::write(qr_path, &result.image_data).unwrap();
-                    println!("QR image saved to {} ({} bytes)", qr_path, result.image_data.len());
+                    println!(
+                        "QR image saved to {} ({} bytes)",
+                        qr_path,
+                        result.image_data.len()
+                    );
 
                     println!("\nPolling for QR scan...");
                     loop {
@@ -175,11 +191,17 @@ async fn main() {
                                 println!("  snda_id={:?}", data.snda_id);
                                 println!("  tgt={:?}", data.tgt);
                                 println!("  input_user_id={:?}", data.input_user_id);
-                                println!("  auto_login_session_key={:?}", data.auto_login_session_key);
+                                println!(
+                                    "  auto_login_session_key={:?}",
+                                    data.auto_login_session_key
+                                );
                                 if let Some(ref tgt) = data.tgt {
                                     _ticket = do_sso_flow(&auth, &ctx, tgt).await;
                                 } else {
-                                    println!("\n[WARN] No tgt in QR login response. Full data: {:?}", data);
+                                    println!(
+                                        "\n[WARN] No tgt in QR login response. Full data: {:?}",
+                                        data
+                                    );
                                 }
                                 break;
                             }
