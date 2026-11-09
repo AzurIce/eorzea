@@ -1,8 +1,8 @@
 //! 设置页：游戏目录、Wine 与 Dalamud 配置，保存写回 `config.toml`。
 
 use dioxus::prelude::*;
-use eorzea_lib::config::{self, AppConfig, SyncMode, WineStartupType};
-use eorzea_lib::dalamud::model::{DalamudLoadMethod, DalamudSettings};
+use eorzea::config::{self, AppConfig, SyncMode, WineStartupType};
+use eorzea::dalamud::model::{DalamudLoadMethod, DalamudSettings};
 
 use super::login::{ActionButton, GhostButton, Section, TextInput};
 use super::{AppState, Dropdown};
@@ -14,12 +14,12 @@ pub fn SettingsPage() -> Element {
 
     // 提示直接复用运行时默认值，不在 UI 中维护另一份路径或数字。
     #[cfg(not(target_os = "windows"))]
-    let default_prefix = eorzea_lib::wine::WineTool::default_prefix_path()
+    let default_prefix = eorzea::wine::WineTool::default_prefix_path()
         .display()
         .to_string();
     #[cfg(target_os = "windows")]
     let default_prefix = String::new(); // Windows 隐藏 Wine 设置
-    let default_install_root = eorzea_lib::dalamud::updater::default_install_root()
+    let default_install_root = eorzea::dalamud::updater::default_install_root()
         .display()
         .to_string();
     let default_delay_ms = DalamudSettings::default().delay_initialize_ms.to_string();

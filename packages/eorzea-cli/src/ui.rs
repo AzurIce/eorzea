@@ -19,8 +19,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use console::style;
-use eorzea_lib::game_files::patch_manager::{DownloadProgress, PatchPhase, PatchProgress};
-use eorzea_lib::game_files::{InstallPatchProgress, InstallPhase, InstallProgress};
+use eorzea::game_files::patch_manager::{DownloadProgress, PatchPhase, PatchProgress};
+use eorzea::game_files::{InstallPatchProgress, InstallPhase, InstallProgress};
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use tracing_indicatif::IndicatifWriter;
 use tracing_subscriber::EnvFilter;
@@ -50,7 +50,7 @@ pub fn init(verbose: u8, no_progress: bool) {
     };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(format!(
-            "eorzea_lib={level},eorzea_auth={level},eorzea_cli={level},warn"
+            "eorzea={level},eorzea_auth={level},eorzea_cli={level},warn"
         ))
     });
 

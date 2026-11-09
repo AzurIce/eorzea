@@ -6,11 +6,11 @@ use eorzea_auth::PatchListEntry;
 
 use crate::logging::LogLevel;
 #[cfg(not(target_os = "windows"))]
-use eorzea_lib::config::WineStartupType;
-use eorzea_lib::dalamud::{DalamudStatus, InstallState, updater};
-use eorzea_lib::game_files::{CheckResult, GameFileManager, default_patch_dir};
+use eorzea::config::WineStartupType;
+use eorzea::dalamud::{DalamudStatus, InstallState, updater};
+use eorzea::game_files::{CheckResult, GameFileManager, default_patch_dir};
 #[cfg(not(target_os = "windows"))]
-use eorzea_lib::wine::WineTool;
+use eorzea::wine::WineTool;
 
 use super::login::{ActionButton, ErrorRow, Section};
 use super::settings::Checkbox;
@@ -245,7 +245,7 @@ pub fn HomePage() -> Element {
                                     // 写回轮换后的 session key
                                     let mut cfg = state.auth_cfg.read().clone();
                                     cfg.upsert(
-                                        eorzea_lib::auth::Account {
+                                        eorzea::auth::Account {
                                             snda_id: t.snda_id.clone(),
                                             username: t.username.clone(),
                                             auto_login_session_key: t
@@ -256,10 +256,7 @@ pub fn HomePage() -> Element {
                                         },
                                         false,
                                     );
-                                    let _ = eorzea_lib::auth::save(
-                                        &eorzea_lib::auth::config_path(),
-                                        &cfg,
-                                    );
+                                    let _ = eorzea::auth::save(&eorzea::auth::config_path(), &cfg);
                                     state.auth_cfg.set(cfg);
                                     state.tokens.write().insert(t.snda_id.clone(), t.clone());
                                     Some(t)
@@ -562,8 +559,8 @@ pub fn HomePage() -> Element {
                                 if !changed {
                                     return;
                                 }
-                                match eorzea_lib::auth::save(
-                                    &eorzea_lib::auth::config_path(),
+                                match eorzea::auth::save(
+                                    &eorzea::auth::config_path(),
                                     &cfg,
                                 ) {
                                     Ok(()) => {

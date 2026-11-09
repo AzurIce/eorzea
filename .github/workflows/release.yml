@@ -124,10 +124,10 @@ jobs:
         run: |
           name="eorzea-${{ needs.plan.outputs.version }}-${{ matrix.name }}"
           mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/eorzea" "dist/$name/"
+          cp "target/${{ matrix.target }}/release/eorzea-app" "dist/$name/"
           cp "target/${{ matrix.target }}/release/eoz" "dist/$name/"
           cp README.md "dist/$name/"
-          strip "dist/$name/eorzea" "dist/$name/eoz" || true
+          strip "dist/$name/eorzea-app" "dist/$name/eoz" || true
           tar -C dist -czf "$name.tar.gz" "$name"
 
       - name: Package (Windows)
@@ -137,7 +137,7 @@ jobs:
           $name = "eorzea-${{ needs.plan.outputs.version }}-${{ matrix.name }}"
           $out = "dist\$name"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          Copy-Item "target\${{ matrix.target }}\release\eorzea.exe" $out
+          Copy-Item "target\${{ matrix.target }}\release\eorzea-app.exe" $out
           Copy-Item "target\${{ matrix.target }}\release\eoz.exe" $out
           Copy-Item "README.md" $out
           Compress-Archive -Path $out -DestinationPath "$name.zip"

@@ -5,10 +5,6 @@ description = "Eorzea（FFXIV 国服启动器）dioxus-native GUI"
 authors = ["azurice"]
 edition = "2024"
 
-[[bin]]
-name = "eorzea"
-path = "src/main.rs"
-
 [dependencies]
 dioxus = "0.7"
 eorzea = { path = "../.." }

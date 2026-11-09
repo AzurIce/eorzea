@@ -5,10 +5,10 @@
 `eorzea` is a Rust reimplementation of the FFXIV launcher, porting auth and game-launch logic from `XIVLauncher.Core` (C#). The project uses a dioxus-native + Rust workspace:
 
 ```
-eorzea/                     # workspace root（核心库 crate `eorzea_lib`，不含 GUI）
+eorzea/                     # workspace root（核心库 crate `eorzea`，不含 GUI）
 ├── src/                    # auth / config / launcher / game / wine / dalamud / game_files
 ├── packages/
-│   ├── eorzea-app/         # GUI（bin `eorzea`，dioxus-native）
+│   ├── eorzea-app/         # GUI（bin `eorzea-app`，dioxus-native）
 │   │   └── src/ui/         # GUI 页面（mod.rs 根组件/共享状态，login/home/settings）
 │   ├── eorzea-auth/        # auth library (feature-gated)
 │   └── eorzea-cli/         # CLI（bin `eoz`：游戏文件管理/账号/启动）

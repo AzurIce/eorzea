@@ -59,7 +59,7 @@ CLI 的构建与安装不会编译 dioxus/blitz。
 - **默认不刷库日志**：`eoz` 自己的输出已经覆盖了用户在意的信息。要看过程用 `-v`（info）/`-vv`（debug）/`-vvv`（trace），或用 `RUST_LOG=…` 精确控制：
   ```bash
   eoz launch -v                    # 看 wine 解析 / prefix / DXVK / Dalamud 准备细节
-  RUST_LOG=eorzea_lib::dalamud=debug eoz dalamud install
+  RUST_LOG=eorzea::dalamud=debug eoz dalamud install
   ```
 - **进度条**（indicatif）画在 stderr：显示阶段名、百分比、速度与剩余时间（ETA）。日志输出会自动挂起进度条，不会互相截断。
 - **非 TTY / `--no-progress` 时自动退化**：不画动态进度条，改为每个阶段一行 `  阶段名…` + 结束时 `✓ 阶段名 就绪（12.78 MiB）`，CI 与管道里同样可读。

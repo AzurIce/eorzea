@@ -24,10 +24,10 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use console::style;
+use eorzea::game_files::{default_patch_dir, version, GameFileManager};
+use eorzea::launcher::{Launcher, LauncherError};
+use eorzea::term_img;
 use eorzea_auth::sdo::SdoAuth;
-use eorzea_lib::game_files::{default_patch_dir, version, GameFileManager};
-use eorzea_lib::launcher::{Launcher, LauncherError};
-use eorzea_lib::term_img;
 
 mod ui;
 
@@ -289,7 +289,7 @@ fn game_path_or_config(game_path: Option<PathBuf>) -> PathBuf {
     if let Some(path) = game_path {
         return path;
     }
-    match eorzea_lib::config::load_app_default().game_path {
+    match eorzea::config::load_app_default().game_path {
         Some(path) => path,
         None => die(
             "未指定 --game-path，且 config.toml 中没有 game_path（用 `eoz config set game_path <游戏根目录>` 或在 GUI 设置页保存）",
@@ -305,11 +305,11 @@ async fn resolve_area(area: Option<String>, account: Option<&str>) -> String {
     if let Some(area) = area {
         return area;
     }
-    let cfg = eorzea_lib::auth::load(&eorzea_lib::auth::config_path());
+    let cfg = eorzea::auth::load(&eorzea::auth::config_path());
     if let Some(area) = cfg.area_for(account) {
         return area;
     }
-    if let Some(area) = eorzea_lib::config::load_app_default().area {
+    if let Some(area) = eorzea::config::load_app_default().area {
         return area;
     }
     let mut areas = match SdoAuth::fetch_server_list().await {
@@ -544,14 +544,14 @@ async fn cmd_check(game_path: &std::path::Path, area_id: &str, max_expansion: i3
     sp.clear();
 
     match result {
-        Ok(eorzea_lib::game_files::CheckResult::UpToDate { unique_id }) => {
+        Ok(eorzea::game_files::CheckResult::UpToDate { unique_id }) => {
             if unique_id.is_empty() {
                 ok("已是最新版本");
             } else {
                 ok(format!("已是最新版本（X-Patch-Unique-Id: {unique_id}）"));
             }
         }
-        Ok(eorzea_lib::game_files::CheckResult::NeedsPatch { patches, unique_id }) => {
+        Ok(eorzea::game_files::CheckResult::NeedsPatch { patches, unique_id }) => {
             let total: u64 = patches.iter().map(|p| p.length).sum();
             ok(format!(
                 "需要下载 {} 个补丁，共 {}",
@@ -569,7 +569,7 @@ async fn cmd_check(game_path: &std::path::Path, area_id: &str, max_expansion: i3
             kv("X-Patch-Unique-Id", unique_id);
             hint("用 `eoz game update` 下载并应用");
         }
-        Ok(eorzea_lib::game_files::CheckResult::NeedsPatchBoot) => {
+        Ok(eorzea::game_files::CheckResult::NeedsPatchBoot) => {
             warn("服务器指示 boot 需要更新（国服通常不会出现）");
         }
         Err(e) => die(format!("检查更新失败: {e}")),
@@ -615,14 +615,12 @@ async fn cmd_update(
     };
 
     let patches = match check {
-        eorzea_lib::game_files::CheckResult::UpToDate { .. } => {
+        eorzea::game_files::CheckResult::UpToDate { .. } => {
             ok("已是最新版本，无需更新");
             return;
         }
-        eorzea_lib::game_files::CheckResult::NeedsPatch { patches, .. } => patches,
-        eorzea_lib::game_files::CheckResult::NeedsPatchBoot => {
-            die("boot 需要更新（国服通常不会出现）")
-        }
+        eorzea::game_files::CheckResult::NeedsPatch { patches, .. } => patches,
+        eorzea::game_files::CheckResult::NeedsPatchBoot => die("boot 需要更新（国服通常不会出现）"),
     };
 
     let total: u64 = patches.iter().map(|p| p.length).sum();
@@ -679,7 +677,7 @@ async fn cmd_update(
 
 /// `game verify`：校验游戏文件完整性 + 版本状态。
 async fn cmd_verify(game_path: &std::path::Path) {
-    use eorzea_lib::game_files::verify::{verify_game, IssueSeverity};
+    use eorzea::game_files::verify::{verify_game, IssueSeverity};
 
     banner(format!("校验游戏文件  {}", game_path.display()));
     let sp = ui::Spinner::new("扫描 SQPack 索引与文件大小");
@@ -747,7 +745,7 @@ fn prompt(label: &str) -> String {
 async fn show_qr_code(
     launcher: &Launcher,
     qr_file: Option<PathBuf>,
-) -> Result<eorzea_lib::launcher::QrCodeSession, LauncherError> {
+) -> Result<eorzea::launcher::QrCodeSession, LauncherError> {
     let sp = ui::Spinner::new("申请扫码二维码");
     let qr = match launcher.request_qr_code().await {
         Ok(qr) => {
@@ -785,7 +783,7 @@ async fn do_login(
     username: Option<&str>,
     session_key: Option<&str>,
     qr_file: Option<PathBuf>,
-) -> Result<eorzea_lib::launcher::LaunchToken, LauncherError> {
+) -> Result<eorzea::launcher::LaunchToken, LauncherError> {
     let sp = ui::Spinner::new("初始化登录上下文");
     let launcher = Launcher::new()?;
     sp.clear();
@@ -838,14 +836,14 @@ async fn cmd_auth_login(
     };
 
     // 保存账号
-    let cfg_path = eorzea_lib::auth::config_path();
-    let mut cfg = eorzea_lib::auth::load(&cfg_path);
+    let cfg_path = eorzea::auth::config_path();
+    let mut cfg = eorzea::auth::load(&cfg_path);
     let make_default = cfg.accounts.is_empty(); // 第一个账号自动设为默认
     let username = username
         .map(|s| s.to_string())
         .or_else(|| token.username.clone());
     cfg.upsert(
-        eorzea_lib::auth::Account {
+        eorzea::auth::Account {
             snda_id: token.snda_id.clone(),
             username,
             auto_login_session_key: token.auto_login_session_key.clone(),
@@ -853,7 +851,7 @@ async fn cmd_auth_login(
         },
         make_default,
     );
-    if let Err(e) = eorzea_lib::auth::save(&cfg_path, &cfg) {
+    if let Err(e) = eorzea::auth::save(&cfg_path, &cfg) {
         die(format!("保存配置失败: {e}"));
     }
 
@@ -874,8 +872,8 @@ async fn cmd_auth_login(
 
 /// `auth status`：显示已保存账号。
 fn cmd_auth_status() {
-    let cfg_path = eorzea_lib::auth::config_path();
-    let cfg = eorzea_lib::auth::load(&cfg_path);
+    let cfg_path = eorzea::auth::config_path();
+    let cfg = eorzea::auth::load(&cfg_path);
 
     banner(format!("已保存账号  {}", cfg_path.display()));
     if cfg.accounts.is_empty() {
@@ -922,8 +920,8 @@ fn cmd_auth_status() {
 
 /// `auth default`：设置默认账号。
 fn cmd_auth_default(account: &str) {
-    let cfg_path = eorzea_lib::auth::config_path();
-    let mut cfg = eorzea_lib::auth::load(&cfg_path);
+    let cfg_path = eorzea::auth::config_path();
+    let mut cfg = eorzea::auth::load(&cfg_path);
 
     // 支持 snda_id 或 username 匹配；存储时 username 优先（可读），无则 snda_id
     let found = cfg.find_by_identifier(account).cloned();
@@ -931,7 +929,7 @@ fn cmd_auth_default(account: &str) {
     match found {
         Some(acc) => {
             cfg.default_account = Some(acc.username.clone().unwrap_or_else(|| acc.snda_id.clone()));
-            if let Err(e) = eorzea_lib::auth::save(&cfg_path, &cfg) {
+            if let Err(e) = eorzea::auth::save(&cfg_path, &cfg) {
                 die(format!("保存配置失败: {e}"));
             }
             ok(format!("默认账号已设为 {account}"));
@@ -944,8 +942,8 @@ fn cmd_auth_default(account: &str) {
 
 /// `auth logout`：删除账号（缺省删默认账号）。
 fn cmd_auth_logout(account: Option<&str>) {
-    let cfg_path = eorzea_lib::auth::config_path();
-    let mut cfg = eorzea_lib::auth::load(&cfg_path);
+    let cfg_path = eorzea::auth::config_path();
+    let mut cfg = eorzea::auth::load(&cfg_path);
 
     let target = match account {
         Some(a) => a.to_string(),
@@ -962,7 +960,7 @@ fn cmd_auth_logout(account: Option<&str>) {
         match by_name {
             Some(id) => {
                 cfg.remove(&id);
-                if let Err(e) = eorzea_lib::auth::save(&cfg_path, &cfg) {
+                if let Err(e) = eorzea::auth::save(&cfg_path, &cfg) {
                     die(format!("保存配置失败: {e}"));
                 }
                 ok(format!("已删除账号 {target}"));
@@ -970,7 +968,7 @@ fn cmd_auth_logout(account: Option<&str>) {
             None => die(format!("找不到账号 '{target}'")),
         }
     } else {
-        if let Err(e) = eorzea_lib::auth::save(&cfg_path, &cfg) {
+        if let Err(e) = eorzea::auth::save(&cfg_path, &cfg) {
             die(format!("保存配置失败: {e}"));
         }
         ok(format!("已删除账号 {target}"));
@@ -995,7 +993,7 @@ async fn cmd_launch(
 
     let mut launcher = Launcher::new()
         .expect("failed to create Launcher")
-        .with_wine_settings(eorzea_lib::config::load_settings());
+        .with_wine_settings(eorzea::config::load_settings());
     if let Some(w) = wine {
         launcher = launcher.with_wine_path(w);
     }
@@ -1026,7 +1024,7 @@ async fn cmd_launch(
     // Dalamud：三件套按需补齐；下载用进度条，不下载的阶段一闪而过
     let mut bar: Option<ui::ByteBar> = None;
     let mut last_phase = None;
-    let mut phase_bar = |phase: eorzea_lib::launcher::DalamudPhase, done: u64, total: u64| {
+    let mut phase_bar = |phase: eorzea::launcher::DalamudPhase, done: u64, total: u64| {
         if last_phase != Some(phase) {
             if let Some(b) = bar.take() {
                 b.finish_ready();
@@ -1065,8 +1063,8 @@ async fn cmd_launch(
 
     // 启动只做自动登录：登录入口统一到 `eoz auth login`，避免两套参数。
     // 账号：--account 指定 → 默认账号
-    let cfg_path = eorzea_lib::auth::config_path();
-    let cfg = eorzea_lib::auth::load(&cfg_path);
+    let cfg_path = eorzea::auth::config_path();
+    let cfg = eorzea::auth::load(&cfg_path);
 
     let target = account.or(cfg.default_account.as_deref());
     let token = match target {
@@ -1083,13 +1081,13 @@ async fn cmd_launch(
                             // autoLogin.json 返回新的 session key（旧 key 立即作废），
                             // 立即更新配置，否则下次自动登录会过期
                             if let Some(new_key) = &t.auto_login_session_key {
-                                let cfg_path = eorzea_lib::auth::config_path();
-                                let mut cfg = eorzea_lib::auth::load(&cfg_path);
+                                let cfg_path = eorzea::auth::config_path();
+                                let mut cfg = eorzea::auth::load(&cfg_path);
                                 if let Some(acc) =
                                     cfg.accounts.iter_mut().find(|a| a.snda_id == t.snda_id)
                                 {
                                     acc.auto_login_session_key = Some(new_key.clone());
-                                    if let Err(e) = eorzea_lib::auth::save(&cfg_path, &cfg) {
+                                    if let Err(e) = eorzea::auth::save(&cfg_path, &cfg) {
                                         ui::fail(format!("更新 session key 失败: {e}"));
                                     }
                                 }
@@ -1138,7 +1136,7 @@ async fn cmd_launch(
     let sp = ui::Spinner::new("启动游戏进程");
     match launcher
         .launch_prepared(
-            &eorzea_lib::config::load_settings(),
+            &eorzea::config::load_settings(),
             dalamud_cfg,
             &token,
             area,
@@ -1170,7 +1168,7 @@ async fn cmd_launch(
 }
 
 /// 辅助：显示账号展示名（找不到时回退为传入的 id）。
-fn a_display(cfg: &eorzea_lib::auth::AuthConfig, id: &str) -> String {
+fn a_display(cfg: &eorzea::auth::AuthConfig, id: &str) -> String {
     cfg.find(id)
         .map(|a| a.display_name().to_string())
         .unwrap_or_else(|| id.to_string())
@@ -1183,10 +1181,8 @@ async fn check_update_status(game_path: &std::path::Path) -> Result<String, Stri
     let area = find_area(&area_id).await?;
 
     match mgr.check_update(&area, game_path, false, 5).await {
-        Ok(eorzea_lib::game_files::CheckResult::UpToDate { .. }) => {
-            Ok("游戏已是最新版本".to_string())
-        }
-        Ok(eorzea_lib::game_files::CheckResult::NeedsPatch { patches, .. }) => {
+        Ok(eorzea::game_files::CheckResult::UpToDate { .. }) => Ok("游戏已是最新版本".to_string()),
+        Ok(eorzea::game_files::CheckResult::NeedsPatch { patches, .. }) => {
             let total: u64 = patches.iter().map(|p| p.length).sum();
             Ok(format!(
                 "游戏版本落后：{} 个补丁待更新（{}），用 `eoz game update` 更新",
@@ -1194,7 +1190,7 @@ async fn check_update_status(game_path: &std::path::Path) -> Result<String, Stri
                 human_bytes(total)
             ))
         }
-        Ok(eorzea_lib::game_files::CheckResult::NeedsPatchBoot) => {
+        Ok(eorzea::game_files::CheckResult::NeedsPatchBoot) => {
             Ok("boot 需要更新（国服通常不出现）".to_string())
         }
         Err(e) => Err(e.to_string()),
@@ -1203,9 +1199,9 @@ async fn check_update_status(game_path: &std::path::Path) -> Result<String, Stri
 
 /// `dalamud status`：release 版本、本机安装、游戏版本兼容性。
 async fn cmd_dalamud_status(game_path: &std::path::Path) {
-    use eorzea_lib::dalamud::{updater, InstallState};
+    use eorzea::dalamud::{updater, InstallState};
 
-    let settings = eorzea_lib::config::load_dalamud_settings();
+    let settings = eorzea::config::load_dalamud_settings();
     let install_root = settings
         .install_root
         .clone()
@@ -1299,9 +1295,9 @@ async fn cmd_dalamud_status(game_path: &std::path::Path) {
 /// 失败显式报错退出（launch 启用 Dalamud 时同样报错不启动，除非 `--no-dalamud`），
 /// 适合提前离线就绪。
 async fn cmd_dalamud_install(game_path: &std::path::Path) {
-    use eorzea_lib::dalamud::{ensure_assets, ensure_runtime, updater};
+    use eorzea::dalamud::{ensure_assets, ensure_runtime, updater};
 
-    let settings = eorzea_lib::config::load_dalamud_settings();
+    let settings = eorzea::config::load_dalamud_settings();
     let install_root = settings
         .install_root
         .clone()
@@ -1568,7 +1564,7 @@ fn display_config_value(value: &toml::Value) -> String {
 
 /// 当前生效配置（默认值 + 文件覆盖）转成 TOML Value。
 fn effective_config_document() -> Result<toml::Value, String> {
-    let app = eorzea_lib::config::load_app_default();
+    let app = eorzea::config::load_app_default();
     let text = toml::to_string_pretty(&app).map_err(|e| format!("序列化配置失败: {e}"))?;
     toml::from_str(&text).map_err(|e| format!("解析配置失败: {e}"))
 }
@@ -1576,8 +1572,8 @@ fn effective_config_document() -> Result<toml::Value, String> {
 /// set/unset 前载入磁盘文档。先触发 legacy settings.json 迁移，避免只写一个
 /// key 时丢掉旧配置；文件解析失败时直接报错，不覆盖坏文件。
 fn load_config_document_for_write() -> Result<toml::Value, String> {
-    let _ = eorzea_lib::config::load_app_default();
-    let path = eorzea_lib::config::settings_path();
+    let _ = eorzea::config::load_app_default();
+    let path = eorzea::config::settings_path();
     match std::fs::read_to_string(&path) {
         Ok(text) => toml::from_str::<toml::Value>(&text)
             .map_err(|e| format!("{} 解析失败（未修改文件）: {e}", path.display())),
@@ -1589,7 +1585,7 @@ fn load_config_document_for_write() -> Result<toml::Value, String> {
 }
 
 fn save_config_document(doc: &toml::Value) -> Result<(), String> {
-    let path = eorzea_lib::config::settings_path();
+    let path = eorzea::config::settings_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("创建 {} 失败: {e}", parent.display()))?;
@@ -1601,7 +1597,7 @@ fn save_config_document(doc: &toml::Value) -> Result<(), String> {
 /// 写盘前用 AppConfig 完整反序列化一遍，类型/枚举错误在这里被拦下。
 fn validate_config_document(doc: &toml::Value) -> Result<(), String> {
     let text = toml::to_string(doc).map_err(|e| format!("序列化配置失败: {e}"))?;
-    toml::from_str::<eorzea_lib::config::AppConfig>(&text)
+    toml::from_str::<eorzea::config::AppConfig>(&text)
         .map(|_| ())
         .map_err(|e| format!("配置校验失败（未写盘）: {e}"))
 }
@@ -1653,13 +1649,12 @@ fn cmd_config(sub: ConfigCommand) {
             }
         }
         // list 输出完整 TOML，保持原文（可重定向保存）
-        ConfigCommand::List {} => {
-            match toml::to_string_pretty(&eorzea_lib::config::load_app_default()) {
-                Ok(text) => ui::line(text.trim_end()),
-                Err(e) => die(format!("序列化配置失败: {e}")),
-            }
-        }
-        ConfigCommand::Path {} => ui::line(eorzea_lib::config::settings_path().display()),
+        ConfigCommand::List {} => match toml::to_string_pretty(&eorzea::config::load_app_default())
+        {
+            Ok(text) => ui::line(text.trim_end()),
+            Err(e) => die(format!("序列化配置失败: {e}")),
+        },
+        ConfigCommand::Path {} => ui::line(eorzea::config::settings_path().display()),
     }
 }
 

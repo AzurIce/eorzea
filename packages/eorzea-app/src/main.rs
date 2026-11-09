@@ -1,7 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-// UI 组件在本 crate（`eorzea_app`）；核心逻辑在 lib（`eorzea_lib`）。
+// UI 组件在本 crate（`eorzea_app`）；核心逻辑在 lib（`eorzea`）。
 // 这里只做平台入口分发：
 // - 桌面：dioxus-native（Blitz 渲染）
 // - wasm：dioxus web（`dx serve --platform web` 浏览器调试）

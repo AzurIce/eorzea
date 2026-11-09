@@ -13,9 +13,9 @@
 use tracing::{error, info};
 
 #[cfg(not(target_os = "windows"))]
-use eorzea_lib::config::{WineSettings, WineStartupType};
+use eorzea::config::{WineSettings, WineStartupType};
 #[cfg(not(target_os = "windows"))]
-use eorzea_lib::wine::WineTool;
+use eorzea::wine::WineTool;
 
 #[cfg(not(target_os = "windows"))]
 #[tokio::main]
@@ -50,7 +50,7 @@ async fn main() {
 
             // 展示将传给子进程的环境变量
             info!("Launch env:");
-            for (k, v) in eorzea_lib::wine::build_launch_env(&settings, &tool) {
+            for (k, v) in eorzea::wine::build_launch_env(&settings, &tool) {
                 info!("  {k}={v}");
             }
         }

@@ -20,11 +20,11 @@ use std::sync::Arc;
 
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
+use eorzea::auth::{self, AuthConfig};
+use eorzea::config::{self, WineSettings};
+use eorzea::dalamud::model::DalamudSettings;
+use eorzea::launcher::{LaunchToken, Launcher};
 use eorzea_auth::SdoArea;
-use eorzea_lib::auth::{self, AuthConfig};
-use eorzea_lib::config::{self, WineSettings};
-use eorzea_lib::dalamud::model::DalamudSettings;
-use eorzea_lib::launcher::{LaunchToken, Launcher};
 
 /// 侧边栏页面。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

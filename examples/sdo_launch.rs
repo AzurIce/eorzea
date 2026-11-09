@@ -1,5 +1,5 @@
+use eorzea::launcher::Launcher;
 use eorzea_auth::sdo::SdoAuth;
-use eorzea_lib::launcher::Launcher;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
