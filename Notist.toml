@@ -1,0 +1,18 @@
+[package]
+name = "eorzea"
+
+[site]
+title = "eorzea 配置手册"
+content = "book"
+templates = "book/templates"
+static_dir = "book/static"
+data = "book/data"
+sass = "book/sass"
+theme = "builtins.book"
+directory_urls = true
+copy_content_assets = false
+include = ["config.not", "auth.not"]
+output = "target/book"
+
+[site.extensions.builtins.book]
+select = true

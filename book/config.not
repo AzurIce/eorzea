@@ -1,0 +1,134 @@
+= config.toml：启动器配置
+
+GUI 与 CLI（`eoz`）共用 `~/.eorzea/config.toml`。Windows 上路径为 `C:\Users\<用户>\.eorzea\config.toml`。账号与自动登录凭据不在这里，见 [auth.toml](auth.not)。
+
+== 读写与默认值
+
+- 首次读取时，若没有配置或可迁移的旧文件，会创建只有注释的模板；默认值由程序提供。
+- 缺少字段使用对应默认值。可选字段的“未设置”表示省略该键，不是空字符串，也不是 TOML 中的 null。
+- 文件无法读取时回退整份默认配置；TOML 解析失败时记录警告，同样回退整份默认配置。
+- GUI 保存或 `eoz config set` 会重写文件，不保留注释。手改后重启 GUI，以免内存中的旧配置覆盖修改。
+- 新文件不存在时，会尝试迁移 `~/.eorzea/settings.json`；旧文件保留。
+- 路径建议使用绝对路径，不要依赖字符串中的 `~` 展开。Windows 路径推荐写成 `"G:/FF14"`，避免反斜杠转义。
+
+```sh
+eoz config path
+eoz config list
+eoz config get game_path
+eoz config set game_path /games/ffxiv
+eoz config set dxvk.hud fps
+eoz config unset dxvk.hud
+```
+
+== 游戏与大区
+
+| 字段 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `game_path` | 路径字符串，可选 | 未设置 | 游戏根目录，包含 boot/、game/、sdo/。CLI 的 --game-path 可单次覆盖。 |
+| `area` | 字符串，可选 | 未设置 | *旧版全局默认大区*（名称，如 "陆行鸟"；也兼容旧数字 ID）。默认大区现在按账号保存在 auth.toml；仅在该账号没有 area 时回退到这里，GUI 不再编辑。CLI 的 --area 仍可单次覆盖。 |
+
+大区解析顺序为：--area（名称）→ 账号的 area（名称）→ 这里的 area → 大区列表第一个。不同大区使用不同的补丁服务器，隐式选择会打印提示。
+
+
+== Wine（仅 Linux / macOS）
+
+Wine 字段直接平铺在顶层，*没有 [wine] 表*。Windows 原生启动不使用这些字段，读取时忽略，保存时移除；Windows 的 CLI 也不接受这些配置键。
+
+| 字段 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `startup_type` | 字符串枚举 | "auto" | Wine 来源，见下文。 |
+| `custom_path` | 路径字符串，可选 | 未设置 | 自定义 Wine 路径。custom 模式接受可执行文件、含 wine64/wine 的目录，或其上一级安装目录（搜索 bin/）。auto 模式应直接提供可执行文件路径。 |
+| `prefix` | 路径字符串，可选 | 未设置 | 未设置时使用 ~/.eorzea/prefix，作为 WINEPREFIX。与 Wine 来源独立，不按账号或版本自动分配。 |
+| `esync` | 布尔值 | false | 开启时设置 WINEESYNC=1。 |
+| `fsync` | 布尔值 | false | 开启时设置 WINEFSYNC=1。 |
+| `msync` | 布尔值 | false | 开启时设置 WINEMSYNC=1，仅 macOS 生效。 |
+| `debug_vars` | 字符串，可选 | 未设置 | WINEDEBUG，例如 "+seh" 或 "-all"。 |
+| `gamemode` | 布尔值 | false | 仅 Linux 生效，开启时向 LD_PRELOAD 追加 libgamemodeauto.so.0；其他平台忽略。 |
+
+=== startup_type 的取值
+
+- `auto`：依次尝试 custom_path、XIVLauncher 已有的 Wine、系统 PATH 中的 wine64/wine；都没有时复用本项目已下载的 Wine，或下载。
+- `managed`：优先复用 ~/.xlcore/beta/wine/bin/wine64，再尝试 ~/.eorzea/tools/wine/bin/wine64，最后下载。
+- `custom`：必须设置 custom_path；找不到文件或目录下没有 Wine 时报错，不回退系统 Wine。
+- `system`：只找系统 PATH，优先 wine64，回退 wine；找不到时报错。
+
+托管 Wine 下载到 `~/.eorzea/tools/wine/`。下载版本与地址由代码固定，目前没有多版本安装列表或自动升级设置。
+
+*Prefix 数据安全：当前实现会删除并重建 32 位或无法识别架构的 prefix。* 请使用专用目录，不要将 prefix 指向已有重要数据的共享环境。缺少 prefix 时会创建 64 位环境。
+
+== DXVK（仅 Linux / macOS）
+
+| 字段 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `dxvk.enabled` | 布尔值 | true | 自动安装并使用 DXVK，配置 Direct3D DLL 的 native override；关闭时改用 Wine builtin（wined3d）。 |
+| `dxvk.hud` | 字符串，可选 | 未设置 | DXVK_HUD，例如 "fps"、"full"、"0"。 |
+| `dxvk.frame_limit` | u32，可选 | 未设置 | DXVK_FRAME_RATE 帧率上限；未设置时不由此配置限制。 |
+
+== 自定义环境变量（仅 Linux / macOS）
+
+`[env]` 是字符串到字符串的映射，默认为空。所有值都需要写成字符串。环境变量最后应用，可以覆盖程序生成的 WINEPREFIX、WINEDEBUG、DXVK 变量及 DLL overrides。覆盖 WINEDLLOVERRIDES 时需自行保留需要的其他项。
+
+```toml
+[env]
+WINEDEBUG = "-all"
+```
+
+== Dalamud
+
+所有平台均支持 `[dalamud]`。
+
+| 字段 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `dalamud.enabled` | 布尔值 | false | 启用 Dalamud；CLI --dalamud / --no-dalamud 或 GUI 主页开关可单次覆盖。 |
+| `dalamud.load_method` | 字符串枚举 | "entrypoint" | entrypoint：入口点改写；dllinject：远程 DLL 注入；aclonly：只做兼容修复，不加载 Dalamud。 |
+| `dalamud.delay_initialize_ms` | u32 | 0 | 注入后延迟初始化的毫秒数。 |
+| `dalamud.no_plugins` | 布尔值 | false | 安全模式，禁用全部插件。 |
+| `dalamud.no_third_party_plugins` | 布尔值 | false | 只禁用第三方插件。 |
+| `dalamud.manage_runtime` | 布尔值 | false | 强制由启动器托管 Windows x64 .NET runtime；release 声明需要 runtime 时，即使 false 也会自动准备。 |
+| `dalamud.track` | 字符串 | "release" | 更新通道：release、staging 或自定义通道。 |
+| `dalamud.beta_key` | 字符串，可选 | 未设置 | staging 的 beta key，属于敏感信息。 |
+| `dalamud.install_root` | 路径字符串，可选 | 未设置 | 安装根目录；未设置时使用 ~/.eorzea/dalamud。 |
+
+启用 Dalamud 后，元数据获取失败、游戏版本不兼容、下载或校验失败、runtime/assets 不完整都会阻止游戏启动；不会静默回退为无插件启动。排障时请显式关闭 Dalamud。
+
+== Linux / macOS 示例
+
+这是显式配置示例，不是首次运行生成的模板。可按需删除字段以恢复程序默认值。
+
+```toml
+game_path = "/games/ffxiv"
+startup_type = "custom"
+custom_path = "/opt/wine/bin/wine"
+prefix = "/home/yourname/.eorzea/prefix"
+esync = true
+fsync = true
+msync = false
+gamemode = false
+debug_vars = "-all"
+
+[dxvk]
+enabled = true
+hud = "fps"
+frame_limit = 120
+
+[env]
+WINEDEBUG = "-all"
+
+[dalamud]
+enabled = false
+load_method = "entrypoint"
+delay_initialize_ms = 0
+no_plugins = false
+no_third_party_plugins = false
+manage_runtime = false
+track = "release"
+```
+
+== Windows 示例
+
+```toml
+game_path = "G:/FF14"
+
+[dalamud]
+enabled = false
+```

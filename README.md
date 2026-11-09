@@ -53,6 +53,7 @@ eoz launch
 
 ## 文档
 
+- 配置手册（Notist）：[`book/config.not`](book/config.not)、[`book/auth.not`](book/auth.not)
 - 日常使用与 CLI：[`docs/cli.md`](docs/cli.md)
 - 配置字段：[`docs/config.md`](docs/config.md)
 - Wine/DXVK 细节与排错：[`docs/wine.md`](docs/wine.md)
@@ -61,6 +62,14 @@ eoz launch
 - 开发笔记（登录协议、C# 对照分析等）：[`docs/notes/`](docs/notes/)
 
 ## 开发
+
+Notist 已加入 flake 开发环境。构建或预览配置手册：
+
+```bash
+nix develop
+notist build   # 输出到 target/book/
+notist serve   # 本地预览，监听文档变化
+```
 
 ```bash
 cargo check                      # 默认成员（CLI + 核心库），不编译 GUI

@@ -14,6 +14,13 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     crane.url = "github:ipetkov/crane";
+    notist = {
+      url = "github:AzurIce/notist";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-utils.follows = "flake-utils";
+      inputs.crane.follows = "crane";
+      # 保留 Notist 自己的 rust-overlay：项目的旧锁中没有它固定的 nightly。
+    };
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -24,6 +31,7 @@
     {
       nixpkgs,
       crane,
+      notist,
       rust-overlay,
       flake-utils,
       ...
@@ -142,11 +150,12 @@
         runtimeLibs = lib.optionals pkgs.stdenv.hostPlatform.isLinux (guiSystemLibs ++ wineLibs);
       in
       {
-        packages = { };
+        packages.notist = notist.packages.${system}.default;
         devShells.default = craneLib.devShell {
           packages =
             with pkgs; [
               dioxusCli # dx 命令行（覆盖到 0.7.10，匹配 dioxus 0.7.10）
+              notist.packages.${system}.default
               gh
               pkg-config
             ];
