@@ -3,7 +3,7 @@
 //! 移植自 C# `RemotePatchInstaller.InstallPatch()` + 各 chunk 的 `ApplyChunk()`。
 //! 将解析出的 chunk 序列应用到游戏目录（`game/` 或 `boot/` 子目录）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
@@ -23,6 +23,7 @@ pub struct ApplyContext {
     pub store: HashMap<PathBuf, std::fs::File>,
     /// 已应用的文件数（进度用）。
     pub files_written: u64,
+    dirty_dirs: HashSet<PathBuf>,
 }
 
 impl ApplyContext {
@@ -32,12 +33,14 @@ impl ApplyContext {
             platform: Platform::Win32,
             store: HashMap::new(),
             files_written: 0,
+            dirty_dirs: HashSet::new(),
         }
     }
 
     /// 打开（或复用缓存的）目标文件，OpenOrCreate + ReadWrite。
     fn open_stream(&mut self, relative: &str) -> Result<&mut std::fs::File, ZiPatchError> {
         let path = self.base_dir.join(normalize_path(relative));
+        self.track_parent_dirs(&path);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| ZiPatchError::Io {
                 path: parent.display().to_string(),
@@ -60,10 +63,39 @@ impl ApplyContext {
         Ok(self.store.get_mut(&path).expect("stream just inserted"))
     }
 
-    fn flush_all(&mut self) {
+    /// 显式提交数据；只有成功返回后才允许推进仓库版本。
+    pub fn sync_all(&mut self) -> Result<(), ZiPatchError> {
         for (path, file) in self.store.iter_mut() {
-            if let Err(e) = file.flush() {
-                warn!(path = %path.display(), error = %e, "failed to flush file");
+            file.sync_all().map_err(|source| ZiPatchError::Io {
+                path: path.display().to_string(),
+                source,
+            })?;
+        }
+        #[cfg(unix)]
+        {
+            let mut dirs: Vec<_> = self.dirty_dirs.iter().collect();
+            dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+            for path in dirs {
+                match std::fs::File::open(path).and_then(|f| f.sync_all()) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(source) => {
+                        return Err(ZiPatchError::Io {
+                            path: path.display().to_string(),
+                            source,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn track_parent_dirs(&mut self, path: &Path) {
+        for dir in path.ancestors().skip(1) {
+            self.dirty_dirs.insert(dir.to_path_buf());
+            if !dir.starts_with(&self.base_dir) {
+                break;
             }
         }
     }
@@ -160,29 +192,31 @@ impl ApplyContext {
     }
 
     /// 删除文件（带重试，对应 C# `SqexFile.Delete`）。
-    fn delete_file(&self, relative: &str) {
+    fn delete_file(&mut self, relative: &str) -> Result<(), ZiPatchError> {
         let path = self.base_dir.join(normalize_path(relative));
-        if !path.exists() {
-            return;
-        }
+        self.track_parent_dirs(&path);
+        self.store.remove(&path);
         for attempt in 0..5 {
             match std::fs::remove_file(&path) {
-                Ok(()) => return,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+                Ok(()) => return Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
                 Err(e) if attempt < 4 => {
                     warn!(path = %path.display(), error = %e, attempt, "delete failed, retrying");
                     std::thread::sleep(std::time::Duration::from_secs(1));
                 }
                 Err(e) => {
-                    warn!(path = %path.display(), error = %e, "delete failed");
-                    return;
+                    return Err(ZiPatchError::Io {
+                        path: path.display().to_string(),
+                        source: e,
+                    });
                 }
             }
         }
+        unreachable!("delete retry loop always returns")
     }
 
     /// 删除某资料片的全部文件（对应 C# `SqpkFile` RemoveAll）。
-    fn remove_all_expansion_files(&self, expansion_id: u16) {
+    fn remove_all_expansion_files(&mut self, expansion_id: u16) -> Result<(), ZiPatchError> {
         let folder = if expansion_id == 0 {
             "ffxiv".to_string()
         } else {
@@ -190,22 +224,47 @@ impl ApplyContext {
         };
         for sub in ["sqpack", "movie"] {
             let dir = self.base_dir.join(sub).join(&folder);
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(source) => {
+                    return Err(ZiPatchError::Io {
+                        path: dir.display().to_string(),
+                        source,
+                    });
+                }
             };
-            for entry in entries.flatten() {
+            for entry in entries {
+                let entry = entry.map_err(|source| ZiPatchError::Io {
+                    path: dir.display().to_string(),
+                    source,
+                })?;
                 let name = entry.file_name().to_string_lossy().to_string();
                 let keep = name.ends_with(".var")
                     || name.ends_with("00000.bk2")
                     || name.ends_with("00001.bk2")
                     || name.ends_with("00002.bk2")
                     || name.ends_with("00003.bk2");
-                if !keep && entry.path().is_file() {
+                let is_file = entry
+                    .file_type()
+                    .map_err(|source| ZiPatchError::Io {
+                        path: entry.path().display().to_string(),
+                        source,
+                    })?
+                    .is_file();
+                if !keep && is_file {
                     debug!(path = %entry.path().display(), "removing file");
-                    let _ = std::fs::remove_file(entry.path());
+                    let relative = entry
+                        .path()
+                        .strip_prefix(&self.base_dir)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    self.delete_file(&relative)?;
                 }
             }
         }
+        Ok(())
     }
 
     /// 应用单个 chunk。
@@ -214,6 +273,7 @@ impl ApplyContext {
             ZiPatchChunk::Sqpk(cmd) => self.apply_sqpk(cmd),
             ZiPatchChunk::AddDirectory(dir) => {
                 let path = self.base_dir.join(normalize_path(dir));
+                self.track_parent_dirs(&path.join("."));
                 std::fs::create_dir_all(&path).map_err(|e| ZiPatchError::Io {
                     path: path.display().to_string(),
                     source: e,
@@ -222,6 +282,8 @@ impl ApplyContext {
             }
             ZiPatchChunk::DeleteDirectory(dir) => {
                 let path = self.base_dir.join(normalize_path(dir));
+                self.track_parent_dirs(&path);
+                self.store.retain(|file, _| !file.starts_with(&path));
                 match std::fs::remove_dir_all(&path) {
                     Ok(()) => Ok(()),
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -278,16 +340,15 @@ impl ApplyContext {
                         _ => unreachable!(),
                     };
                     info!(expansion = expansion_id, "applying SqpkFile RemoveAll");
-                    self.remove_all_expansion_files(expansion_id);
-                    Ok(())
+                    self.remove_all_expansion_files(expansion_id)
                 }
                 FileOperation::DeleteFile => {
                     info!(file = %target_path, "applying SqpkFile DeleteFile");
-                    self.delete_file(target_path);
-                    Ok(())
+                    self.delete_file(target_path)
                 }
                 FileOperation::MakeDirTree => {
                     let path = self.base_dir.join(normalize_path(target_path));
+                    self.track_parent_dirs(&path.join("."));
                     std::fs::create_dir_all(&path).map_err(|e| ZiPatchError::Io {
                         path: path.display().to_string(),
                         source: e,
@@ -387,12 +448,6 @@ impl ApplyContext {
     }
 }
 
-impl Drop for ApplyContext {
-    fn drop(&mut self) {
-        self.flush_all();
-    }
-}
-
 /// 将 ZiPatch 补丁文件应用到 `base_dir`（`game_root/boot` 或 `game_root/game`）。
 pub fn apply_patch_file(patch_path: &Path, base_dir: &Path) -> Result<ApplyContext, ZiPatchError> {
     apply_patch_file_with_progress(patch_path, base_dir, |_, _| {})
@@ -437,7 +492,7 @@ pub fn apply_patch_file_with_progress(
 
     loop {
         let Some((chunk, consumed)) = super::read_chunk(&mut reader)? else {
-            break;
+            return Err(ZiPatchError::UnexpectedEof);
         };
         let is_eof = matches!(chunk, ZiPatchChunk::EndOfFile);
         ctx.apply_chunk(&chunk)?;
@@ -448,7 +503,7 @@ pub fn apply_patch_file_with_progress(
         }
     }
 
-    ctx.flush_all();
+    ctx.sync_all()?;
     on_progress(total, total);
     Ok(ctx)
 }
@@ -467,6 +522,86 @@ fn map_read_error(path: &Path, error: std::io::Error) -> ZiPatchError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn add_file(path: &str, bytes: &[u8]) -> ZiPatchChunk {
+        ZiPatchChunk::Sqpk(SqpkCommand::File {
+            operation: FileOperation::AddFile,
+            file_offset: 0,
+            file_size: bytes.len() as i64,
+            expansion_id: 1,
+            target_path: path.into(),
+            blocks: vec![super::super::CompressedBlock {
+                header_size: 16,
+                compressed_size: 0x7d00,
+                decompressed_size: bytes.len() as i32,
+                data: bytes.into(),
+            }],
+        })
+    }
+
+    #[test]
+    fn delete_and_recreate_invalidates_cached_file_and_directory_handles() {
+        let root =
+            std::env::temp_dir().join(format!("eorzea-zpatch-recreate-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut ctx = ApplyContext::new(&root);
+        ctx.apply_chunk(&add_file("dir/file", b"old")).unwrap();
+        ctx.apply_chunk(&ZiPatchChunk::Sqpk(SqpkCommand::File {
+            operation: FileOperation::DeleteFile,
+            file_offset: 0,
+            file_size: 0,
+            expansion_id: 1,
+            target_path: "dir/file".into(),
+            blocks: vec![],
+        }))
+        .unwrap();
+        ctx.apply_chunk(&add_file("dir/file", b"new")).unwrap();
+        ctx.sync_all().unwrap();
+        assert_eq!(std::fs::read(root.join("dir/file")).unwrap(), b"new");
+        ctx.apply_chunk(&ZiPatchChunk::DeleteDirectory("dir".into()))
+            .unwrap();
+        ctx.apply_chunk(&add_file("dir/file", b"recreated"))
+            .unwrap();
+        ctx.sync_all().unwrap();
+        drop(ctx);
+        assert_eq!(std::fs::read(root.join("dir/file")).unwrap(), b"recreated");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn remove_all_then_replay_recreates_files_even_after_version_files_are_removed() {
+        let root =
+            std::env::temp_dir().join(format!("eorzea-zpatch-replay-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("sqpack/ex1")).unwrap();
+        std::fs::write(root.join("sqpack/ex1/ex1.ver"), b"previous").unwrap();
+        let reset = ZiPatchChunk::Sqpk(SqpkCommand::File {
+            operation: FileOperation::RemoveAll,
+            file_offset: 0,
+            file_size: 0,
+            expansion_id: 1,
+            target_path: String::new(),
+            blocks: vec![],
+        });
+        let mut ctx = ApplyContext::new(&root);
+        ctx.apply_chunk(&add_file("sqpack/ex1/data", b"old"))
+            .unwrap();
+        ctx.apply_chunk(&reset).unwrap();
+        assert!(!root.join("sqpack/ex1/ex1.ver").exists());
+        ctx.apply_chunk(&add_file("sqpack/ex1/data", b"part"))
+            .unwrap();
+        drop(ctx); // 模拟中断，重启必须新建上下文。
+        let mut ctx = ApplyContext::new(&root);
+        ctx.apply_chunk(&reset).unwrap();
+        ctx.apply_chunk(&add_file("sqpack/ex1/data", b"complete"))
+            .unwrap();
+        ctx.sync_all().unwrap();
+        drop(ctx);
+        assert_eq!(
+            std::fs::read(root.join("sqpack/ex1/data")).unwrap(),
+            b"complete"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn test_apply_adddata_empty_block_header() {

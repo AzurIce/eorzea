@@ -45,7 +45,7 @@ pub enum PatchPhase {
 }
 
 /// 单个正在处理的补丁。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatchProgress {
     /// 在补丁列表中的稳定下标，CLI 用它区分同一个子进度条。
     pub index: usize,
@@ -64,7 +64,7 @@ pub struct PatchProgress {
 /// 下载进度快照。
 ///
 /// `done` 包含：已完成/跳过文件的全部字节 + 当前在途文件已写入的字节。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DownloadProgress {
     pub done: u64,
     pub total: u64,
@@ -77,7 +77,7 @@ pub struct DownloadProgress {
 }
 
 #[derive(Debug)]
-struct ProgressState {
+pub(super) struct ProgressState {
     total: u64,
     completed_bytes: u64,
     completed: usize,
@@ -86,7 +86,12 @@ struct ProgressState {
 }
 
 impl ProgressState {
-    fn new(total: u64) -> Self {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn resume(&mut self, patches: &[PatchListEntry]) {
+        self.completed_bytes = patches.iter().map(|p| p.length).sum();
+        self.completed = patches.len();
+    }
+    pub(super) fn new(total: u64) -> Self {
         Self {
             total,
             completed_bytes: 0,
@@ -96,7 +101,7 @@ impl ProgressState {
         }
     }
 
-    fn snapshot(&self) -> DownloadProgress {
+    pub(super) fn snapshot(&self) -> DownloadProgress {
         let in_flight: u64 = self.active.values().map(|p| p.done).sum();
         DownloadProgress {
             done: (self.completed_bytes + in_flight).min(self.total),
@@ -434,6 +439,19 @@ pub async fn download_patches(
 /// 下载单个补丁（原生）。
 ///
 /// 返回 `(Some(本次写入字节数), 文件路径)`；若文件已存在且校验通过则返回 `(None, 路径)`。
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) async fn download_for_update(
+    client: reqwest::Client,
+    entry: PatchListEntry,
+    dest_dir: PathBuf,
+    index: usize,
+    state: Arc<Mutex<ProgressState>>,
+    permit: OwnedSemaphorePermit,
+    semaphore: Arc<Semaphore>,
+) -> Result<(Option<u64>, PathBuf), PatchDownloadError> {
+    download_one(&client, &entry, &dest_dir, index, &state, permit, semaphore).await
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 async fn download_one(
     client: &reqwest::Client,

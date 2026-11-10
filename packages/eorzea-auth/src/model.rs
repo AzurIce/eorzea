@@ -89,7 +89,7 @@ pub struct LoginResult {
 ///
 /// 对应 C# `PatchListEntry`：TSV 补丁列表的一行。
 /// 9 字段行（游戏补丁）带 hash 信息，6 字段行（boot 补丁）只有 `url`。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PatchListEntry {
     /// 补丁后的目标版本（`VersionId`）。
     pub version: String,

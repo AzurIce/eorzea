@@ -24,7 +24,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use console::style;
-use eorzea::game_files::{default_patch_dir, version, GameFileManager};
+use eorzea::game_files::{GameFileManager, default_patch_dir, version};
 use eorzea::launcher::{Launcher, LauncherError};
 use eorzea::term_img;
 use eorzea_auth::sdo::SdoAuth;
@@ -431,10 +431,9 @@ async fn main() {
                 concurrency,
             } => {
                 let game_path = game_path_or_config(game_path);
-                let area = resolve_area(area, None).await;
                 cmd_update(
                     &game_path,
-                    &area,
+                    area,
                     max_expansion,
                     repair,
                     patch_dir,
@@ -578,15 +577,33 @@ async fn cmd_check(game_path: &std::path::Path, area_id: &str, max_expansion: i3
 
 async fn cmd_update(
     game_path: &std::path::Path,
-    area_id: &str,
+    area: Option<String>,
     max_expansion: i32,
     repair: bool,
     patch_dir: Option<PathBuf>,
     concurrency: usize,
 ) {
     let mgr = GameFileManager::new();
+    match mgr.pending_update(game_path).await {
+        Ok(Some(pending)) => {
+            banner(format!("恢复未完成的更新  {}", game_path.display()));
+            run_update_queue(
+                &mgr,
+                &pending.patches,
+                &pending.patch_dir,
+                game_path,
+                concurrency,
+            )
+            .await;
+            hint("原更新队列已完成；可再次检查服务端是否有更新");
+            return;
+        }
+        Ok(None) => {}
+        Err(e) => die(format!("读取更新队列失败: {e}")),
+    }
+    let area_id = resolve_area(area, None).await;
     let sp = ui::Spinner::new("解析大区 / 获取服务器列表");
-    let area = match find_area(area_id).await {
+    let area = match find_area(&area_id).await {
         Ok(a) => {
             sp.clear();
             a
@@ -623,50 +640,39 @@ async fn cmd_update(
         eorzea::game_files::CheckResult::NeedsPatchBoot => die("boot 需要更新（国服通常不会出现）"),
     };
 
+    run_update_queue(&mgr, &patches, &patch_dir, game_path, concurrency).await;
+}
+
+async fn run_update_queue(
+    mgr: &GameFileManager,
+    patches: &[eorzea_auth::PatchListEntry],
+    patch_dir: &std::path::Path,
+    game_path: &std::path::Path,
+    concurrency: usize,
+) {
     let total: u64 = patches.iter().map(|p| p.length).sum();
     kv(
-        "待下载",
+        "待更新",
         format!("{} 个补丁，共 {}", patches.len(), human_bytes(total)),
     );
     kv("暂存目录", patch_dir.display());
+    hint("并发下载、按序应用；已应用补丁提交后立即删除");
 
     let start = std::time::Instant::now();
-    let mut view = ui::DownloadView::new("下载补丁");
+    let mut view = ui::UpdateView::new();
     match mgr
-        .download(&patches, &patch_dir, concurrency, |progress| {
+        .update(patches, patch_dir, game_path, concurrency, |progress| {
             view.update(&progress)
         })
         .await
     {
         Ok(summary) => {
             view.finish(format!(
-                "下载完成：{} 个新下载 / {} 个已存在跳过，用时 {:.1}s",
-                summary.downloaded.len(),
-                summary.skipped,
+                "更新完成：{} 个补丁已应用并清理，用时 {:.1}s",
+                summary.installed.len(),
                 start.elapsed().as_secs_f64()
             ));
-            let mut install_view = ui::InstallView::new("应用补丁");
-            match mgr
-                .install_verified(&patches, &patch_dir, game_path, |progress| {
-                    install_view.update(&progress)
-                })
-                .await
-            {
-                Ok(install_summary) => {
-                    let installed = install_summary.installed.len();
-                    install_view.finish(format!(
-                        "安装完成：{installed} 个补丁已应用 / {} 个跳过（缺文件）",
-                        install_summary.skipped
-                    ));
-                    if installed > 0 {
-                        hint("版本文件已同步；用 `eoz game status` 确认");
-                    }
-                }
-                Err(e) => {
-                    install_view.fail(e.to_string());
-                    std::process::exit(1);
-                }
-            }
+            hint("版本文件已同步；用 `eoz game status` 确认");
         }
         Err(e) => {
             view.fail(e.to_string());
@@ -677,7 +683,7 @@ async fn cmd_update(
 
 /// `game verify`：校验游戏文件完整性 + 版本状态。
 async fn cmd_verify(game_path: &std::path::Path) {
-    use eorzea::game_files::verify::{verify_game, IssueSeverity};
+    use eorzea::game_files::verify::{IssueSeverity, verify_game};
 
     banner(format!("校验游戏文件  {}", game_path.display()));
     let sp = ui::Spinner::new("扫描 SQPack 索引与文件大小");
@@ -983,6 +989,9 @@ async fn cmd_launch(
     wine: Option<&std::path::Path>,
     dalamud_override: Option<bool>,
 ) {
+    if eorzea::game_files::update::has_pending_update(game_path) {
+        die("游戏有未完成的更新，请先运行 `eoz game update` 恢复队列");
+    }
     // 先定位游戏 + 解析大区 + 准备 Dalamud，再登录：
     // - 大区名称写错时不必先消耗掉一次性 session key
     // - 启用 Dalamud 时准备失败要立刻报错退出，同样发生在换取 SSO ticket 之前
@@ -1199,7 +1208,7 @@ async fn check_update_status(game_path: &std::path::Path) -> Result<String, Stri
 
 /// `dalamud status`：release 版本、本机安装、游戏版本兼容性。
 async fn cmd_dalamud_status(game_path: &std::path::Path) {
-    use eorzea::dalamud::{updater, InstallState};
+    use eorzea::dalamud::{InstallState, updater};
 
     let settings = eorzea::config::load_dalamud_settings();
     let install_root = settings

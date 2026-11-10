@@ -58,6 +58,10 @@ pub struct AppState {
     pub status: Signal<String>,
     /// 启动流程进行中（全局：切换页面后按钮仍保持加载状态）。
     pub launching: Signal<bool>,
+    /// 更新任务与进度属于根组件，切换页面不会取消或重置。
+    pub update_state: Signal<home::UpdateState>,
+    pub update_patches: Signal<Vec<eorzea_auth::PatchListEntry>>,
+    pub update_progress: Signal<Option<eorzea::game_files::UpdateProgress>>,
     /// 应用内日志（`tracing` INFO 及以上，最新在末尾）。
     pub logs: Signal<Vec<crate::logging::LogEntry>>,
     /// 当前展开的下拉框 id（全局同时只允许一个展开；None = 全部收起）。
@@ -138,6 +142,9 @@ pub fn app() -> Element {
         selected_area: use_signal(|| None),
         status: use_signal(String::new),
         launching: use_signal(|| false),
+        update_state: use_signal(|| home::UpdateState::Idle),
+        update_patches: use_signal(Vec::new),
+        update_progress: use_signal(|| None),
         logs: use_signal(Vec::new),
         open_dropdown: use_signal(|| None),
         adding_account: use_signal(|| false),

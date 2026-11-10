@@ -2,13 +2,15 @@
 
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
-use eorzea_auth::PatchListEntry;
 
 use crate::logging::LogLevel;
 #[cfg(not(target_os = "windows"))]
 use eorzea::config::WineStartupType;
 use eorzea::dalamud::{DalamudStatus, InstallState, updater};
-use eorzea::game_files::{CheckResult, GameFileManager, default_patch_dir};
+use eorzea::game_files::patch_manager::PatchPhase;
+use eorzea::game_files::{
+    CheckResult, GameFileManager, InstallPhase, UpdateProgress, default_patch_dir,
+};
 #[cfg(not(target_os = "windows"))]
 use eorzea::wine::WineTool;
 
@@ -17,25 +19,20 @@ use super::settings::Checkbox;
 use super::{AppState, Dropdown};
 
 /// 更新流程状态机。
-enum UpdateState {
+pub(crate) enum UpdateState {
     Idle,
     Checking,
     UpToDate,
     /// 有 N 个补丁待下载。
     NeedsPatch(usize),
-    /// 下载中（已下载字节, 总字节）。
-    Downloading(u64, u64),
-    Installing,
+    Running,
     Done(String),
     Failed(String),
 }
 
 impl UpdateState {
-    fn is_busy(&self) -> bool {
-        matches!(
-            self,
-            UpdateState::Checking | UpdateState::Downloading(..) | UpdateState::Installing
-        )
+    pub(super) fn is_busy(&self) -> bool {
+        matches!(self, UpdateState::Checking | UpdateState::Running)
     }
 }
 
@@ -43,8 +40,8 @@ impl UpdateState {
 pub fn HomePage() -> Element {
     let mut state = use_context::<AppState>();
     let t = (state.theme)();
-    let mut update_state = use_signal(|| UpdateState::Idle);
-    let mut patches = use_signal(Vec::<PatchListEntry>::new);
+    let mut update_state = state.update_state;
+    let mut patches = state.update_patches;
     // 全局信号：切到别的页面再回来，按钮仍保持「启动中…」。
     let mut launching = state.launching;
     // 「本次启动加载 Dalamud」的会话内覆盖，不写回 config.toml。
@@ -73,8 +70,17 @@ pub fn HomePage() -> Element {
     });
 
     let game_root = state.game_path.read().clone();
+    let installed_checkpoint = use_memo(move || {
+        state
+            .update_progress
+            .read()
+            .as_ref()
+            .map(|p| p.install.completed)
+            .unwrap_or(0)
+    });
     // 本地版本（本地文件读取，随 game_path 变化重算）；只取展示用的 boot/game 版本
     let versions = use_memo(move || {
+        let _ = installed_checkpoint();
         state.game_path.read().clone().map(|p| {
             let v = GameFileManager::new().status(&p);
             (v.boot, v.ffxiv)
@@ -87,13 +93,37 @@ pub fn HomePage() -> Element {
             state.status.set("更新任务进行中，请等待完成".into());
             return;
         }
-        let (Some(root), Some(area)) = (game_root.clone(), selected_area(&state)) else {
-            state.status.set("请先设置游戏目录并选择大区".into());
+        if launching() {
+            return;
+        }
+        let Some(root) = game_root.clone() else {
+            state.status.set("请先设置游戏目录".into());
             return;
         };
         update_state.set(UpdateState::Checking);
-        spawn(async move {
+        state.update_progress.set(None);
+        spawn_forever(async move {
             let mgr = GameFileManager::new();
+            match mgr.pending_update(&root).await {
+                Ok(Some(pending)) => {
+                    let n = pending.patches.len();
+                    patches.set(pending.patches);
+                    update_state.set(UpdateState::NeedsPatch(n));
+                    state
+                        .status
+                        .set("发现未完成更新，点击更新游戏恢复原队列".into());
+                    return;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    update_state.set(UpdateState::Failed(e.to_string()));
+                    return;
+                }
+            }
+            let Some(area) = selected_area(&state) else {
+                update_state.set(UpdateState::Failed("请先选择大区".into()));
+                return;
+            };
             match mgr.check_update(&area, &root, false, 5).await {
                 Ok(CheckResult::UpToDate { .. }) => {
                     patches.set(Vec::new());
@@ -114,7 +144,7 @@ pub fn HomePage() -> Element {
 
     // ── 更新游戏（下载 + 安装）──────────────────────────────────────────
     let run_update = move |_: MouseEvent| {
-        if update_state.read().is_busy() {
+        if update_state.read().is_busy() || launching() {
             return;
         }
         let Some(root) = state.game_path.read().clone() else {
@@ -122,33 +152,27 @@ pub fn HomePage() -> Element {
             return;
         };
         let list = patches.read().clone();
-        if list.is_empty() {
-            return;
-        }
         let patch_dir = default_patch_dir(&root);
-        update_state.set(UpdateState::Downloading(0, 0));
-        spawn(async move {
+        update_state.set(UpdateState::Running);
+        state.update_progress.set(None);
+        spawn_forever(async move {
             let mgr = GameFileManager::new();
-            let downloaded = mgr
-                .download(&list, &patch_dir, 4, |progress| {
-                    update_state.set(UpdateState::Downloading(progress.done, progress.total));
+            match mgr
+                .update(&list, &patch_dir, &root, 4, |progress| {
+                    state.update_progress.set(Some(progress));
                 })
-                .await;
-            if let Err(e) = downloaded {
-                update_state.set(UpdateState::Failed(format!("下载失败: {e}")));
-                return;
-            }
-            update_state.set(UpdateState::Installing);
-            match mgr.install_verified(&list, &patch_dir, &root, |_| {}).await {
+                .await
+            {
                 Ok(summary) => {
                     patches.set(Vec::new());
                     update_state.set(UpdateState::Done(format!(
-                        "更新完成（应用 {} 个补丁，跳过 {} 个）",
+                        "更新完成（应用并清理 {} 个补丁）",
                         summary.installed.len(),
-                        summary.skipped
                     )));
                 }
-                Err(e) => update_state.set(UpdateState::Failed(format!("安装失败: {e}"))),
+                Err(e) => update_state.set(UpdateState::Failed(format!(
+                    "更新失败: {e}。队列已保留，重新检查更新可恢复。"
+                ))),
             }
         });
     };
@@ -156,6 +180,10 @@ pub fn HomePage() -> Element {
     // ── 启动游戏 ────────────────────────────────────────────────────────
     let launch_game = move |_: MouseEvent| {
         if launching() {
+            return;
+        }
+        if update_state.read().is_busy() {
+            state.status.set("请先等待游戏更新完成".into());
             return;
         }
         let Some(snda_id) = state.selected_account.read().clone() else {
@@ -173,6 +201,12 @@ pub fn HomePage() -> Element {
             return;
         };
         let exe = root.join("game/ffxiv_dx11.exe");
+        if eorzea::game_files::update::has_pending_update(&root) {
+            state
+                .status
+                .set("游戏有未完成的更新，请先检查更新并恢复队列".into());
+            return;
+        }
         if !exe.is_file() {
             state
                 .status
@@ -630,28 +664,12 @@ pub fn HomePage() -> Element {
                     UpdateState::NeedsPatch(n) => rsx! {
                         p { style: "color: {t.warning}; font-size: 13px;", "发现 {n} 个补丁，点击「更新游戏」开始下载。" }
                     },
-                    UpdateState::Downloading(done, total) => rsx! {
-                        {
-                            let pct = if *total > 0 {
-                                (*done as f64 / *total as f64 * 100.0).clamp(0.0, 100.0)
-                            } else {
-                                0.0
-                            };
-                            rsx! {
-                                div {
-                                    style: "margin-top: 12px;",
-                                    p { style: "color: {t.text_secondary}; font-size: 13px;", "下载补丁中… {human_bytes(*done)} / {human_bytes(*total)}（{pct:.1}%）" }
-                                    div {
-                                        style: "height: 4px; background: {t.progress_track}; border-radius: 2px; overflow: hidden;",
-                                        div { style: "height: 100%; width: {pct}%; background: {t.primary_bg};" }
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    UpdateState::Installing => rsx! { p { style: "color: {t.text_secondary}; font-size: 13px;", "安装中…" } },
+                    UpdateState::Running => rsx! {},
                     UpdateState::Done(msg) => rsx! { p { style: "color: {t.success}; font-size: 13px;", "{msg}" } },
                     UpdateState::Failed(e) => rsx! { ErrorRow { message: "{e}" } },
+                }
+                if let Some(progress) = state.update_progress.read().as_ref() {
+                    UpdateProgressPanel { progress: progress.clone() }
                 }
             }
 
@@ -684,6 +702,70 @@ pub fn HomePage() -> Element {
                     }
                 }
             }
+            }
+        }
+    }
+}
+
+#[component]
+fn ProgressRow(label: String, done: u64, total: u64, #[props(default)] secondary: bool) -> Element {
+    let t = (use_context::<AppState>().theme)();
+    let pct = if total > 0 {
+        (done as f64 / total as f64 * 100.0).clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+    let color = if secondary { t.text_secondary } else { t.text };
+    let height = if secondary { 3 } else { 5 };
+    rsx! {
+        div { style: "margin-top: 10px;",
+            p { style: "margin: 0 0 6px; color: {color}; font-size: 12px; overflow-wrap: anywhere;",
+                "{label} · {human_bytes(done)} / {human_bytes(total)} · {pct:.1}%"
+            }
+            div { style: "height: {height}px; background: {t.progress_track}; border-radius: 2px; overflow: hidden;",
+                div { style: "height: 100%; width: {pct}%; background: {t.primary_bg};" }
+            }
+        }
+    }
+}
+
+#[component]
+fn UpdateProgressPanel(progress: UpdateProgress) -> Element {
+    let t = (use_context::<AppState>().theme)();
+    let install = &progress.install;
+    let download = &progress.download;
+    rsx! {
+        div { style: "display: flex; flex-direction: column; gap: 14px; margin-top: 8px;",
+            div { style: "padding: 0 0 12px; border-bottom: 1px solid {t.border};",
+                ProgressRow {
+                    label: format!("补丁应用（{} / {}）", install.completed, install.total_patches),
+                    done: install.done, total: install.total,
+                }
+                if let Some(current) = &install.current {
+                    ProgressRow {
+                        label: format!("#{} {} · {}", current.index + 1, current.version, match current.phase {
+                            InstallPhase::Verifying => "校验中",
+                            InstallPhase::Applying => "应用中",
+                            InstallPhase::Committing => "提交 / 清理中",
+                        }),
+                        done: current.done, total: current.total, secondary: true,
+                    }
+                } else if progress.waiting_for_download {
+                    p { style: "margin: 8px 0 0; font-size: 12px; color: {t.text_secondary};", "等待队头补丁下载和校验完成…" }
+                }
+            }
+            div {
+                ProgressRow { label: "补丁下载", done: download.done, total: download.total }
+                for file in &download.active {
+                    ProgressRow {
+                        key: "{file.index}",
+                        label: format!("#{} {} · {}", file.index + 1, file.version, match file.phase {
+                            PatchPhase::Downloading => "下载中",
+                            PatchPhase::Verifying => "校验中",
+                        }),
+                        done: file.done, total: file.total, secondary: true,
+                    }
+                }
             }
         }
     }
@@ -733,5 +815,98 @@ fn human_bytes(bytes: u64) -> String {
         format!("{:.2} GiB", bytes as f64 / GIB)
     } else {
         format!("{:.1} MiB", bytes as f64 / MIB)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{Tab, Theme};
+    use super::*;
+    use eorzea::game_files::patch_manager::{DownloadProgress, PatchProgress};
+    use eorzea::game_files::{InstallPatchProgress, InstallProgress};
+
+    fn progress_fixture() -> Element {
+        // 仅渲染进度组件：不读真实配置、不初始化认证、不发网络请求。
+        let state = AppState {
+            tab: use_signal(|| Tab::Home),
+            auth_cfg: use_signal(Default::default),
+            settings: use_signal(Default::default),
+            game_path: use_signal(|| None),
+            dalamud_cfg: use_signal(Default::default),
+            areas: use_signal(Vec::new),
+            tokens: use_signal(Default::default),
+            selected_account: use_signal(|| None),
+            selected_area: use_signal(|| None),
+            status: use_signal(String::new),
+            launching: use_signal(|| false),
+            update_state: use_signal(|| UpdateState::Running),
+            update_patches: use_signal(Vec::new),
+            update_progress: use_signal(|| None),
+            logs: use_signal(Vec::new),
+            open_dropdown: use_signal(|| None),
+            adding_account: use_signal(|| false),
+            launcher: use_signal(|| None),
+            theme: use_signal(Theme::light),
+        };
+        use_context_provider(|| state);
+        let progress = UpdateProgress {
+            install: InstallProgress {
+                done: 150,
+                total: 400,
+                completed: 1,
+                total_patches: 4,
+                current: Some(InstallPatchProgress {
+                    index: 1,
+                    version: "install-version".into(),
+                    phase: InstallPhase::Applying,
+                    done: 50,
+                    total: 100,
+                }),
+            },
+            download: DownloadProgress {
+                done: 300,
+                total: 400,
+                completed: 2,
+                skipped: 0,
+                active: vec![
+                    PatchProgress {
+                        index: 2,
+                        version: "download-version".into(),
+                        url: String::new(),
+                        done: 50,
+                        total: 100,
+                        resumed_from: 0,
+                        phase: PatchPhase::Downloading,
+                    },
+                    PatchProgress {
+                        index: 3,
+                        version: "verify-version".into(),
+                        url: String::new(),
+                        done: 50,
+                        total: 100,
+                        resumed_from: 0,
+                        phase: PatchPhase::Verifying,
+                    },
+                ],
+            },
+            waiting_for_download: false,
+        };
+        rsx! { UpdateProgressPanel { progress } }
+    }
+
+    #[test]
+    fn renders_application_and_parallel_download_progress_together() {
+        let mut dom = VirtualDom::new(progress_fixture);
+        let mutations = format!("{:?}", dom.rebuild_to_vec());
+        for text in [
+            "补丁应用",
+            "补丁下载",
+            "install-version",
+            "download-version",
+            "verify-version",
+            "校验中",
+        ] {
+            assert!(mutations.contains(text), "missing {text}: {mutations}");
+        }
     }
 }

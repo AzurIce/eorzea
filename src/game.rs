@@ -334,6 +334,11 @@ pub async fn launch_game(
     #[cfg(not(target_os = "windows"))]
     validate_wine_game_path(&config.game_path)?;
 
+    let game_root = config.game_path.parent().and_then(|p| p.parent());
+    if game_root.is_some_and(crate::game_files::update::has_pending_update) {
+        return Err(GameLaunchError::UpdateInProgress);
+    }
+
     // 确保登录 DLL 是修改版
     ensure_login_entry(&config.game_path).await?;
 
@@ -588,6 +593,8 @@ fn validate_wine_game_path(path: &std::path::Path) -> Result<(), GameLaunchError
 
 #[derive(Debug, thiserror::Error)]
 pub enum GameLaunchError {
+    #[error("游戏有未完成的更新，请先恢复并完成补丁应用")]
+    UpdateInProgress,
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("Wine error: {0}")]

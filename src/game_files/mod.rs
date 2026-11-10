@@ -19,9 +19,11 @@
 
 pub mod patch_list;
 pub mod patch_manager;
+pub mod update;
 pub mod verify;
 pub mod version;
 pub mod zpatch;
+pub use update::{PendingUpdate, UpdateProgress};
 
 use eorzea_auth::{PatchListEntry, SdoArea};
 use std::path::Path;
@@ -118,10 +120,12 @@ pub enum InstallPhase {
     Verifying,
     /// 正在把 ZiPatch 应用到游戏目录。
     Applying,
+    /// 数据落盘、提交版本并清理当前补丁。
+    Committing,
 }
 
 /// 当前正在安装的补丁进度。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallPatchProgress {
     pub index: usize,
     pub version: String,
@@ -133,12 +137,12 @@ pub struct InstallPatchProgress {
 }
 
 /// 安装进度快照。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InstallProgress {
     /// 已完成补丁的字节数 + 当前补丁已应用字节。
     pub done: u64,
     pub total: u64,
-    /// 已处理补丁数（含缺文件跳过）。
+    /// 已成功处理的补丁数；缺失前置补丁不能算作完成。
     pub completed: usize,
     pub total_patches: usize,
     pub current: Option<InstallPatchProgress>,
@@ -185,15 +189,15 @@ impl Default for GameFileManager {
 impl GameFileManager {
     /// 创建管理器（内部共享一个 HTTP client）。
     pub fn new() -> Self {
+        let builder = reqwest::Client::builder().user_agent(PATCHER_USER_AGENT);
+        #[cfg(not(target_arch = "wasm32"))]
+        let builder = builder
+            .connect_timeout(std::time::Duration::from_secs(15))
+            // 单次读超时：连接卡死时让下载任务失败并进入续传重试，
+            // 避免进度条永久停在 0 B/s。
+            .read_timeout(std::time::Duration::from_secs(30));
         Self {
-            client: reqwest::Client::builder()
-                .user_agent(PATCHER_USER_AGENT)
-                .connect_timeout(std::time::Duration::from_secs(15))
-                // 单次读超时：连接卡死时让下载任务失败并进入续传重试，
-                // 避免进度条永久停在 0 B/s。
-                .read_timeout(std::time::Duration::from_secs(30))
-                .build()
-                .expect("failed to build HTTP client"),
+            client: builder.build().expect("failed to build HTTP client"),
         }
     }
 
@@ -356,28 +360,20 @@ impl GameFileManager {
         let mut completed_bytes = 0u64;
         let mut completed = 0usize;
         let mut installed = Vec::new();
-        let mut skipped = 0;
+        let skipped = 0;
 
         for (index, patch) in patches.iter().enumerate() {
             let repo = repo_from_url(&patch.url);
             let patch_file = patch_cache_path(patch_dir, patch);
 
             if !patch_file.exists() {
-                warn!(
-                    file = %patch_file.display(),
-                    "patch file missing, skipping (run update to download first)"
-                );
-                skipped += 1;
-                completed_bytes += patch.length;
-                completed += 1;
-                on_progress(InstallProgress {
-                    done: completed_bytes,
-                    total: total_bytes,
-                    completed,
-                    total_patches,
-                    current: None,
+                return Err(GameFileError::Io {
+                    path: patch_file,
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "前置补丁缺失，请重新下载后再安装",
+                    ),
                 });
-                continue;
             }
 
             let metadata = std::fs::metadata(&patch_file).map_err(|e| GameFileError::Io {
@@ -518,6 +514,8 @@ pub fn ver_to_bck(game_root: &Path) {
 /// 游戏文件管理错误。
 #[derive(Debug, thiserror::Error)]
 pub enum GameFileError {
+    #[error("update failed: {0}")]
+    Update(String),
     #[error("HTTP request failed for {url}: {source}")]
     Request {
         url: String,

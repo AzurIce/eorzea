@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use console::style;
 use eorzea::game_files::patch_manager::{DownloadProgress, PatchPhase, PatchProgress};
-use eorzea::game_files::{InstallPatchProgress, InstallPhase, InstallProgress};
+use eorzea::game_files::{InstallPatchProgress, InstallPhase, InstallProgress, UpdateProgress};
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use tracing_indicatif::IndicatifWriter;
 use tracing_subscriber::EnvFilter;
@@ -243,6 +243,9 @@ fn install_file_style(phase: InstallPhase) -> ProgressStyle {
         InstallPhase::Verifying => {
             "{msg:<26} [{bar:16.cyan/blue}] {binary_bytes:>9}/{binary_total_bytes:>9} 校验中"
         }
+        InstallPhase::Committing => {
+            "{msg:<26} [{bar:16.cyan/blue}] {binary_bytes:>9}/{binary_total_bytes:>9} 提交/清理中"
+        }
     };
     ProgressStyle::with_template(template)
         .expect("valid template")
@@ -406,11 +409,17 @@ impl DownloadView {
         }
 
         for file in &snapshot.active {
+            let anchor = self
+                .files
+                .range(..file.index)
+                .next_back()
+                .map(|(_, file)| file.bar.clone())
+                .unwrap_or_else(|| self.overall.bar.clone());
             let entry = self.files.entry(file.index).or_insert_with(|| {
                 // 必须先挂到 MultiProgress 再 set_style/set_message：
                 // set_message 会立即 draw 一次，未挂载时会直接在 stderr 留下
                 // 一行“孤儿”进度条，之后每轮 update 又会重复追加。
-                let bar = progress().add(ProgressBar::new(file.total));
+                let bar = progress().insert_after(&anchor, ProgressBar::new(file.total));
                 bar.set_style(file_style(file.phase));
                 bar.set_message(file_label(file));
                 FileBar {
@@ -434,17 +443,16 @@ impl DownloadView {
         self.overall.finish(msg);
     }
 
-    /// 失败：清掉所有动态行，打一行错误。
-    pub fn fail(mut self, msg: impl Display) {
-        self.clear_files();
-        self.overall.fail(msg);
-    }
-
     fn clear_files(&mut self) {
         for (_, file) in std::mem::take(&mut self.files) {
             file.bar.finish_and_clear();
             progress().remove(&file.bar);
         }
+    }
+
+    pub fn clear(mut self) {
+        self.clear_files();
+        self.overall.clear();
     }
 }
 
@@ -469,6 +477,13 @@ impl InstallView {
 
     pub fn update(&mut self, snapshot: &InstallProgress) {
         self.overall.set_progress(snapshot.done, snapshot.total);
+        self.overall.bar.set_message(format!(
+            "应用补丁 {}/{}",
+            snapshot.completed, snapshot.total_patches
+        ));
+        self.overall.bar.set_style(ProgressStyle::with_template(
+            "{spinner:.cyan} {msg:<20} [{bar:26.cyan/blue}] {binary_bytes:>10}/{binary_total_bytes:>10}"
+        ).expect("valid template").progress_chars("=> "));
         if bars_hidden() {
             return;
         }
@@ -476,7 +491,8 @@ impl InstallView {
         match &snapshot.current {
             Some(current) => {
                 let (bar, phase) = self.current.get_or_insert_with(|| {
-                    let bar = progress().add(ProgressBar::new(current.total));
+                    let bar =
+                        progress().insert_after(&self.overall.bar, ProgressBar::new(current.total));
                     bar.set_style(install_file_style(current.phase));
                     bar.set_message(install_file_label(current));
                     (bar, current.phase)
@@ -498,16 +514,53 @@ impl InstallView {
         self.overall.finish(msg);
     }
 
-    pub fn fail(mut self, msg: impl Display) {
-        self.clear_current();
-        self.overall.fail(msg);
-    }
-
     fn clear_current(&mut self) {
         if let Some((bar, _)) = self.current.take() {
             bar.finish_and_clear();
             progress().remove(&bar);
         }
+    }
+
+    pub fn clear(mut self) {
+        self.clear_current();
+        self.overall.clear();
+    }
+}
+
+/// 应用和下载始终是两个独立分组；子进度插在各自总进度之后。
+pub struct UpdateView {
+    install: InstallView,
+    download: DownloadView,
+}
+
+impl UpdateView {
+    pub fn new() -> Self {
+        Self {
+            install: InstallView::new("应用补丁"),
+            download: DownloadView::new("下载补丁"),
+        }
+    }
+
+    pub fn update(&mut self, snapshot: &UpdateProgress) {
+        self.install.update(&snapshot.install);
+        self.download.update(&snapshot.download);
+        if snapshot.waiting_for_download {
+            self.install.overall.bar.set_message(format!(
+                "应用 {}/{} · 等待队头下载",
+                snapshot.install.completed, snapshot.install.total_patches
+            ));
+        }
+    }
+
+    pub fn finish(self, msg: impl Display) {
+        self.download.finish("补丁下载完成");
+        self.install.finish(msg);
+    }
+
+    pub fn fail(self, msg: impl Display) {
+        self.download.clear();
+        self.install.clear();
+        fail(format!("更新失败（保留未完成队列，下次运行将恢复）: {msg}"));
     }
 }
 
@@ -582,6 +635,31 @@ mod tests {
         assert_eq!(human_bytes(13_403_199), "12.78 MiB");
     }
 
+    #[test]
+    fn test_update_view_keeps_download_and_install_totals_separate() {
+        let mut view = UpdateView::new();
+        view.update(&UpdateProgress {
+            download: DownloadProgress {
+                done: 80,
+                total: 100,
+                ..Default::default()
+            },
+            install: InstallProgress {
+                done: 30,
+                total: 100,
+                completed: 1,
+                total_patches: 4,
+                current: None,
+            },
+            waiting_for_download: true,
+        });
+        assert_eq!(view.download.overall.bar.position(), 80);
+        assert_eq!(view.install.overall.bar.position(), 30);
+        assert!(view.install.overall.bar.message().contains("等待队头"));
+        view.download.clear();
+        view.install.clear();
+    }
+
     /// 模板必须能被 indicatif 解析：样式函数里的 `with_template(...).expect(...)`
     /// 在模板写错时会 panic，这个测试保证不再等到真实下载时才炸。
     #[test]
@@ -594,6 +672,7 @@ mod tests {
             file_style(PatchPhase::Verifying),
             install_file_style(InstallPhase::Applying),
             install_file_style(InstallPhase::Verifying),
+            install_file_style(InstallPhase::Committing),
             spinner_style(),
         ] {
             let bar = ProgressBar::new(100);

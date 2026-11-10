@@ -110,7 +110,13 @@
 - [x] **校验阶段进度显示**：`PatchProgress.phase` 区分 `Downloading` / `Verifying`；子进度在后者把速度列换成「校验中」，总进度在没有下载任务时也显示「校验中」，不再用 0 B/s 和超大 ETA 误导（2026-10-30）
 - [x] **dev profile SHA1 优化**：`[profile.dev.package.sha1] opt-level = 3`；否则 debug 版 SHA1 只有约十几 MiB/s，1.4 GiB 补丁的校验会占用几分钟 CPU。实测优化后约 269 MiB/s（2026-10-30）
 - [x] **下载超时与重试**：`reqwest::Client` 配 `connect_timeout=15s` / `read_timeout=30s`；单文件最多 5 次尝试，失败后退避并从当前文件长度续传。仍保留“任一文件最终失败则中止整批”的行为（2026-10-30）
-- [ ] **边下边装**：C# `PatchManager` 的 `RunApplyQueue` 在下载队列之外同步应用已完成补丁；当前 `eoz game update` 必须等 97.9 GiB 全部下完才开始应用，进入游戏的总等待时间更长
+- [x] **边下边装**：共享 `GameFileManager::update` 按序领取下载任务、默认 4 路并发，预取窗口为当前补丁 + 并发数；独立后台 routine 仅消费已下载并校验通过的队头，提交且删除成功才推进。CLI/GUI 同时展示应用总进度/当前补丁和下载总进度/各并行任务，GUI 更新使用根状态与 `spawn_forever`，切换页面不中断。测试覆盖下载与应用重叠、乱序下载不乱序安装、有限预取。
+- [x] **单补丁中断恢复与提交**：`<游戏目录>/.eorzea/update.json` 保存完整有序清单、缓存目录和消费游标，不记录 chunk 断点；恢复优先于服务端版本检查，当前补丁从头重放。按游戏数据同步 → 原子提交 `.ver` → 删除补丁 → 持久化队头顺序推进，删除失败不安装后继；队列完成后更新 `.bck` 并清理清单。更新目录使用文件锁，未完成时拒绝启动游戏。测试覆盖缺失 `.ver`、部分游戏文件、删除后游标未推进、清理失败重试及互斥。详见 [`docs/notes/patch-interruption-recovery.md`](docs/notes/patch-interruption-recovery.md)。
+- [x] **ZiPatch 删除与句柄失效**：删除文件/目录树前清理相关缓存句柄，对齐 C# `CloseStream`；删除及 RemoveAll 枚举/删除失败均返回错误，NotFound 可重试。回归测试覆盖删除后重建和 RemoveAll 后重放。
+- [x] **ZiPatch 完成与落盘校验**：显式要求读到 `EOF_`，文件使用 `sync_all()`，Unix 上同步变更目录；失败禁止推进 `.ver`。缺结束标记的补丁即使 SHA1 匹配也不能完成安装。
+- [ ] **无 SHA1 补丁 CRC 校验**：当前下载对无 hash 的 boot 补丁只检查长度；安装检查结构与 EOF，但未对齐 C# `CheckPatchValidity` 的逐 chunk CRC 校验。
+- [x] **缺失前置补丁不得跳过安装**：独立 `install` 返回缺失错误；流水线按原清单重新下载，禁止跳过后推进版本。
+- [ ] **流水线实机恢复验证**：在 Windows/macOS 及真实发行补丁上验证更新、强杀重启和断电恢复，重点检查原子版本替换、目录元数据持久化及文件占用导致的清理失败；当前回归使用 Linux 本地 HTTP 和合成补丁，GUI 进度组件已有虚拟 DOM 渲染测试。
 - [x] **SHA1 流式校验**：`verify_patch_sha1` 改为 `BufReader` 分块读取，不再把 1.4 GiB 补丁整文件读入内存；校验通过 `spawn_blocking` 移出 tokio worker，文件写入改用 `tokio::fs`（2026-10-30）
 - [ ] **UID 缓存**：缺失 `IUniqueIdCache` 实现（`X-Patch-Unique-Id` 缓存）
 
@@ -221,7 +227,7 @@
 - [x] **首次启动默认登录页**：无账号或无 `game_path` 时默认 Tab 为登录页，而不是空主页
 - [x] **启动流程不阻塞且跨页面保持**：启动任务使用 root scope 的 `spawn_forever`，`launching` 位于 `AppState`；Wine 探测、prefix 初始化、winepath、Injector 等待、登录 DLL 检查/复制、Wine/DXVK 解压安装、Dalamud release/runtime 解压与文件校验均在阻塞线程池执行，下载写盘使用异步 I/O 或后台线程。解压进度通过有界的最新值通道回到调用线程，UI signal 不跨线程读写；启动中切换页面不会取消任务。单线程 runtime 测试覆盖后台执行、实时进度回传、worker 错误和假 Wine 启动链路。
 - [ ] **归档盘符校验**：Linux 上 `dalamud::archive::tests::test_safe_relative_path_rejects_escape` 失败，`safe_relative_path` 未拒绝 `C:\Windows\evil.dll`；需跨平台显式识别 Windows 盘符，不能只依赖宿主 `Path` 的组件解析。
-- [ ] **Web 预览编译**：`src/game_files/mod.rs` 的 `reqwest::ClientBuilder::connect_timeout` 不适用于 wasm32；需为原生专属的 HTTP 超时设置增加平台门控。
+- [x] **Web 预览编译**：`GameFileManager` 的 `connect_timeout/read_timeout` 仅在原生平台设置，wasm32 GUI 检查通过；浏览器预览不执行原生补丁安装。
 - [x] **主页运行日志（2026-11-09）**：新增 `logging.rs`（`tracing` Layer + 1000 行环形缓冲），INFO/WARN/ERROR 增量汇入 `AppState.logs`，主页新增「运行日志（最新在上）」区域并按级别着色；默认只开本项目 INFO 级日志，`RUST_LOG` 可覆盖。
 - [x] **密码安全与重复提交**：密码登录成功后清空密码；登录/启动/检查更新增加 busy 防重入
 - [x] **删除账号二次确认**：避免误触立即删除本地账号配置

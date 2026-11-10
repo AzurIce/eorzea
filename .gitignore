@@ -27,3 +27,6 @@ dist-ssr
 # Rust
 target/
 result
+
+# Local OpenChamber files
+/.openchamber/
