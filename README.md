@@ -12,7 +12,12 @@
 
 ## 下载
 
-前往 [Releases](https://github.com/AzurIce/eorzea/releases) 下载对应平台的压缩包，解压后运行 `eorzea-app`（图形界面）或 `eoz`（命令行）。
+前往 [Releases](https://github.com/AzurIce/eorzea/releases)，按程序和平台选择独立附件：
+
+- **`eorzea-app`**：图形界面（GUI），普通用户通常选择这个。
+- **`eoz`**：命令行工具（CLI），在终端中使用，不需要同时下载 GUI。
+
+所有平台均直接提供独立可执行文件，无需解压。Windows 下载对应的 `.exe` 直接运行；Linux / macOS 下载对应的二进制文件，执行 `chmod +x <文件名>` 后运行。需要使用 `eoz` 命令时，可将下载的 CLI 文件重命名为 `eoz.exe`（Windows）或 `eoz`（Linux/macOS），再加入 `PATH`。
 
 提供 Linux x86_64、Windows x86_64 和 macOS arm64 构建。macOS 尚未经过真机验证。
 

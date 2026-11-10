@@ -52,7 +52,7 @@ jobs:
           elif [ "$DEV_RELEASE" = "true" ]; then
             channel=dev
             publish=true
-            # 固定版本号 => 资产名固定（eorzea-dev-<os>），下次构建直接替换
+            # 固定版本号 => 资产名固定（<binary>-dev-<os>），下次构建直接替换
             version=dev
           else
             channel=none
@@ -119,37 +119,31 @@ jobs:
           --target ${{ matrix.target }}
           -p eorzea-app -p eorzea-cli
 
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
+      - name: Prepare release assets
         shell: bash
+        env:
+          BUILD_VERSION: ${{ needs.plan.outputs.version }}
+          BUILD_PLATFORM: ${{ matrix.name }}
+          BUILD_TARGET: ${{ matrix.target }}
         run: |
-          name="eorzea-${{ needs.plan.outputs.version }}-${{ matrix.name }}"
-          mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/eorzea-app" "dist/$name/"
-          cp "target/${{ matrix.target }}/release/eoz" "dist/$name/"
-          cp README.md "dist/$name/"
-          strip "dist/$name/eorzea-app" "dist/$name/eoz" || true
-          tar -C dist -czf "$name.tar.gz" "$name"
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $name = "eorzea-${{ needs.plan.outputs.version }}-${{ matrix.name }}"
-          $out = "dist\$name"
-          New-Item -ItemType Directory -Force -Path $out | Out-Null
-          Copy-Item "target\${{ matrix.target }}\release\eorzea-app.exe" $out
-          Copy-Item "target\${{ matrix.target }}\release\eoz.exe" $out
-          Copy-Item "README.md" $out
-          Compress-Archive -Path $out -DestinationPath "$name.zip"
+          mkdir -p dist
+          extension=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            extension=".exe"
+          fi
+          for binary in eorzea-app eoz; do
+            name="$binary-$BUILD_VERSION-$BUILD_PLATFORM$extension"
+            cp "target/$BUILD_TARGET/release/$binary$extension" "dist/$name"
+            if [ "$RUNNER_OS" != "Windows" ]; then
+              strip "dist/$name" || true
+            fi
+          done
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: |
-            *.tar.gz
-            *.zip
+          path: dist/*
           if-no-files-found: error
           retention-days: 7
 
@@ -204,6 +198,15 @@ jobs:
           body: |
             `${{ github.ref_name }}` 的 dev 构建，**非稳定版本**。
 
+            ### 下载说明
+
+            - **eorzea-app**：图形界面（GUI），普通用户通常选择这个。
+            - **eoz**：命令行工具（CLI），在终端中使用；不需要同时下载 GUI。
+            - Windows 下载对应的 `.exe` 直接运行；需要 `eoz` 命令时，可将 CLI 文件重命名为 `eoz.exe` 并加入 `PATH`。
+            - Linux / macOS 下载对应的二进制文件，执行 `chmod +x <文件名>` 后运行；CLI 文件可重命名为 `eoz` 并加入 `PATH`。
+
+            ### 构建信息
+
             - 提交：${{ github.sha }}
             - 时间：${{ needs.plan.outputs.date }}
             - 构建：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -214,7 +217,8 @@ jobs:
           files: dist/*
           fail_on_unmatched_files: true
 
-      # macOS 为可选任务：本次失败时移除其旧包，避免混入上次构建。
+      # macOS 为可选任务：本次失败时移除其旧附件，避免混入上次构建。
+      # 同时移除不再发布的附件名，避免旧的合并包与独立附件混用。
       - name: Remove stale development assets
         if: needs.plan.outputs.channel == 'dev'
         uses: actions/github-script@v7
@@ -240,6 +244,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          body: |
+            ### 下载说明
+
+            - **eorzea-app**：图形界面（GUI），普通用户通常选择这个。
+            - **eoz**：命令行工具（CLI），在终端中使用；不需要同时下载 GUI。
+            - Windows 下载对应的 `.exe` 直接运行；需要 `eoz` 命令时，可将 CLI 文件重命名为 `eoz.exe` 并加入 `PATH`。
+            - Linux / macOS 下载对应的二进制文件，执行 `chmod +x <文件名>` 后运行；CLI 文件可重命名为 `eoz` 并加入 `PATH`。
           generate_release_notes: true
           fail_on_unmatched_files: true
           # v0.2.0-beta.1 这类 tag 自动标为 pre-release

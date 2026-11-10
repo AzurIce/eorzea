@@ -203,6 +203,7 @@
 - [ ] **`SdoArea` 反序列化测试**：用真实 serverlist_new.js 内容做 fixture 测试
 - [ ] **SE OAuth HTML 解析测试**：用 fixture HTML 验证 `_STORED_` 和 `login=auth,ok,...` 提取
 - [x] **macOS 发行构建 runner**：Release workflow 固定使用受支持的 `macos-15` Apple Silicon runner，目标保持 `aarch64-apple-darwin`；macOS 构建失败不阻塞其他平台的策略不变。
+- [x] **GUI/CLI 独立发行附件**：所有平台均按 `eorzea-app`（GUI）与 `eoz`（CLI）直接发布独立可执行文件，不制作合并包或压缩包；Windows 附件带 `.exe`，Linux/macOS 无扩展名。开发版和稳定版说明均包含程序用途、执行权限与下载方式，开发版发布后清理旧附件名。
 
 ### P4-2.5 GUI UX 修正
 
