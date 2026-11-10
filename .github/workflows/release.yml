@@ -85,7 +85,8 @@ jobs:
             target: x86_64-pc-windows-msvc
             experimental: false
           # macOS 尚未在真机上验证，失败不阻塞 Linux/Windows 发布。
-          - os: macos-14
+          # 固定受支持的 Apple Silicon runner，保持 aarch64 产物。
+          - os: macos-15
             name: macos-aarch64
             target: aarch64-apple-darwin
             experimental: true

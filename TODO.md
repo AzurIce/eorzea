@@ -202,6 +202,7 @@
 - [ ] **`crypto.rs` 单元测试**：`make_computer_id` 的 UTF-16 LE 编码修复后需对照 C# 输出验证
 - [ ] **`SdoArea` 反序列化测试**：用真实 serverlist_new.js 内容做 fixture 测试
 - [ ] **SE OAuth HTML 解析测试**：用 fixture HTML 验证 `_STORED_` 和 `login=auth,ok,...` 提取
+- [x] **macOS 发行构建 runner**：Release workflow 固定使用受支持的 `macos-15` Apple Silicon runner，目标保持 `aarch64-apple-darwin`；macOS 构建失败不阻塞其他平台的策略不变。
 
 ### P4-2.5 GUI UX 修正
 
