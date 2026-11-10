@@ -110,7 +110,10 @@ pub async fn ensure_assets(
         source: e,
     })?;
 
-    cleanup_old_assets(&base_dir, &current_dir);
+    let cleanup_dir = current_dir.clone();
+    crate::blocking::run(move || cleanup_old_assets(&base_dir, &cleanup_dir))
+        .await
+        .map_err(DalamudError::Worker)?;
     Ok(current_dir)
 }
 
@@ -168,7 +171,7 @@ async fn ensure_asset_file(
     idx: usize,
 ) -> Result<bool, DalamudError> {
     let dest = safe_asset_path(current_dir, &asset.file_name)?;
-    if dest.is_file() && sha1_file_matches(&dest, &asset.hash)? {
+    if dest.is_file() && sha1_file_matches_async(&dest, &asset.hash).await? {
         return Ok(false);
     }
 
@@ -179,7 +182,7 @@ async fn ensure_asset_file(
         let _ = std::fs::remove_file(&tmp);
         match download_asset(client, &url, &tmp).await {
             Ok(()) => {
-                let hash_ok = sha1_file_matches(&tmp, &asset.hash)?;
+                let hash_ok = sha1_file_matches_async(&tmp, &asset.hash).await?;
                 if !hash_ok {
                     // 上游 Asset/Meta 的 Noto 字体 hash 与所有 CTAN 镜像实际文件
                     // 都不一致（C# 下载后同样不会复检）。这里保留官方 URL 的下载
@@ -239,10 +242,15 @@ async fn download_asset(
         .bytes()
         .await
         .map_err(|e| DalamudError::Network(e.to_string()))?;
-    std::fs::write(target, bytes).map_err(|e| DalamudError::Io {
-        path: target.to_path_buf(),
-        source: e,
+    let target = target.to_path_buf();
+    crate::blocking::run(move || {
+        std::fs::write(&target, bytes).map_err(|e| DalamudError::Io {
+            path: target,
+            source: e,
+        })
     })
+    .await
+    .map_err(DalamudError::Worker)?
 }
 
 fn asset_urls(asset: &AssetFile) -> Vec<String> {
@@ -278,6 +286,14 @@ fn safe_file_name(path: &Path) -> Result<&str, DalamudError> {
         .and_then(|n| n.to_str())
         .filter(|n| !n.is_empty())
         .ok_or_else(|| DalamudError::Integrity("invalid asset destination".into()))
+}
+
+async fn sha1_file_matches_async(path: &Path, expected_hex: &str) -> Result<bool, DalamudError> {
+    let path = path.to_path_buf();
+    let expected_hex = expected_hex.to_string();
+    crate::blocking::run(move || sha1_file_matches(&path, &expected_hex))
+        .await
+        .map_err(DalamudError::Worker)?
 }
 
 fn sha1_file_matches(path: &Path, expected_hex: &str) -> Result<bool, DalamudError> {

@@ -448,9 +448,15 @@ pub async fn ensure_release(
     let installed = install_root
         .join("Hooks")
         .join(&version_info.assembly_version);
-    if installed.join("Dalamud.Injector.exe").is_file()
-        && release_install_is_valid(&installed, &version_info.hash)
-    {
+    let check_dir = installed.clone();
+    let hash = version_info.hash.clone();
+    let valid = crate::blocking::run(move || {
+        check_dir.join("Dalamud.Injector.exe").is_file()
+            && release_install_is_valid(&check_dir, &hash)
+    })
+    .await
+    .map_err(DalamudError::Worker)?;
+    if valid {
         debug!(
             version = %version_info.assembly_version,
             path = %installed.display(),
@@ -498,17 +504,30 @@ pub async fn download_release(
         .unwrap_or(0);
 
     let tmp_dir = install_root.join(format!(".tmp-{}", version_info.assembly_version));
-    let _ = std::fs::remove_dir_all(&tmp_dir);
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| DalamudError::Io {
-        path: tmp_dir.clone(),
-        source: e,
-    })?;
+    let setup_dir = tmp_dir.clone();
+    crate::blocking::run(move || {
+        let _ = std::fs::remove_dir_all(&setup_dir);
+        std::fs::create_dir_all(&setup_dir).map_err(|e| DalamudError::Io {
+            path: setup_dir,
+            source: e,
+        })
+    })
+    .await
+    .map_err(DalamudError::Worker)??;
 
     let archive = tmp_dir.join("dalamud.7z");
+    #[cfg(target_arch = "wasm32")]
     let mut file = std::fs::File::create(&archive).map_err(|e| DalamudError::Io {
         path: archive.clone(),
         source: e,
     })?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut file = tokio::fs::File::create(&archive)
+        .await
+        .map_err(|e| DalamudError::Io {
+            path: archive.clone(),
+            source: e,
+        })?;
     let mut written = 0u64;
     let mut stream = resp;
     #[cfg(not(target_arch = "wasm32"))]
@@ -517,8 +536,8 @@ pub async fn download_release(
         .await
         .map_err(|e| DalamudError::Network(e.to_string()))?
     {
-        use std::io::Write;
-        file.write_all(&chunk).map_err(|e| DalamudError::Io {
+        use tokio::io::AsyncWriteExt;
+        file.write_all(&chunk).await.map_err(|e| DalamudError::Io {
             path: archive.clone(),
             source: e,
         })?;
@@ -541,14 +560,49 @@ pub async fn download_release(
         on_progress(written, total);
     }
     info!(bytes = written, "downloaded Dalamud release");
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use tokio::io::AsyncWriteExt;
+        file.flush().await.map_err(|e| DalamudError::Io {
+            path: archive.clone(),
+            source: e,
+        })?;
+    }
+    // Windows 上解压/清理前必须关闭归档文件句柄。
+    drop(file);
 
+    let install_root = install_root.to_path_buf();
+    let version_info = version_info.clone();
+    crate::blocking::with_progress(
+        move |on_progress| {
+            install_downloaded_release(
+                &archive,
+                &tmp_dir,
+                &install_root,
+                &version_info,
+                on_progress,
+            )
+        },
+        on_progress,
+    )
+    .await
+    .map_err(DalamudError::Worker)?
+}
+
+fn install_downloaded_release(
+    archive: &Path,
+    tmp_dir: &Path,
+    install_root: &Path,
+    version_info: &DalamudVersionInfo,
+    on_progress: &mut dyn FnMut(u64, u64),
+) -> Result<PathBuf, DalamudError> {
     // 2. 解压（纯 Rust：7z / zip 按文件头自适应，不依赖外部 7z 可执行文件）
     let extract_dir = tmp_dir.join("extract");
     std::fs::create_dir_all(&extract_dir).map_err(|e| DalamudError::Io {
         path: extract_dir.clone(),
         source: e,
     })?;
-    super::archive::extract_archive(&archive, &extract_dir, &mut on_progress)?;
+    super::archive::extract_archive(&archive, &extract_dir, on_progress)?;
     info!("extracted Dalamud release");
 
     // 3. 校验：关键文件存在 + hashes.json 完整性（上游协议的最低线）
@@ -577,7 +631,7 @@ pub async fn download_release(
     })?;
 
     // version.json：完整版本信息（对齐 C# 安装行为）
-    let ver_json = serde_json::to_string_pretty(version_info)
+    let ver_json = serde_json::to_string_pretty(&version_info)
         .map_err(|e| DalamudError::Parse(format!("serialize version.json: {e}")))?;
     std::fs::write(target.join("version.json"), ver_json).map_err(|e| DalamudError::Io {
         path: target.join("version.json"),
@@ -620,6 +674,8 @@ fn cleanup_old_releases(hooks: &Path, current: &Path) {
 /// Dalamud 错误。
 #[derive(Debug, thiserror::Error)]
 pub enum DalamudError {
+    #[error("background task failed: {0}")]
+    Worker(#[source] std::io::Error),
     #[error("network error: {0}")]
     Network(String),
     #[error("HTTP {status} for {url}")]

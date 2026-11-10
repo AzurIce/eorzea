@@ -12,8 +12,11 @@
 //!   version
 //! ```
 
+#[cfg(target_arch = "wasm32")]
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::io::AsyncWriteExt;
 
 use tracing::{debug, info, warn};
 
@@ -44,16 +47,21 @@ pub async fn ensure_runtime(
     }
 
     let tmp_dir = install_root.join(format!(".tmp-runtime-{version}"));
-    let _ = std::fs::remove_dir_all(&tmp_dir);
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| DalamudError::Io {
-        path: tmp_dir.clone(),
-        source: e,
-    })?;
+    let setup_dir = tmp_dir.clone();
+    crate::blocking::run(move || {
+        let _ = std::fs::remove_dir_all(&setup_dir);
+        std::fs::create_dir_all(&setup_dir).map_err(|e| DalamudError::Io {
+            path: setup_dir,
+            source: e,
+        })
+    })
+    .await
+    .map_err(DalamudError::Worker)??;
 
     let result = assemble_runtime(client, &tmp_dir, version, &mut on_progress).await;
     if let Err(e) = result {
         warn!(error = %e, "failed to assemble .NET runtime");
-        let _ = std::fs::remove_dir_all(&tmp_dir);
+        let _ = crate::blocking::run(move || std::fs::remove_dir_all(&tmp_dir)).await;
         return Err(e);
     }
 
@@ -61,11 +69,16 @@ pub async fn ensure_runtime(
     // 实际内容不一致（实测 476 项中仅 1 项匹配），C# 在“全新下载”后也不会
     // 再按该 manifest 复检。因此这里以官方 NuGet 源的 HTTPS 下载 + 目录结构
     // 校验为准，不把该 manifest 作为阻断条件。
-    let _ = std::fs::remove_dir_all(&runtime_dir);
-    std::fs::rename(&tmp_dir, &runtime_dir).map_err(|e| DalamudError::Io {
-        path: runtime_dir.clone(),
-        source: e,
-    })?;
+    let target = runtime_dir.clone();
+    crate::blocking::run(move || {
+        let _ = std::fs::remove_dir_all(&target);
+        std::fs::rename(&tmp_dir, &target).map_err(|e| DalamudError::Io {
+            path: target,
+            source: e,
+        })
+    })
+    .await
+    .map_err(DalamudError::Worker)??;
 
     info!(version, path = %runtime_dir.display(), "Windows .NET runtime installed");
     Ok(runtime_dir)
@@ -99,43 +112,49 @@ async fn assemble_runtime(
     )
     .await?;
 
-    let core_dir = runtime_dir
-        .join("shared/Microsoft.NETCore.App")
-        .join(version);
-    let desktop_dir = runtime_dir
-        .join("shared/Microsoft.WindowsDesktop.App")
-        .join(version);
-    extract_zip_prefix(&core_zip, &core_dir, "runtimes/win-x64/native/")?;
-    extract_zip_prefix(&core_zip, &core_dir, &lib_prefix)?;
-    extract_zip_prefix(&desktop_zip, &desktop_dir, "runtimes/win-x64/native/")?;
-    extract_zip_prefix(&desktop_zip, &desktop_dir, &lib_prefix)?;
+    let runtime_dir = runtime_dir.to_path_buf();
+    let version = version.to_string();
+    crate::blocking::run(move || {
+        let core_dir = runtime_dir
+            .join("shared/Microsoft.NETCore.App")
+            .join(&version);
+        let desktop_dir = runtime_dir
+            .join("shared/Microsoft.WindowsDesktop.App")
+            .join(&version);
+        extract_zip_prefix(&core_zip, &core_dir, "runtimes/win-x64/native/")?;
+        extract_zip_prefix(&core_zip, &core_dir, &lib_prefix)?;
+        extract_zip_prefix(&desktop_zip, &desktop_dir, "runtimes/win-x64/native/")?;
+        extract_zip_prefix(&desktop_zip, &desktop_dir, &lib_prefix)?;
 
-    // C# 从 CoreCLR 包中把 hostfxr.dll 挪到 host/fxr/<version>。
-    let hostfxr_src = core_dir.join("hostfxr.dll");
-    if !hostfxr_src.is_file() {
-        return Err(DalamudError::Integrity(format!(
-            "runtime package missing hostfxr.dll under {core_dir:?}"
-        )));
-    }
-    let hostfxr_dir = runtime_dir.join("host/fxr").join(version);
-    std::fs::create_dir_all(&hostfxr_dir).map_err(|e| DalamudError::Io {
-        path: hostfxr_dir.clone(),
-        source: e,
-    })?;
-    let hostfxr_dst = hostfxr_dir.join("hostfxr.dll");
-    std::fs::rename(&hostfxr_src, &hostfxr_dst).map_err(|e| DalamudError::Io {
-        path: hostfxr_src.clone(),
-        source: e,
-    })?;
+        // C# 从 CoreCLR 包中把 hostfxr.dll 挪到 host/fxr/<version>。
+        let hostfxr_src = core_dir.join("hostfxr.dll");
+        if !hostfxr_src.is_file() {
+            return Err(DalamudError::Integrity(format!(
+                "runtime package missing hostfxr.dll under {core_dir:?}"
+            )));
+        }
+        let hostfxr_dir = runtime_dir.join("host/fxr").join(&version);
+        std::fs::create_dir_all(&hostfxr_dir).map_err(|e| DalamudError::Io {
+            path: hostfxr_dir.clone(),
+            source: e,
+        })?;
+        let hostfxr_dst = hostfxr_dir.join("hostfxr.dll");
+        std::fs::rename(&hostfxr_src, &hostfxr_dst).map_err(|e| DalamudError::Io {
+            path: hostfxr_src.clone(),
+            source: e,
+        })?;
 
-    std::fs::write(runtime_dir.join("version"), version).map_err(|e| DalamudError::Io {
-        path: runtime_dir.join("version"),
-        source: e,
-    })?;
+        std::fs::write(runtime_dir.join("version"), version).map_err(|e| DalamudError::Io {
+            path: runtime_dir.join("version"),
+            source: e,
+        })?;
 
-    let _ = std::fs::remove_file(&core_zip);
-    let _ = std::fs::remove_file(&desktop_zip);
-    Ok(())
+        let _ = std::fs::remove_file(&core_zip);
+        let _ = std::fs::remove_file(&desktop_zip);
+        Ok(())
+    })
+    .await
+    .map_err(DalamudError::Worker)?
 }
 
 async fn download_nupkg(
@@ -190,10 +209,18 @@ async fn download_to_file(
             source: e,
         })?;
     }
+    #[cfg(target_arch = "wasm32")]
     let mut file = std::fs::File::create(target).map_err(|e| DalamudError::Io {
         path: target.to_path_buf(),
         source: e,
     })?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut file = tokio::fs::File::create(target)
+        .await
+        .map_err(|e| DalamudError::Io {
+            path: target.to_path_buf(),
+            source: e,
+        })?;
     let mut stream = resp;
     let mut written = 0u64;
     #[cfg(not(target_arch = "wasm32"))]
@@ -202,7 +229,7 @@ async fn download_to_file(
         .await
         .map_err(|e| DalamudError::Network(e.to_string()))?
     {
-        file.write_all(&chunk).map_err(|e| DalamudError::Io {
+        file.write_all(&chunk).await.map_err(|e| DalamudError::Io {
             path: target.to_path_buf(),
             source: e,
         })?;
@@ -223,6 +250,12 @@ async fn download_to_file(
         written = body.len() as u64;
         on_progress(written, total);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    file.flush().await.map_err(|e| DalamudError::Io {
+        path: target.to_path_buf(),
+        source: e,
+    })?;
+    #[cfg(target_arch = "wasm32")]
     file.flush().map_err(|e| DalamudError::Io {
         path: target.to_path_buf(),
         source: e,
@@ -301,6 +334,7 @@ fn runtime_layout_ok(root: &Path, version: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn test_runtime_layout_ok() {

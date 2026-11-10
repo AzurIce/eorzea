@@ -219,7 +219,9 @@
 - [x] **图标侧边栏**：导航收窄至 72px，游戏/账号使用 SVG 图标，设置固定底部；保留按钮名称、悬停提示与当前页语义，移除亮/暗主题切换入口。页面内容和登录流程不变。
 
 - [x] **首次启动默认登录页**：无账号或无 `game_path` 时默认 Tab 为登录页，而不是空主页
-- [x] **启动流程不阻塞且跨页面保持（2026-11-09）**：启动任务改用 root scope 的 `spawn_forever`，`launching` 移入 `AppState`；启动中切到账号/设置页再回来，按钮仍显示「启动中…」，任务不会随主页卸载被取消。
+- [x] **启动流程不阻塞且跨页面保持**：启动任务使用 root scope 的 `spawn_forever`，`launching` 位于 `AppState`；Wine 探测、prefix 初始化、winepath、Injector 等待、登录 DLL 检查/复制、Wine/DXVK 解压安装、Dalamud release/runtime 解压与文件校验均在阻塞线程池执行，下载写盘使用异步 I/O 或后台线程。解压进度通过有界的最新值通道回到调用线程，UI signal 不跨线程读写；启动中切换页面不会取消任务。单线程 runtime 测试覆盖后台执行、实时进度回传、worker 错误和假 Wine 启动链路。
+- [ ] **归档盘符校验**：Linux 上 `dalamud::archive::tests::test_safe_relative_path_rejects_escape` 失败，`safe_relative_path` 未拒绝 `C:\Windows\evil.dll`；需跨平台显式识别 Windows 盘符，不能只依赖宿主 `Path` 的组件解析。
+- [ ] **Web 预览编译**：`src/game_files/mod.rs` 的 `reqwest::ClientBuilder::connect_timeout` 不适用于 wasm32；需为原生专属的 HTTP 超时设置增加平台门控。
 - [x] **主页运行日志（2026-11-09）**：新增 `logging.rs`（`tracing` Layer + 1000 行环形缓冲），INFO/WARN/ERROR 增量汇入 `AppState.logs`，主页新增「运行日志（最新在上）」区域并按级别着色；默认只开本项目 INFO 级日志，`RUST_LOG` 可覆盖。
 - [x] **密码安全与重复提交**：密码登录成功后清空密码；登录/启动/检查更新增加 busy 防重入
 - [x] **删除账号二次确认**：避免误触立即删除本地账号配置

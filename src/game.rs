@@ -211,30 +211,36 @@ pub async fn ensure_login_entry(game_path: &std::path::Path) -> Result<(), GameL
 
     info!(game_root = %game_root.display(), "ensuring login entry DLL");
 
-    std::fs::create_dir_all(&boot_path).map_err(GameLaunchError::Io)?;
-    debug!(boot_path = %boot_path.display(), "created boot directory");
-
-    if !entry_dll.exists() {
-        info!(path = %entry_dll.display(), "DLL not found, downloading ottercorp version");
-        let src = download_ottercorp_dll().await?;
-        std::fs::copy(&src, &entry_dll).map_err(GameLaunchError::Io)?;
-        info!(src = %src.display(), dst = %entry_dll.display(), "copied ottercorp sdologinentry64.dll");
-    } else if !is_ottercorp_dll(&entry_dll) {
-        info!(path = %entry_dll.display(), "existing DLL is not ottercorp version, replacing");
-        let backup = boot_path.join("sdologinentry64.sdo.dll");
-        // 已有备份时不要覆盖：备份是修改版 shim 转发的目标，
-        // 一旦检测误判再次覆盖备份会永久丢失原版 DLL。
-        if !backup.exists() {
-            std::fs::copy(&entry_dll, &backup).map_err(GameLaunchError::Io)?;
-            info!(backup = %backup.display(), "backed up original DLL");
-        } else {
-            info!(backup = %backup.display(), "backup already exists, keeping it");
+    let check_dll = entry_dll.clone();
+    let replace = crate::blocking::run(move || -> Result<bool, GameLaunchError> {
+        std::fs::create_dir_all(&boot_path)?;
+        if !check_dll.exists() {
+            info!(path = %check_dll.display(), "DLL not found, downloading ottercorp version");
+            return Ok(true);
         }
+        if !is_ottercorp_dll(&check_dll) {
+            info!(path = %check_dll.display(), "existing DLL is not ottercorp version, replacing");
+            let backup = boot_path.join("sdologinentry64.sdo.dll");
+            // 备份是 shim 转发的目标，已有备份时不得覆盖。
+            if !backup.exists() {
+                std::fs::copy(&check_dll, &backup)?;
+                info!(backup = %backup.display(), "backed up original DLL");
+            }
+            Ok(true)
+        } else {
+            debug!(path = %check_dll.display(), "existing DLL is already ottercorp version");
+            Ok(false)
+        }
+    })
+    .await??;
+    if replace {
         let src = download_ottercorp_dll().await?;
-        std::fs::copy(&src, &entry_dll).map_err(GameLaunchError::Io)?;
-        info!("replaced sdologinentry64.dll with ottercorp version");
-    } else {
-        debug!(path = %entry_dll.display(), "existing DLL is already ottercorp version");
+        crate::blocking::run(move || {
+            std::fs::copy(&src, &entry_dll)?;
+            info!(src = %src.display(), dst = %entry_dll.display(), "copied ottercorp sdologinentry64.dll");
+            Ok::<_, std::io::Error>(())
+        })
+        .await??;
     }
 
     Ok(())
@@ -281,10 +287,13 @@ async fn download_ottercorp_dll() -> Result<std::path::PathBuf, GameLaunchError>
     let len = bytes.len();
     info!(bytes = len, "downloaded DLL");
 
-    std::fs::write(&dll_path, &bytes).map_err(GameLaunchError::Io)?;
-    info!(path = %dll_path.display(), bytes = len, "saved DLL to disk");
-
-    Ok(dll_path)
+    crate::blocking::run(move || {
+        std::fs::write(&dll_path, &bytes)?;
+        info!(path = %dll_path.display(), bytes = len, "saved DLL to disk");
+        Ok::<_, std::io::Error>(dll_path)
+    })
+    .await?
+    .map_err(GameLaunchError::Io)
 }
 
 /// 检查 DLL 是否为 ottercorp 修改版（通过 PE 文件 version info 中的 CompanyName）。
@@ -328,6 +337,51 @@ pub async fn launch_game(
     // 确保登录 DLL 是修改版
     ensure_login_entry(&config.game_path).await?;
 
+    #[cfg(not(target_os = "windows"))]
+    let tool = {
+        let tool = WineTool::resolve(wine).await.map_err(|e| {
+            error!(error = %e, "failed to resolve Wine");
+            GameLaunchError::Wine(format!("{e}"))
+        })?;
+        let tool = crate::blocking::run(move || {
+            tool.probe().map_err(|e| {
+                error!(error = %e, "wine probe failed");
+                GameLaunchError::Wine(format!("wine probe failed: {e}"))
+            })?;
+            Ok::<_, GameLaunchError>(tool)
+        })
+        .await??;
+        if wine.dxvk.enabled {
+            tool.ensure_dxvk().await.map_err(|e| {
+                error!(error = %e, "DXVK setup failed");
+                GameLaunchError::Wine(format!("DXVK setup failed: {e}"))
+            })?;
+            info!("DXVK setup complete");
+        }
+        tool
+    };
+
+    let config = config.clone();
+    #[cfg(not(target_os = "windows"))]
+    let wine = wine.clone();
+    crate::blocking::run(move || {
+        spawn_game(
+            &config,
+            #[cfg(not(target_os = "windows"))]
+            &wine,
+            #[cfg(not(target_os = "windows"))]
+            tool,
+        )
+    })
+    .await?
+}
+
+/// 包含 prefix 初始化、winepath 和 Injector 结果等待，只能在阻塞 worker 中调用。
+fn spawn_game(
+    config: &GameLaunchConfig,
+    #[cfg(not(target_os = "windows"))] wine: &WineSettings,
+    #[cfg(not(target_os = "windows"))] tool: WineTool,
+) -> Result<GameLaunchResult, GameLaunchError> {
     let args = build_sdo_launch_args(config);
     let arg_list = build_sdo_launch_args_vec(config);
     let game_path = &config.game_path;
@@ -429,26 +483,6 @@ pub async fn launch_game(
 
     #[cfg(not(target_os = "windows"))]
     {
-        let tool = WineTool::resolve(wine).await.map_err(|e| {
-            error!(error = %e, "failed to resolve Wine");
-            GameLaunchError::Wine(format!("{e}"))
-        })?;
-
-        // 校验 wine 可执行（wine64 --version）
-        if let Err(e) = tool.probe() {
-            error!(error = %e, "wine probe failed");
-            return Err(GameLaunchError::Wine(format!("wine probe failed: {e}")));
-        }
-
-        // 需要 DXVK 时确保已安装
-        if wine.dxvk.enabled {
-            tool.ensure_dxvk().await.map_err(|e| {
-                error!(error = %e, "DXVK setup failed");
-                GameLaunchError::Wine(format!("DXVK setup failed: {e}"))
-            })?;
-            info!("DXVK setup complete");
-        }
-
         let mut env = build_launch_env(wine, &tool);
 
         // 启用 Dalamud → 通过 Injector 创建游戏；否则直接 wine 运行
@@ -582,6 +616,68 @@ mod tests {
             area_patch: format!("patch{}", lobby),
             area_config_upload: config.to_string(),
         }
+    }
+
+    /// 假 Wine 必须等调用线程放行；同步等待回到 UI 线程会让此测试失败。
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn launch_keeps_executor_responsive_during_wine_probe() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+
+        let dir = std::env::temp_dir().join(format!("xlrs-launch-worker-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sdo/sdologin")).unwrap();
+        std::fs::write(dir.join("sdo/sdologin/sdologinentry64.dll"), b"ottercorp").unwrap();
+        let script = dir.join("wine64");
+        std::fs::write(
+            &script,
+            r#"#!/bin/sh
+: > "$0.started"
+i=0
+while [ ! -f "$0.release" ]; do
+    i=$((i + 1))
+    if [ "$i" -ge 200 ]; then exit 3; fi
+    sleep 0.01
+done
+exit 2
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let area = make_area("1", "test", "lobby", "gm", "config");
+        let config = GameLaunchConfig {
+            game_path: dir.join("game/ffxiv_dx11.exe"),
+            session_id: "ticket123".into(),
+            snda_id: "snda456".into(),
+            areas: vec![area.clone()],
+            area,
+            max_expansion: 1,
+            dc_travel_port: None,
+            reset_config: 0,
+            additional_args: String::new(),
+            dalamud: None,
+        };
+        let wine = WineSettings {
+            startup_type: crate::config::WineStartupType::Custom,
+            custom_path: Some(script),
+            ..Default::default()
+        };
+        let ui = async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !dir.join("wine64.started").exists() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                tokio::fs::write(dir.join("wine64.release"), b"")
+                    .await
+                    .unwrap();
+            })
+            .await
+            .unwrap();
+        };
+        let (result, ()) = tokio::join!(launch_game(&config, &wine), ui);
+        let _ = std::fs::remove_dir_all(&dir);
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("exit status: 2"), "{error}");
     }
 
     #[test]

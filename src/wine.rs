@@ -87,21 +87,28 @@ impl WineTool {
     /// prefix 一律以 `settings.prefix` 为准（`None` 用默认 `~/.eorzea/prefix`）。
     #[tracing::instrument]
     pub async fn resolve(settings: &WineSettings) -> Result<Self, WineError> {
+        let local_settings = settings.clone();
+        if let Some(tool) = crate::blocking::run(move || Self::resolve_local(&local_settings))
+            .await
+            .map_err(WineError::Io)??
+        {
+            return Ok(tool);
+        }
+        let tool = Self::download_and_setup().await?;
+        Ok(Self::apply_prefix(tool, settings))
+    }
+
+    fn resolve_local(settings: &WineSettings) -> Result<Option<Self>, WineError> {
         match settings.startup_type {
-            WineStartupType::Auto => {
-                if let Some(tool) = Self::detect(settings.custom_path.as_deref()) {
-                    return Ok(Self::apply_prefix(tool, settings));
-                }
-                let tool = Self::download_and_setup().await?;
-                Ok(Self::apply_prefix(tool, settings))
-            }
+            WineStartupType::Auto => Ok(Self::detect(settings.custom_path.as_deref())
+                .map(|tool| Self::apply_prefix(tool, settings))),
             WineStartupType::Managed => {
                 // 1. XIVLauncher 已下载的 wine
                 if let Some(home) = dirs::home_dir() {
                     let xlcore_wine = home.join(".xlcore/beta/wine/bin/wine64");
                     if xlcore_wine.exists() {
                         let tool = Self::from_xlcore_path(&xlcore_wine);
-                        return Ok(Self::apply_prefix(tool, settings));
+                        return Ok(Some(Self::apply_prefix(tool, settings)));
                     }
                 }
                 // 2. 本项目已下载的 wine
@@ -113,11 +120,10 @@ impl WineTool {
                         prefix_path: Self::default_prefix_path(),
                         is_managed: true,
                     };
-                    return Ok(Self::apply_prefix(tool, settings));
+                    return Ok(Some(Self::apply_prefix(tool, settings)));
                 }
-                // 3. 下载
-                let tool = Self::download_and_setup().await?;
-                Ok(Self::apply_prefix(tool, settings))
+                // 没有本地安装，由异步调用方下载。
+                Ok(None)
             }
             WineStartupType::Custom => {
                 let path = settings.custom_path.as_ref().ok_or_else(|| {
@@ -132,7 +138,7 @@ impl WineTool {
                     prefix_path: Self::default_prefix_path(),
                     is_managed: false,
                 };
-                Ok(Self::apply_prefix(tool, settings))
+                Ok(Some(Self::apply_prefix(tool, settings)))
             }
             WineStartupType::System => {
                 if let Some(path) = find_system_wine() {
@@ -141,7 +147,7 @@ impl WineTool {
                         prefix_path: Self::default_prefix_path(),
                         is_managed: false,
                     };
-                    return Ok(Self::apply_prefix(tool, settings));
+                    return Ok(Some(Self::apply_prefix(tool, settings)));
                 }
                 Err(WineError::NotFound(
                     "system wine/wine64 not found in PATH".to_string(),
@@ -400,68 +406,72 @@ impl WineTool {
             "Downloaded wine archive, extracting..."
         );
 
-        // 创建目录
-        std::fs::create_dir_all(&bin_dir).map_err(WineError::Io)?;
+        crate::blocking::run(move || {
+            // 创建目录
+            std::fs::create_dir_all(&bin_dir).map_err(WineError::Io)?;
 
-        // 解压
-        let tar_path = tools_dir.join("wine_download.tar.gz");
-        std::fs::write(&tar_path, &bytes).map_err(WineError::Io)?;
+            // 解压
+            let tar_path = tools_dir.join("wine_download.tar.gz");
+            std::fs::write(&tar_path, &bytes).map_err(WineError::Io)?;
 
-        // 使用 tar 命令解压（自动检测压缩格式）
-        let status = Command::new("tar")
-            .args(&[
-                "-xf",
-                tar_path.to_str().unwrap(),
-                "-C",
-                tools_dir.to_str().unwrap(),
-            ])
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-            .map_err(WineError::Io)?;
+            // 使用 tar 命令解压（自动检测压缩格式）
+            let status = Command::new("tar")
+                .args(&[
+                    "-xf",
+                    tar_path.to_str().unwrap(),
+                    "-C",
+                    tools_dir.to_str().unwrap(),
+                ])
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status()
+                .map_err(WineError::Io)?;
 
-        if !status.success() {
-            error!("Wine extraction failed: tar command returned non-zero exit code");
-            return Err(WineError::Extract("tar command failed".to_string()));
-        }
+            if !status.success() {
+                error!("Wine extraction failed: tar command returned non-zero exit code");
+                return Err(WineError::Extract("tar command failed".to_string()));
+            }
 
-        // 清理下载的压缩包
-        let _ = std::fs::remove_file(&tar_path);
+            // 清理下载的压缩包
+            let _ = std::fs::remove_file(&tar_path);
 
-        // tar 包顶层目录名不确定（如 wine-xiv-staging-fsync-git-8.5.r4.g4211bac7），
-        // 解压后扫描找到实际的 bin/wine64，统一移动到 wine/ 目录
-        if !wine64_path.exists() {
-            if let Some(found) = find_wine64_under(&tools_dir) {
-                // 将解压出的目录重命名为 wine/（若 wine/ 已存在则先移除空目录）
-                if let Some(extracted_dir) = found.parent() {
-                    let _ = std::fs::remove_dir_all(&wine_dir);
-                    std::fs::rename(extracted_dir, &wine_dir).map_err(WineError::Io)?;
-                    debug!(from = ?extracted_dir, to = ?wine_dir, "renamed extracted wine dir");
+            // tar 包顶层目录名不确定（如 wine-xiv-staging-fsync-git-8.5.r4.g4211bac7），
+            // 解压后扫描找到实际的 bin/wine64，统一移动到 wine/ 目录
+            if !wine64_path.exists() {
+                if let Some(found) = find_wine64_under(&tools_dir) {
+                    // 将解压出的目录重命名为 wine/（若 wine/ 已存在则先移除空目录）
+                    if let Some(extracted_dir) = found.parent() {
+                        let _ = std::fs::remove_dir_all(&wine_dir);
+                        std::fs::rename(extracted_dir, &wine_dir).map_err(WineError::Io)?;
+                        debug!(from = ?extracted_dir, to = ?wine_dir, "renamed extracted wine dir");
+                    }
                 }
             }
-        }
 
-        if !wine64_path.exists() {
-            error!(?wine64_path, "wine64 not found after extraction");
-            return Err(WineError::Extract(format!(
-                "wine64 not found after extraction at {:?}",
-                wine64_path
-            )));
-        }
+            if !wine64_path.exists() {
+                error!(?wine64_path, "wine64 not found after extraction");
+                return Err(WineError::Extract(format!(
+                    "wine64 not found after extraction at {:?}",
+                    wine64_path
+                )));
+            }
 
-        info!(?wine64_path, "Wine setup complete");
+            info!(?wine64_path, "Wine setup complete");
 
-        Ok(Self {
-            wine64_path,
-            prefix_path: Self::default_prefix_path(),
-            is_managed: true,
+            Ok(Self {
+                wine64_path,
+                prefix_path: Self::default_prefix_path(),
+                is_managed: true,
+            })
         })
+        .await
+        .map_err(WineError::Io)?
     }
 
     /// 确保 DXVK 已安装到 wine prefix。
     #[tracing::instrument(skip(self))]
     pub async fn ensure_dxvk(&self) -> Result<(), WineError> {
-        let prefix = &self.prefix_path;
+        let prefix = self.prefix_path.clone();
         let system32 = prefix.join("drive_c/windows/system32");
         let syswow64 = prefix.join("drive_c/windows/syswow64");
 
@@ -501,41 +511,45 @@ impl WineTool {
             "Downloaded DXVK archive, extracting..."
         );
 
-        let tools_dir = Self::tools_dir()?;
-        let dxvk_tar = tools_dir.join("dxvk_download.tar.gz");
-        std::fs::write(&dxvk_tar, &bytes).map_err(WineError::Io)?;
+        crate::blocking::run(move || {
+            let tools_dir = Self::tools_dir()?;
+            let dxvk_tar = tools_dir.join("dxvk_download.tar.gz");
+            std::fs::write(&dxvk_tar, &bytes).map_err(WineError::Io)?;
 
-        let dxvk_dir = tools_dir.join("dxvk");
-        std::fs::create_dir_all(&dxvk_dir).map_err(WineError::Io)?;
+            let dxvk_dir = tools_dir.join("dxvk");
+            std::fs::create_dir_all(&dxvk_dir).map_err(WineError::Io)?;
 
-        let status = Command::new("tar")
-            .args(&[
-                "-xf",
-                dxvk_tar.to_str().unwrap(),
-                "-C",
-                dxvk_dir.to_str().unwrap(),
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(WineError::Io)?;
+            let status = Command::new("tar")
+                .args(&[
+                    "-xf",
+                    dxvk_tar.to_str().unwrap(),
+                    "-C",
+                    dxvk_dir.to_str().unwrap(),
+                ])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(WineError::Io)?;
 
-        if !status.success() {
-            error!("DXVK extraction failed: tar command returned non-zero exit code");
-            return Err(WineError::Extract("tar dxvk failed".to_string()));
-        }
+            if !status.success() {
+                error!("DXVK extraction failed: tar command returned non-zero exit code");
+                return Err(WineError::Extract("tar dxvk failed".to_string()));
+            }
 
-        let _ = std::fs::remove_file(&dxvk_tar);
+            let _ = std::fs::remove_file(&dxvk_tar);
 
-        // 安装 dxvk dll 到 prefix
-        info!("Installing DXVK to wine prefix...");
-        Self::install_dxvk_dlls(&dxvk_dir, &system32, &syswow64)?;
+            // 安装 dxvk dll 到 prefix
+            info!("Installing DXVK to wine prefix...");
+            Self::install_dxvk_dlls(&dxvk_dir, &system32, &syswow64)?;
 
-        // 写入安装标记（下次 ensure 时据此区分 DXVK 与 wine builtin）
-        std::fs::write(&marker, b"dxvk-async-1.10.1\n").map_err(WineError::Io)?;
+            // 写入安装标记（下次 ensure 时据此区分 DXVK 与 wine builtin）
+            std::fs::write(&marker, b"dxvk-async-1.10.1\n").map_err(WineError::Io)?;
 
-        info!("DXVK installed successfully");
-        Ok(())
+            info!("DXVK installed successfully");
+            Ok(())
+        })
+        .await
+        .map_err(WineError::Io)?
     }
 
     #[tracing::instrument]
@@ -630,14 +644,24 @@ impl WineTool {
 /// 新 WoW64 架构（wine 11+，如 nixpkgs `wineWow64Packages`）已合并加载器，
 /// 只提供 `wine`，不再提供 `wine64`。
 fn find_system_wine() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
     for name in ["wine64", "wine"] {
-        if let Ok(output) = Command::new("which").arg(name).output() {
-            if output.status.success() {
-                let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !path_str.is_empty() {
-                    return Some(PathBuf::from(path_str));
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join(name);
+            let Ok(metadata) = candidate.metadata() else {
+                continue;
+            };
+            if !metadata.is_file() {
+                continue;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if metadata.permissions().mode() & 0o111 == 0 {
+                    continue;
                 }
             }
+            return Some(candidate);
         }
     }
     None

@@ -1,4 +1,5 @@
 pub mod auth;
+mod blocking;
 pub mod config;
 pub mod dalamud;
 pub mod game;
