@@ -583,7 +583,7 @@ fn spawn_game(
 }
 
 #[cfg(not(target_os = "windows"))]
-fn validate_wine_game_path(path: &std::path::Path) -> Result<(), GameLaunchError> {
+pub(crate) fn validate_wine_game_path(path: &std::path::Path) -> Result<(), GameLaunchError> {
     if path.to_string_lossy().is_ascii() {
         return Ok(());
     }

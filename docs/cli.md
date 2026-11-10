@@ -206,11 +206,11 @@ eoz areas
 
 ## `eoz launch`
 
-登录并启动游戏。这是最复杂的命令，执行阶段如下（每步失败都有明确报错；启用 Dalamud 时**不会静默降级**）：
+登录并启动游戏。CLI 和 GUI 均调用核心库 `Launcher::launch_account(LaunchRequest, on_event)`，界面只提供账号、大区、游戏目录、Wine/Dalamud 选项并展示进度，不缓存游戏 ticket。执行阶段如下（每步失败都有明确报错；启用 Dalamud 时**不会静默降级**）：
 
-1. **大区解析**：`--area` → 指定账号（缺省默认账号）的 `area` → 旧 `config.toml` 的 `area` → 大区列表第一个；名称写错在这里就报错，不会浪费一次登录。
+1. **大区与游戏预检**：大区按 `--area` → 指定账号（缺省默认账号）的 `area` → 旧 `config.toml` 的 `area` → 大区列表第一个解析；名称错误、游戏可执行文件缺失、未完成更新或 Wine 不支持的游戏路径均在登录前报错。
 2. **Dalamud 准备**：启用时按需补齐 release / runtime / assets（下载显示进度条）；失败则**报错且不启动游戏**，提示用 `--no-dalamud` 本次跳过。必须在登录之前完成，否则失败会让一次性 session key 作废。
-3. **登录**：用 `--account` 或默认账号的 session key 自动登录（新 key 写回 `auth.toml`，并显示剩余有效期）。`launch` 不再提供登录方式参数；新账号或 key 过期时先用 `eoz auth login qr` / `password` 登录。
+3. **登录**：每次读取 `auth.toml` 中 `--account` 或默认账号的最新 session key，重新认证并换取游戏 ticket；启动认证使用文件锁防止同时轮换，保存时合并账号配置的最新变更。新 key 保存失败或发现凭据冲突则中止启动。剩余有效期会显示在终端。新账号或 key 过期时先用 `eoz auth login qr` / `password` 登录。
 4. **登录 DLL 检查**：确保 `sdo/sdologin/sdologinentry64.dll` 是 ottercorp 修改版——缺失则下载（缓存于 `~/.eorzea/tools/`），是原版则备份为 `sdologinentry64.sdo.dll` 后替换。
 5. **Wine 准备**：按 `startup_type` 解析 Wine（必要时自动下载）→ `wine64 --version` 探针 → 确保 prefix 存在且为 64 位（详见 [`wine.md`](wine.md)）。
 6. **DXVK 检查**：`dxvk.enabled` 时确保 DXVK 已装入 prefix（未装则下载安装）。

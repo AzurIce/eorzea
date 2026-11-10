@@ -1,13 +1,15 @@
 //! 完整的登录 → 启动链路封装。
 //!
 //! 将 `eorzea-auth` 的认证能力和 `game.rs` / `wine.rs` 的启动能力
-//! 组合成高层 API，供 Tauri 前端或 CLI 示例直接调用。
+//! 组合成高层 API，供 GUI 和 CLI 共用。
 //!
 //! # 设计原则
 //!
 //! **登录** 和 **启动** 完全解耦：
 //! - 登录返回 `LaunchToken`，不依赖游戏路径。
 //! - 启动接受 `LaunchToken` + 大区 + 游戏路径。
+//! - 日常启动统一使用 [`Launcher::launch_account`]，每次读取已保存凭据并重新认证，
+//!   不在界面层缓存或复用游戏 ticket。
 //!
 //! QR 登录为**分步式**：先生成二维码展示，再在后台等待扫码结果。
 
@@ -16,6 +18,9 @@ use eorzea_auth::{AuthError, SdoArea, SdoLoginData};
 use std::path::Path;
 use std::time::Duration;
 use tracing::{debug, info, instrument, warn};
+
+mod account_launch;
+pub use account_launch::{LaunchEvent, LaunchRequest};
 
 use crate::game::{GameLaunchConfig, GameLaunchError, GameLaunchResult};
 
@@ -412,20 +417,15 @@ impl Launcher {
             )));
         }
 
-        let snda_id = result
-            .data
-            .snda_id
-            .ok_or_else(|| LauncherError::Auth("no snda_id in response".into()))?;
-        let tgt = result
-            .data
-            .tgt
-            .ok_or_else(|| LauncherError::Auth("no tgt in response (captcha required?)".into()))?;
-
-        let mut token = self
-            .exchange_tgt_for_token(&ctx, &tgt, &snda_id, result.data.auto_login_session_key)
-            .await?;
-        token.username = Some(account.to_string());
-        Ok(token)
+        // 与扫码/推送共用收尾，获取可续期的 session key；添加账号后不依赖缓存 ticket。
+        finalize_login(
+            &self.auth,
+            &ctx,
+            &result.data,
+            None,
+            Some(account.to_string()),
+        )
+        .await
     }
 
     /// 使用自动登录 session key 登录，返回 `LaunchToken`。

@@ -47,6 +47,7 @@
 
 - [x] **`getAccountGroup`/`accountGroupLogin`**：扫码/推送确认后调用 `account_group_login` 刷新 tgt 并获取 `auto_login_session_key`（对应 C# `AccountGroupLogin`），`launch` 自动登录链路打通
 - [x] **自动登录续期**：`autoLogin.json` 每次返回新 key + `autoLoginMaxAge`（剩余期限）；`fast_login`（`fastLogin.json`）再刷新 tgt/snda_id 对齐 C# `LoginBySessionKey`；`launch` 自动登录后保存新 key 到配置（旧 key 立即作废），并在输出显示剩余有效期
+- [x] **密码登录保存可续期凭据**：`login_password` 与扫码/推送共用 `finalize_login`，通过 `accountGroupLogin` 获取 session key；添加账号后启动统一重新认证，不依赖交互登录时的短期 ticket。回归测试覆盖静态登录不带 key 的响应。
 - [x] **选择 `sndaId`**：`get_account_group` 返回 `SdoAccount { snda_id, account_name }` 配对列表（`sndaIdArray`×`accountArray`，对应 C# 取显示名逻辑）；`QrCodeSession`/`PushLoginSession` 暴露 `poll()` + `finalize(data, snda_id)`，多账号场景前端可自行轮询、展示账号组后传入用户选择的 `snda_id` 完成登录
 - [x] **QR 扫码完整链路**：`qr_code_request` → 轮询 → `sso_login(tgt)` → ticket 获取已验证通过
 
@@ -128,6 +129,7 @@
 - [x] **`WineTool::probe()`**：`wine64 --version` 校验可执行性
 - [x] **`build_launch_env()`**：对齐 `CompatibilityTools.RunInPrefix` 环境变量（`WINEDLLOVERRIDES`、`WINEESYNC/WINEFSYNC/WINEMSYNC`、`WINEDEBUG`、`DXVK_STATE_CACHE_PATH`/`DXVK_CONFIG_FILE`/`DXVK_HUD`/`DXVK_FRAME_RATE`、`LD_PRELOAD` gamemode、自定义 env 覆盖）
 - [x] **每次启动指定不同 wine**：`Launcher::with_wine_settings`（持久）+ `Launcher::launch_with_wine`（单次覆盖）
+- [x] **CLI `--wine` 覆盖传递**：`eoz launch` 将 `launcher.wine_settings()` 传入共享 `LaunchRequest`，不再在创建游戏进程时重新加载并覆盖本次选定的 Wine 配置。
 - [x] **Wine 非 ASCII 游戏路径预检**：Linux/macOS 启动前拒绝包含非 ASCII 字符的完整游戏路径并返回明确错误，避免游戏内报误导性的 5003「帐号认证发生了错误」
 - [ ] **DXVK 变体选择**：当前固定 dxvk-async 1.10.1（CN 镜像）；上游已切换 dxvk-gplasync，未实现
 - [ ] **同步设置的平台能力统一**：GUI 已按平台隐藏不支持的开关（esync/fsync、gamemode 仅 Linux 显示，msync 仅 macOS 显示；配置字段仍跨平台保留），esync/fsync 在模型层合并为互斥的 `SyncMode` 枚举（配置文件仍写 `esync`/`fsync` 两个 bool，旧配置同时为 true 时按 fsync 读入，GUI 用「关 / esync / fsync」三档滑块表示）；剩余不一致：GUI 在 macOS 隐藏 esync（上游 Linux/macOS 都传 WINEESYNC，仍依赖所选 Wine 构建支持），CLI 在 Linux/macOS 均接受 esync/fsync/msync/gamemode，运行时 fsync 未限制 Linux。应统一能力规则（fsync/gamemode 仅 Linux、msync 仅 macOS、esync 依 Wine 构建），导入其他平台配置时保留且提示忽略，显式修改不支持的项时拒绝或明确告警，并覆盖按平台测试。
@@ -203,9 +205,12 @@
 
 ### P4-2.5 GUI UX 修正
 
+- [x] **GUI/CLI 共用账号启动流程与票据生命周期**：两者统一调用 `Launcher::launch_account(LaunchRequest, on_event)`，核心库负责游戏预检 → Dalamud 准备 → 读取最新凭据 → 自动登录 → 保存轮换 key → 创建游戏进程。GUI 移除 `AppState.tokens`，每次启动及失败重试都重新换取 ticket；界面只提供参数并展示事件。回归测试覆盖同一 Launcher 连续重试、默认账号/名称/ID 选择、认证失败及预检失败不启动。
+- [x] **GUI/CLI 自动登录凭据同步**：共享启动流程每次读取磁盘凭据，保存时重读并仅合并本账号的轮换 key，保留其他账号、默认账号与大区；启动认证使用文件锁防止两次启动同时轮换，发现凭据被其他操作修改时中止而不覆盖。GUI 修改账号元数据前也重新读盘。回归测试覆盖外部凭据轮换、认证期间元数据变更与 key 冲突。
+- [ ] **账号配置写入原子性与统一互斥**：`auth::save` 直接覆盖文件，非启动的账号管理写操作尚未接入启动认证锁。需统一读改写互斥及原子替换，覆盖保存中断和账号管理与启动同时写入；当前启动流程的重读合并与 key 比较不能消除最终检查到写入之间的竞争窗口。
 - [ ] **GUI 产品级主路径与恢复设计**：审查与建议见 [`docs/gui-ux-review.md`](docs/gui-ux-review.md)。首次配置需按缺失条件引导；主操作首屏可见；登录失效提供绑定原账号的重新登录入口；错误应有原位恢复动作，而非只写可被覆盖的全局状态字符串。
 - [ ] **GUI 更新任务生命周期与启动互斥**：更新状态/补丁列表仍属主页局部 signal，检查/下载/安装使用页面 scope 的 spawn；切页卸载存在取消任务、丢失进度和中断安装风险。需改应用级任务并定义安全退出/取消边界；更新与启动当前只分别防自身重入，须按游戏目录互斥，禁止安装与启动冲突。
-- [ ] **GUI 登录持久化失败的真实状态**：on_login_success 保存失败仍更新内存账号、缓存 token 并关闭弹窗；主页自动登录轮换 key 后忽略保存错误。需区分本次可用与已持久化，失败保留恢复入口，避免下次启动凭据失效却无解释。
+- [ ] **GUI 添加账号持久化失败的原位恢复**：保存失败不再更新内存账号或关闭弹窗；共享启动流程保存轮换 key 失败时会报错并中止启动。添加账号的保存错误仍只显示在全局状态栏，需在扫码/推送/密码弹窗内展示并提供明确重试入口。
 - [ ] **GUI 设置草稿保护与字段校验**：设置切页后局部草稿会丢失，无离开确认；初始化延迟非法输入静默回退且 dirty 判断可能忽略非法值，缺少毫秒单位。需保护草稿、标注单位、字段报错并阻止非法保存；开关/同步选项补键盘操作与可访问名称。
 - [ ] **GUI 状态准确性**：区域列表请求失败后空列表仍显示加载中；游戏版本 memo 仅依赖路径，更新完成需主动刷新；Wine 摘要 detect 与所选 startup_type 解析不完全等价；Dalamud 摘要需与本次加载覆盖一致。
 - [ ] **GUI 账号组选择**：核心支持账号组与 poll/finalize，但 GUI 使用 wait_for_scan/wait_for_confirm 直接完成默认账号；多账号组应提供选择步骤，单账号不增加操作。

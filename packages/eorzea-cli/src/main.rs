@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use console::style;
 use eorzea::game_files::{GameFileManager, default_patch_dir, version};
-use eorzea::launcher::{Launcher, LauncherError};
+use eorzea::launcher::{LaunchEvent, LaunchRequest, Launcher, LauncherError};
 use eorzea::term_img;
 use eorzea_auth::sdo::SdoAuth;
 
@@ -989,17 +989,7 @@ async fn cmd_launch(
     wine: Option<&std::path::Path>,
     dalamud_override: Option<bool>,
 ) {
-    if eorzea::game_files::update::has_pending_update(game_path) {
-        die("游戏有未完成的更新，请先运行 `eoz game update` 恢复队列");
-    }
-    // 先定位游戏 + 解析大区 + 准备 Dalamud，再登录：
-    // - 大区名称写错时不必先消耗掉一次性 session key
-    // - 启用 Dalamud 时准备失败要立刻报错退出，同样发生在换取 SSO ticket 之前
-    let exe = game_path.join("game/ffxiv_dx11.exe");
-    if !exe.exists() {
-        die(format!("未找到游戏可执行文件: {}", exe.display()));
-    }
-
+    // CLI 只解析输入、展示进度；认证、凭据轮换和启动与 GUI 共用核心库流程。
     let mut launcher = Launcher::new()
         .expect("failed to create Launcher")
         .with_wine_settings(eorzea::config::load_settings());
@@ -1030,138 +1020,81 @@ async fn cmd_launch(
         game_path.display()
     ));
 
-    // Dalamud：三件套按需补齐；下载用进度条，不下载的阶段一闪而过
-    let mut bar: Option<ui::ByteBar> = None;
-    let mut last_phase = None;
-    let mut phase_bar = |phase: eorzea::launcher::DalamudPhase, done: u64, total: u64| {
-        if last_phase != Some(phase) {
-            if let Some(b) = bar.take() {
-                b.finish_ready();
-            }
-            last_phase = Some(phase);
-            bar = Some(ui::ByteBar::new(format!("准备 {}", phase.label())));
-        }
-        if let Some(b) = bar.as_ref() {
-            b.set_progress(done, total);
-        }
-    };
-
-    let dalamud_cfg = match launcher
-        .prepare_dalamud(game_path, dalamud_override, |phase, done, total| {
-            phase_bar(phase, done, total)
-        })
-        .await
-    {
-        Ok(cfg) => {
-            if let Some(b) = bar.take() {
-                b.finish_ready();
-            }
-            cfg
-        }
-        Err(e) => {
-            if let Some(b) = bar.take() {
-                b.clear();
-            }
-            ui::fail(e);
-            ui::fail(
-                "本次不会启动游戏。修复后重试，或用 `eoz launch --no-dalamud` 本次跳过（也可在设置里关闭 Dalamud）。",
-            );
-            std::process::exit(1);
-        }
-    };
-
-    // 启动只做自动登录：登录入口统一到 `eoz auth login`，避免两套参数。
-    // 账号：--account 指定 → 默认账号
     let cfg_path = eorzea::auth::config_path();
-    let cfg = eorzea::auth::load(&cfg_path);
-
-    let target = account.or(cfg.default_account.as_deref());
-    let token = match target {
-        Some(id) => {
-            let acc = cfg.find_by_identifier(id);
-            match acc {
-                Some(a) if a.can_auto_login() => {
-                    let name = a.display_name().to_string();
-                    let key = a.auto_login_session_key.clone().unwrap();
-                    let sp = ui::Spinner::new(format!("自动登录 {name}"));
-                    match launcher.login_auto(&key).await {
-                        Ok(t) => {
-                            sp.clear();
-                            // autoLogin.json 返回新的 session key（旧 key 立即作废），
-                            // 立即更新配置，否则下次自动登录会过期
-                            if let Some(new_key) = &t.auto_login_session_key {
-                                let cfg_path = eorzea::auth::config_path();
-                                let mut cfg = eorzea::auth::load(&cfg_path);
-                                if let Some(acc) =
-                                    cfg.accounts.iter_mut().find(|a| a.snda_id == t.snda_id)
-                                {
-                                    acc.auto_login_session_key = Some(new_key.clone());
-                                    if let Err(e) = eorzea::auth::save(&cfg_path, &cfg) {
-                                        ui::fail(format!("更新 session key 失败: {e}"));
-                                    }
-                                }
-                            }
-                            // 显示剩余有效期（autoLoginMaxAge，秒）
-                            if let Some(age) = t.auto_login_max_age {
-                                hint(format!(
-                                    "session key 已刷新，剩余有效期 {:.1} 天",
-                                    age as f64 / 86400.0
-                                ));
-                            }
-                            kv("账号", name);
-                            t
+    let mut bar: Option<ui::ByteBar> = None;
+    let mut spinner: Option<ui::Spinner> = None;
+    let mut last_phase = None;
+    let result = launcher
+        .launch_account(
+            LaunchRequest {
+                game_root: game_path,
+                auth_path: &cfg_path,
+                account,
+                area,
+                areas,
+                wine: launcher.wine_settings(),
+                dalamud: dalamud_override,
+            },
+            |event| match event {
+                LaunchEvent::DalamudProgress(phase, done, total) => {
+                    if last_phase != Some(phase) {
+                        if let Some(b) = bar.take() {
+                            b.finish_ready();
                         }
-                        Err(e) => {
-                            sp.clear();
-                            ui::fail(format!("自动登录失败: {e}"));
-                            die("请先检查上方错误；若 session key 已过期，用 `eoz auth login qr` 重新登录");
-                        }
+                        last_phase = Some(phase);
+                        bar = Some(ui::ByteBar::new(format!("准备 {}", phase.label())));
+                    }
+                    if let Some(b) = bar.as_ref() {
+                        b.set_progress(done, total);
                     }
                 }
-                Some(_) => die(format!(
-                    "账号 '{}' 没有保存 session key，无法自动登录（用 `eoz auth login qr` 登录）",
-                    a_display(&cfg, id)
-                )),
-                None => die(format!("找不到账号 '{id}'，用 `eoz auth status` 查看")),
-            }
-        }
-        None => die("未指定账号且没有默认账号：用 `eoz auth login qr` 登录后再启动"),
-    };
-
-    match &dalamud_cfg {
-        Some(cfg) => kv(
-            "Dalamud",
-            format!(
-                "{}（走 Injector）",
-                cfg.install_dir
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "?".to_string())
-            ),
-        ),
-        None => kv("Dalamud", ui::dim("禁用")),
-    }
-
-    let sp = ui::Spinner::new("启动游戏进程");
-    match launcher
-        .launch_prepared(
-            &eorzea::config::load_settings(),
-            dalamud_cfg,
-            &token,
-            area,
-            areas,
-            &exe,
+                LaunchEvent::LoggingIn { account_name } => {
+                    if let Some(b) = bar.take() {
+                        b.finish_ready();
+                    }
+                    spinner = Some(ui::Spinner::new(format!("自动登录 {account_name}")));
+                }
+                LaunchEvent::SessionRefreshed {
+                    account_name,
+                    remaining_seconds,
+                } => {
+                    if let Some(sp) = spinner.take() {
+                        sp.clear();
+                    }
+                    if let Some(age) = remaining_seconds {
+                        hint(format!(
+                            "session key 已刷新，剩余有效期 {:.1} 天",
+                            age as f64 / 86400.0
+                        ));
+                    }
+                    kv("账号", account_name);
+                }
+                LaunchEvent::Starting { dalamud_version } => {
+                    match dalamud_version {
+                        Some(version) => kv("Dalamud", format!("{version}（走 Injector）")),
+                        None => kv("Dalamud", ui::dim("禁用")),
+                    }
+                    spinner = Some(ui::Spinner::new("启动游戏进程"));
+                }
+            },
         )
-        .await
-    {
+        .await;
+    if let Some(b) = bar.take() {
+        b.clear();
+    }
+    match result {
         Ok(result) => {
-            sp.finish(format!("游戏已启动（PID {}）", result.child.id()));
+            if let Some(sp) = spinner.take() {
+                sp.finish(format!("游戏已启动（PID {}）", result.child.id()));
+            }
             if let Some(log) = &result.log_path {
                 kv("运行日志", log.display());
             }
         }
         Err(e) => {
-            sp.clear();
+            if let Some(sp) = spinner.take() {
+                sp.clear();
+            }
             // 完整错误（含 Injector/wine stderr）已由 ERROR 日志输出，这里只留首行摘要
             let msg = e.to_string();
             ui::fail(format!(
@@ -1171,16 +1104,18 @@ async fn cmd_launch(
             if msg.lines().nth(1).is_some() {
                 hint("详细输出见上方日志（`-v` 可看更多）");
             }
+            match e {
+                LauncherError::DalamudNotReady(_) => {
+                    hint("本次不会启动游戏。修复后重试，或用 `eoz launch --no-dalamud` 本次跳过。")
+                }
+                LauncherError::Auth(_) => hint(
+                    "请先检查上方错误；若 session key 已过期，用 `eoz auth login qr` 重新登录。",
+                ),
+                _ => {}
+            }
             std::process::exit(1);
         }
     }
-}
-
-/// 辅助：显示账号展示名（找不到时回退为传入的 id）。
-fn a_display(cfg: &eorzea::auth::AuthConfig, id: &str) -> String {
-    cfg.find(id)
-        .map(|a| a.display_name().to_string())
-        .unwrap_or_else(|| id.to_string())
 }
 
 /// 检查游戏版本状态，返回可读的一行摘要（不带 emoji，样式由调用方决定）。

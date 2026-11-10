@@ -28,11 +28,11 @@ enum LoginMethod {
     Password,
 }
 
-fn account_status(has_token: bool, has_key: bool) -> &'static str {
-    match (has_token, has_key) {
-        (true, _) => "本次会话已登录",
-        (false, true) => "已保存自动登录凭据，启动时验证",
-        (false, false) => "未保存自动登录凭据，请重新添加账号",
+fn account_status(has_key: bool) -> &'static str {
+    if has_key {
+        "已保存自动登录凭据，启动时验证"
+    } else {
+        "未保存自动登录凭据，请重新添加账号"
     }
 }
 
@@ -82,7 +82,7 @@ pub fn LoginPage() -> Element {
                         let delete_id = acc.snda_id.clone();
                         let confirm_id = acc.snda_id.clone();
                         let confirming = confirm_delete.read().as_deref() == Some(acc.snda_id.as_str());
-                        let status = account_status(state.tokens.read().contains_key(&acc.snda_id), acc.can_auto_login());
+                        let status = account_status(acc.can_auto_login());
                         // 旧配置可能存的是数字 ID；展示时尽量换成名称
                         let area_label = acc.area.as_ref().map(|value| {
                             state
@@ -111,7 +111,7 @@ pub fn LoginPage() -> Element {
                                         label: if is_default { "默认" } else { "设为默认" },
                                         disabled: is_default,
                                         onclick: move |_| {
-                                            let mut cfg = state.auth_cfg.read().clone();
+                                            let mut cfg = auth::load(&auth::config_path());
                                             if let Some(acc) = cfg.find(&set_default_id) {
                                                 cfg.default_account = Some(acc.display_name().to_string());
                                             }
@@ -128,14 +128,13 @@ pub fn LoginPage() -> Element {
                                         DangerButton {
                                             label: "确认删除",
                                             onclick: move |_| {
-                                                let mut cfg = state.auth_cfg.read().clone();
+                                                let mut cfg = auth::load(&auth::config_path());
                                                 cfg.remove(&delete_id);
                                                 if let Err(e) = auth::save(&auth::config_path(), &cfg) {
                                                     state.status.set(format!("保存账号配置失败: {e}"));
                                                     return;
                                                 }
                                                 state.auth_cfg.set(cfg);
-                                                state.tokens.write().remove(&delete_id);
                                                 if state.selected_account.read().as_deref() == Some(delete_id.as_str()) {
                                                     state.selected_account.set(None);
                                                 }
@@ -588,15 +587,7 @@ mod tests {
 
     #[test]
     fn saved_credentials_are_not_presented_as_a_verified_session() {
-        assert_eq!(
-            account_status(false, true),
-            "已保存自动登录凭据，启动时验证"
-        );
-        assert_eq!(account_status(true, true), "本次会话已登录");
-        assert_eq!(account_status(true, false), "本次会话已登录");
-        assert_eq!(
-            account_status(false, false),
-            "未保存自动登录凭据，请重新添加账号"
-        );
+        assert_eq!(account_status(true), "已保存自动登录凭据，启动时验证");
+        assert_eq!(account_status(false), "未保存自动登录凭据，请重新添加账号");
     }
 }

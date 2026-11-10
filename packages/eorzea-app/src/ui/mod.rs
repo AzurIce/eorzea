@@ -14,7 +14,6 @@ mod theme;
 
 pub use theme::Theme;
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -48,8 +47,6 @@ pub struct AppState {
     pub dalamud_cfg: Signal<DalamudSettings>,
     /// 大区列表（按 area_order 排序）。
     pub areas: Signal<Vec<SdoArea>>,
-    /// 本会话的登录 token（snda_id -> token），不落盘。
-    pub tokens: Signal<HashMap<String, LaunchToken>>,
     /// 主页选中的账号（snda_id）。
     pub selected_account: Signal<Option<String>>,
     /// 主页选中大区（area_id）。
@@ -75,9 +72,9 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// 登录成功后写回 auth.toml、缓存 token；留在账号页。
+    /// 登录成功后保存可续期凭据；游戏 ticket 不缓存，启动时重新认证。
     pub fn on_login_success(&mut self, token: LaunchToken) {
-        let mut cfg = self.auth_cfg.read().clone();
+        let mut cfg = auth::load(&auth::config_path());
         let make_default = cfg.default_account().is_none();
         // 账号里存大区名称（对齐 XIVLauncherCN 的 AreaName），数字 ID 只在内部使用
         let selected_area = self.selected_area.read().clone();
@@ -98,14 +95,15 @@ impl AppState {
             },
             make_default,
         );
-        let saved = auth::save(&auth::config_path(), &cfg);
+        if let Err(e) = auth::save(&auth::config_path(), &cfg) {
+            self.status.set(format!(
+                "登录成功，但保存账号配置失败，请检查后重新登录: {e}"
+            ));
+            return;
+        }
         self.auth_cfg.set(cfg);
         self.selected_account.set(Some(token.snda_id.clone()));
-        self.tokens.write().insert(token.snda_id.clone(), token);
-        self.status.set(match saved {
-            Ok(()) => "账号已添加".to_string(),
-            Err(e) => format!("登录成功，但保存账号配置失败: {e}"),
-        });
+        self.status.set("账号已添加".to_string());
         self.adding_account.set(false);
     }
 }
@@ -137,7 +135,6 @@ pub fn app() -> Element {
         game_path: use_signal(|| initial_config.game_path.clone()),
         dalamud_cfg: use_signal(|| initial_config.dalamud.clone()),
         areas: use_signal(Vec::new),
-        tokens: use_signal(HashMap::new),
         selected_account: use_signal(|| None),
         selected_area: use_signal(|| None),
         status: use_signal(String::new),

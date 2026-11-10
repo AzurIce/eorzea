@@ -11,6 +11,7 @@ use eorzea::game_files::patch_manager::PatchPhase;
 use eorzea::game_files::{
     CheckResult, GameFileManager, InstallPhase, UpdateProgress, default_patch_dir,
 };
+use eorzea::launcher::{LaunchEvent, LaunchRequest};
 #[cfg(not(target_os = "windows"))]
 use eorzea::wine::WineTool;
 
@@ -201,18 +202,6 @@ pub fn HomePage() -> Element {
             return;
         };
         let exe = root.join("game/ffxiv_dx11.exe");
-        if eorzea::game_files::update::has_pending_update(&root) {
-            state
-                .status
-                .set("游戏有未完成的更新，请先检查更新并恢复队列".into());
-            return;
-        }
-        if !exe.is_file() {
-            state
-                .status
-                .set(format!("未找到游戏可执行文件: {}", exe.display()));
-            return;
-        }
         let Some(launcher) = state.launcher.read().clone() else {
             state.status.set("启动器尚未初始化完成".into());
             return;
@@ -226,113 +215,65 @@ pub fn HomePage() -> Element {
                 exe = %exe.display(),
                 "开始启动游戏"
             );
-            // Dalamud 准备放在自动登录**之前**：启用时失败不静默降级（状态栏报错、
-            // 不启动游戏），也避免一次失败就消耗掉一次性 session key。
-            let dalamud_on = dalamud_this_launch();
-            let dalamud_cfg = match launcher
-                .prepare_dalamud(&root, Some(dalamud_on), |phase, done, total| {
-                    // GUI 不画进度条，但状态栏要能看出在下什么、下到哪了
-                    let label = phase.label();
-                    if total > 0 {
-                        state.status.set(format!(
-                            "正在准备 {label}… {} / {}",
-                            human_bytes(done),
-                            human_bytes(total)
-                        ));
-                    } else {
-                        state.status.set(format!("正在准备 {label}…"));
-                    }
-                })
-                .await
-            {
-                Ok(cfg) => {
-                    tracing::info!(dalamud = cfg.is_some(), "Dalamud 准备完成");
-                    cfg
-                }
-                Err(e) => {
-                    state
-                        .status
-                        .set(format!("{e}（可关闭主页的「本次启动加载 Dalamud」后重试）"));
-                    tracing::error!(error = %e, "Dalamud 准备失败，已中止启动");
-                    launching.set(false);
-                    return;
-                }
-            };
-
-            // 本会话没有 token 时先尝试自动登录（key 会轮换，需写回）
-            let existing = state.tokens.read().get(&snda_id).cloned();
-            let token = match existing {
-                Some(t) => Some(t),
-                None => {
-                    let key = state
-                        .auth_cfg
-                        .read()
-                        .find(&snda_id)
-                        .and_then(|a| a.auto_login_session_key.clone());
-                    match key {
-                        Some(key) => {
-                            state.status.set("自动登录中…".into());
-                            tracing::info!("本会话没有 token，开始自动登录");
-                            match launcher.login_auto(&key).await {
-                                Ok(t) => {
-                                    tracing::info!(account = %t.snda_id, "自动登录成功");
-                                    // 写回轮换后的 session key
-                                    let mut cfg = state.auth_cfg.read().clone();
-                                    cfg.upsert(
-                                        eorzea::auth::Account {
-                                            snda_id: t.snda_id.clone(),
-                                            username: t.username.clone(),
-                                            auto_login_session_key: t
-                                                .auto_login_session_key
-                                                .clone(),
-                                            // None 表示保留账号已保存的大区
-                                            area: None,
-                                        },
-                                        false,
-                                    );
-                                    let _ = eorzea::auth::save(&eorzea::auth::config_path(), &cfg);
-                                    state.auth_cfg.set(cfg);
-                                    state.tokens.write().insert(t.snda_id.clone(), t.clone());
-                                    Some(t)
-                                }
-                                Err(e) => {
-                                    state
-                                        .status
-                                        .set(format!("自动登录失败（{e}），请到登录页重新登录"));
-                                    tracing::error!(error = %e, "自动登录失败");
-                                    None
-                                }
+            let areas = state.areas.read().clone();
+            let wine = state.settings.read().clone();
+            let auth_path = eorzea::auth::config_path();
+            let result = launcher
+                .launch_account(
+                    LaunchRequest {
+                        game_root: &root,
+                        auth_path: &auth_path,
+                        account: Some(&snda_id),
+                        area,
+                        areas,
+                        wine: &wine,
+                        dalamud: Some(dalamud_this_launch()),
+                    },
+                    |event| match event {
+                        LaunchEvent::DalamudProgress(phase, done, total) => {
+                            let label = phase.label();
+                            if total > 0 {
+                                state.status.set(format!(
+                                    "正在准备 {label}… {} / {}",
+                                    human_bytes(done),
+                                    human_bytes(total)
+                                ));
+                            } else {
+                                state.status.set(format!("正在准备 {label}…"));
                             }
                         }
-                        None => {
-                            state
-                                .status
-                                .set("该账号没有自动登录凭证，请到登录页登录".into());
-                            tracing::warn!("该账号没有自动登录凭证");
-                            None
+                        LaunchEvent::LoggingIn { account_name } => {
+                            state.status.set(format!("正在自动登录 {account_name}…"));
                         }
-                    }
+                        LaunchEvent::SessionRefreshed { .. } => {
+                            state.auth_cfg.set(eorzea::auth::load(&auth_path));
+                            tracing::info!("自动登录成功，凭据已保存");
+                        }
+                        LaunchEvent::Starting { .. } => {
+                            state.status.set("正在启动游戏…".into());
+                        }
+                    },
+                )
+                .await;
+            match result {
+                Ok(result) => {
+                    state
+                        .status
+                        .set(format!("游戏已启动（PID {}）", result.child.id()));
+                    tracing::info!(pid = result.child.id(), "游戏进程已启动");
                 }
-            };
-
-            if let Some(token) = token {
-                let areas = state.areas.read().clone();
-                let wine = state.settings.read().clone();
-                state.status.set("正在启动游戏…".into());
-                match launcher
-                    .launch_prepared(&wine, dalamud_cfg, &token, area, areas, &exe)
-                    .await
-                {
-                    Ok(result) => {
-                        state
-                            .status
-                            .set(format!("游戏已启动（PID {}）", result.child.id()));
-                        tracing::info!(pid = result.child.id(), "游戏进程已启动");
-                    }
-                    Err(e) => {
-                        state.status.set(format!("启动失败: {e}"));
-                        tracing::error!(error = %e, "游戏启动失败");
-                    }
+                Err(e) => {
+                    let hint = match &e {
+                        eorzea::launcher::LauncherError::DalamudNotReady(_) => {
+                            "（可关闭主页的「本次启动加载 Dalamud」后重试）"
+                        }
+                        eorzea::launcher::LauncherError::Auth(_) => {
+                            "（凭据失效时请到账号管理重新登录）"
+                        }
+                        _ => "",
+                    };
+                    state.status.set(format!("启动失败: {e}{hint}"));
+                    tracing::error!(error = %e, "游戏启动失败");
                 }
             }
             launching.set(false);
@@ -574,7 +515,7 @@ pub fn HomePage() -> Element {
                                     .find(|a| a.area_id == id)
                                     .map(|a| a.area_name.clone());
                                 let Some(area_name) = area_name else { return };
-                                let mut cfg = state.auth_cfg.read().clone();
+                                let mut cfg = eorzea::auth::load(&eorzea::auth::config_path());
                                 let changed = match cfg
                                     .accounts
                                     .iter_mut()
@@ -834,7 +775,6 @@ mod tests {
             game_path: use_signal(|| None),
             dalamud_cfg: use_signal(Default::default),
             areas: use_signal(Vec::new),
-            tokens: use_signal(Default::default),
             selected_account: use_signal(|| None),
             selected_area: use_signal(|| None),
             status: use_signal(String::new),
