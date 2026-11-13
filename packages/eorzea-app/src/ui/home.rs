@@ -153,15 +153,29 @@ pub fn HomePage() -> Element {
             return;
         };
         let list = patches.read().clone();
+        let download = state.download_cfg.read().clone();
+        if let Err(error) = download.validate() {
+            state
+                .status
+                .set(format!("下载配置无效: {error}，请在设置页修改"));
+            return;
+        }
         let patch_dir = default_patch_dir(&root);
         update_state.set(UpdateState::Running);
         state.update_progress.set(None);
         spawn_forever(async move {
             let mgr = GameFileManager::new();
             match mgr
-                .update(&list, &patch_dir, &root, 4, |progress| {
-                    state.update_progress.set(Some(progress));
-                })
+                .update_with_min_concurrency(
+                    &list,
+                    &patch_dir,
+                    &root,
+                    download.concurrency,
+                    download.min_concurrency,
+                    |progress| {
+                        state.update_progress.set(Some(progress));
+                    },
+                )
                 .await
             {
                 Ok(summary) => {
@@ -774,6 +788,7 @@ mod tests {
             settings: use_signal(Default::default),
             game_path: use_signal(|| None),
             dalamud_cfg: use_signal(Default::default),
+            download_cfg: use_signal(Default::default),
             areas: use_signal(Vec::new),
             selected_account: use_signal(|| None),
             selected_area: use_signal(|| None),
@@ -790,6 +805,7 @@ mod tests {
         };
         use_context_provider(|| state);
         let progress = UpdateProgress {
+            ready: Vec::new(),
             install: InstallProgress {
                 done: 150,
                 total: 400,

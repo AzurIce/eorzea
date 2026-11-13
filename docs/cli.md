@@ -161,7 +161,9 @@ eoz areas
 
 不要手动删除 `update.json` 或仅凭缓存文件缺失判断更新完成。队列损坏、缓存目录不可访问或磁盘写满时应先解决报错原因，再重试。
 
-选项：`--area`、`--max-expansion`、`--repair`、`--patch-dir <path>`（默认 `<游戏目录>/.eorzea/patches`）、`--concurrency <n>`（默认 4）。
+选项：`--area`、`--max-expansion`、`--repair`、`--patch-dir <path>`（默认 `<游戏目录>/.eorzea/patches`）、`--concurrency <n>`、`--min-concurrency <n>`。并发参数未传时读取 `[download]`，内置默认最大 4、最少 0；显式参数只覆盖本次运行。最少并发不得超过最大值；非零时允许突破预取窗口补任务，可能积压更多磁盘缓存，剩余补丁不足时不保证下限。
+
+下载并校验通过的预取补丁在 CLI 保留为「✓ 等待应用」，开始应用后才从下载列表移除。
 
 > 注：`Cargo.toml` 的 dev profile 已给 `sha1` 依赖单独开 `opt-level = 3`。否则 debug 版 SHA1 可能只有十几 MiB/s，1.4 GiB 补丁的校验会被拖到几分钟。正式下载仍建议 `cargo run --release -p eorzea-cli -- game update`。
 

@@ -161,9 +161,13 @@ enum GameCommand {
         #[arg(long)]
         patch_dir: Option<PathBuf>,
 
-        /// 并发下载数（默认 4）
-        #[arg(long, default_value_t = 4)]
-        concurrency: usize,
+        /// 最大下载并发（覆盖 download.concurrency；默认 4）
+        #[arg(long)]
+        concurrency: Option<usize>,
+
+        /// 最少下载并发（覆盖 download.min_concurrency；默认 0，非零允许增加缓存积压）
+        #[arg(long)]
+        min_concurrency: Option<usize>,
     },
 
     /// 校验游戏文件完整性（存在性 + sqpack 结构）
@@ -429,6 +433,7 @@ async fn main() {
                 repair,
                 patch_dir,
                 concurrency,
+                min_concurrency,
             } => {
                 let game_path = game_path_or_config(game_path);
                 cmd_update(
@@ -438,6 +443,7 @@ async fn main() {
                     repair,
                     patch_dir,
                     concurrency,
+                    min_concurrency,
                 )
                 .await
             }
@@ -581,8 +587,15 @@ async fn cmd_update(
     max_expansion: i32,
     repair: bool,
     patch_dir: Option<PathBuf>,
-    concurrency: usize,
+    concurrency: Option<usize>,
+    min_concurrency: Option<usize>,
 ) {
+    let download = eorzea::config::load_app_default()
+        .download
+        .with_overrides(concurrency, min_concurrency)
+        .unwrap_or_else(|e| die(e));
+    let concurrency = download.concurrency;
+    let min_concurrency = download.min_concurrency;
     let mgr = GameFileManager::new();
     match mgr.pending_update(game_path).await {
         Ok(Some(pending)) => {
@@ -593,6 +606,7 @@ async fn cmd_update(
                 &pending.patch_dir,
                 game_path,
                 concurrency,
+                min_concurrency,
             )
             .await;
             hint("原更新队列已完成；可再次检查服务端是否有更新");
@@ -640,7 +654,15 @@ async fn cmd_update(
         eorzea::game_files::CheckResult::NeedsPatchBoot => die("boot 需要更新（国服通常不会出现）"),
     };
 
-    run_update_queue(&mgr, &patches, &patch_dir, game_path, concurrency).await;
+    run_update_queue(
+        &mgr,
+        &patches,
+        &patch_dir,
+        game_path,
+        concurrency,
+        min_concurrency,
+    )
+    .await;
 }
 
 async fn run_update_queue(
@@ -649,6 +671,7 @@ async fn run_update_queue(
     patch_dir: &std::path::Path,
     game_path: &std::path::Path,
     concurrency: usize,
+    min_concurrency: usize,
 ) {
     let total: u64 = patches.iter().map(|p| p.length).sum();
     kv(
@@ -661,9 +684,14 @@ async fn run_update_queue(
     let start = std::time::Instant::now();
     let mut view = ui::UpdateView::new();
     match mgr
-        .update(patches, patch_dir, game_path, concurrency, |progress| {
-            view.update(&progress)
-        })
+        .update_with_min_concurrency(
+            patches,
+            patch_dir,
+            game_path,
+            concurrency,
+            min_concurrency,
+            |progress| view.update(&progress),
+        )
         .await
     {
         Ok(summary) => {
@@ -1375,8 +1403,10 @@ fn config_key_spec(key: &str) -> Option<ConfigValueKind> {
         | "dalamud.no_plugins"
         | "dalamud.no_third_party_plugins"
         | "dalamud.manage_runtime" => ConfigValueKind::Bool,
-        "dalamud.delay_initialize_ms" => ConfigValueKind::Uint,
-        "dalamud" => ConfigValueKind::Table,
+        "dalamud.delay_initialize_ms" | "download.concurrency" | "download.min_concurrency" => {
+            ConfigValueKind::Uint
+        }
+        "dalamud" | "download" => ConfigValueKind::Table,
         #[cfg(not(target_os = "windows"))]
         "startup_type" | "custom_path" | "prefix" | "debug_vars" | "dxvk.hud" => {
             ConfigValueKind::String
@@ -1541,8 +1571,10 @@ fn save_config_document(doc: &toml::Value) -> Result<(), String> {
 /// 写盘前用 AppConfig 完整反序列化一遍，类型/枚举错误在这里被拦下。
 fn validate_config_document(doc: &toml::Value) -> Result<(), String> {
     let text = toml::to_string(doc).map_err(|e| format!("序列化配置失败: {e}"))?;
-    toml::from_str::<eorzea::config::AppConfig>(&text)
-        .map(|_| ())
+    let app = toml::from_str::<eorzea::config::AppConfig>(&text)
+        .map_err(|e| format!("配置校验失败（未写盘）: {e}"))?;
+    app.download
+        .validate()
         .map_err(|e| format!("配置校验失败（未写盘）: {e}"))
 }
 
@@ -1605,6 +1637,35 @@ fn cmd_config(sub: ConfigCommand) {
 #[cfg(test)]
 mod config_command_tests {
     use super::*;
+
+    #[test]
+    fn test_update_concurrency_flags_are_optional_overrides() {
+        for (args, expected) in [
+            (vec!["eoz", "game", "update"], (None, None)),
+            (
+                vec!["eoz", "game", "update", "--concurrency", "8"],
+                (Some(8), None),
+            ),
+            (
+                vec!["eoz", "game", "update", "--min-concurrency", "0"],
+                (None, Some(0)),
+            ),
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Command::Game {
+                sub:
+                    GameCommand::Update {
+                        concurrency,
+                        min_concurrency,
+                        ..
+                    },
+            } = cli.command
+            else {
+                panic!("expected game update");
+            };
+            assert_eq!((concurrency, min_concurrency), expected);
+        }
+    }
 
     #[test]
     fn test_config_key_specs() {
@@ -1675,5 +1736,25 @@ mod config_command_tests {
         );
         assert!(unset_config_path(&mut root, "dalamud.enabled").unwrap());
         assert!(get_config_path(&root, "dalamud.enabled").is_none());
+    }
+    #[test]
+    fn test_download_config_validation() {
+        assert_eq!(
+            config_key_spec("download.concurrency"),
+            Some(ConfigValueKind::Uint)
+        );
+        assert_eq!(
+            config_key_spec("download.min_concurrency"),
+            Some(ConfigValueKind::Uint)
+        );
+        for (text, valid) in [
+            ("[download]\nconcurrency = 8\nmin_concurrency = 4", true),
+            ("[download]\nconcurrency = 0", false),
+            ("[download]\nconcurrency = 2\nmin_concurrency = 3", false),
+            ("[download]\nmin_concurrency = -1", false),
+        ] {
+            let doc = toml::from_str(text).unwrap();
+            assert_eq!(validate_config_document(&doc).is_ok(), valid);
+        }
     }
 }

@@ -1,6 +1,6 @@
 //! 有界下载队列 + 严格按序应用。补丁删除并持久化队头后才能推进。
 
-use super::patch_manager::DownloadProgress;
+use super::patch_manager::{DownloadProgress, PatchPhase, PatchProgress};
 use super::{GameFileError, GameFileManager, InstallProgress};
 use eorzea_auth::PatchListEntry;
 use std::path::{Path, PathBuf};
@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 pub struct UpdateProgress {
     pub download: DownloadProgress,
     pub install: InstallProgress,
+    /// 已下载并校验通过、尚未开始应用的补丁，按安装顺序排列。
+    pub ready: Vec<PatchProgress>,
     pub waiting_for_download: bool,
 }
 
@@ -58,6 +60,24 @@ impl GameFileManager {
         concurrency: usize,
         on_progress: impl FnMut(UpdateProgress),
     ) -> Result<super::InstallSummary, GameFileError> {
+        self.update_with_min_concurrency(patches, patch_dir, game_root, concurrency, 0, on_progress)
+            .await
+    }
+
+    /// 允许突破预取窗口以维持最少下载并发；可能积压更多补丁缓存。
+    /// `min_concurrency == 0` 保持有界预取，且最少并发不得超过上限。
+    pub async fn update_with_min_concurrency(
+        &self,
+        patches: &[PatchListEntry],
+        patch_dir: &Path,
+        game_root: &Path,
+        concurrency: usize,
+        min_concurrency: usize,
+        on_progress: impl FnMut(UpdateProgress),
+    ) -> Result<super::InstallSummary, GameFileError> {
+        if min_concurrency > concurrency.max(1) {
+            return Err(GameFileError::Update("最少并发不能超过并发下载上限".into()));
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             backend::run(
@@ -66,13 +86,21 @@ impl GameFileManager {
                 patch_dir,
                 game_root,
                 concurrency,
+                min_concurrency,
                 on_progress,
             )
             .await
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = (patches, patch_dir, game_root, concurrency, on_progress);
+            let _ = (
+                patches,
+                patch_dir,
+                game_root,
+                concurrency,
+                min_concurrency,
+                on_progress,
+            );
             Err(GameFileError::Update("浏览器预览不支持安装游戏补丁".into()))
         }
     }
@@ -161,10 +189,10 @@ mod backend {
     mod native {
         use super::*;
         use crate::game_files::patch_manager::{
-            ProgressState, download_for_update, patch_cache_path,
+            download_for_update, patch_cache_path, ProgressState,
         };
         use crate::game_files::{
-            InstallPatchProgress, InstallPhase, InstallSummary, Repo, repo_from_url, zpatch,
+            repo_from_url, zpatch, InstallPatchProgress, InstallPhase, InstallSummary, Repo,
         };
         use std::collections::BTreeSet;
         use std::sync::{Arc, Mutex};
@@ -293,6 +321,7 @@ mod backend {
             patch_dir: &Path,
             root: &Path,
             concurrency: usize,
+            min_concurrency: usize,
             mut on_progress: impl FnMut(UpdateProgress),
         ) -> Result<InstallSummary, GameFileError> {
             let setup_root = root.to_path_buf();
@@ -318,13 +347,29 @@ mod backend {
                 total_patches: plan.patches.len(),
                 current: None,
             }));
-            let snapshot = |waiting| UpdateProgress {
+            let snapshot = |waiting, ready: &BTreeSet<usize>| UpdateProgress {
                 download: download.lock().unwrap().snapshot(),
                 install: install.lock().unwrap().clone(),
                 waiting_for_download: waiting,
+                ready: ready
+                    .iter()
+                    .map(|&index| {
+                        let patch = &plan.patches[index];
+                        PatchProgress {
+                            index,
+                            version: patch.version.clone(),
+                            url: patch.url.clone(),
+                            done: patch.length,
+                            total: patch.length,
+                            resumed_from: 0,
+                            phase: PatchPhase::Verifying,
+                        }
+                    })
+                    .collect(),
             };
             let concurrency = concurrency.max(1);
-            // 包含正在应用的补丁；最多预取 concurrency 份，不会无限积压。
+            // 默认窗口包含正在应用的补丁 + concurrency 份预取。
+            // 非零最少并发可突破窗口，避免慢队头使下载槽位闲置。
             let window = concurrency.saturating_add(1);
             let semaphore = Arc::new(Semaphore::new(concurrency));
             let mut downloads = JoinSet::new();
@@ -334,14 +379,17 @@ mod backend {
             let mut failure = None;
             let mut ticker = tokio::time::interval(Duration::from_millis(120));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            on_progress(snapshot(plan.next < plan.patches.len()));
+            on_progress(snapshot(plan.next < plan.patches.len(), &ready));
 
             loop {
                 if failure.is_some() && applying.is_none() {
                     break;
                 }
                 if failure.is_none() {
-                    while scheduled < plan.patches.len().min(plan.next.saturating_add(window)) {
+                    while scheduled < plan.patches.len()
+                        && (scheduled < plan.next.saturating_add(window)
+                            || concurrency - semaphore.available_permits() < min_concurrency)
+                    {
                         // 在主队列按序领取槽位，不能让乱序被调度的 task 抢走队头槽位。
                         let Ok(permit) = semaphore.clone().try_acquire_owned() else {
                             break;
@@ -402,11 +450,12 @@ mod backend {
                 }
                 on_progress(snapshot(
                     applying.is_none() && plan.next < plan.patches.len() && failure.is_none(),
+                    &ready,
                 ));
             }
             downloads.abort_all();
             while downloads.join_next().await.is_some() {}
-            on_progress(snapshot(false));
+            on_progress(snapshot(false, &ready));
             if let Some(error) = failure {
                 return Err(error);
             }

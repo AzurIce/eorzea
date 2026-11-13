@@ -8,7 +8,7 @@ eorzea 的全部配置落在 `~/.eorzea/`（Windows 上即 `C:\Users\<用户>\.e
 
 | 路径 | 内容 |
 |------|------|
-| `~/.eorzea/config.toml` | 主配置：游戏目录、大区、Dalamud；Linux/macOS 另有 Wine、DXVK 与自定义环境变量 |
+| `~/.eorzea/config.toml` | 主配置：游戏目录、大区、补丁下载、Dalamud；Linux/macOS 另有 Wine、DXVK 与自定义环境变量 |
 | `~/.eorzea/auth.toml` | 已保存账号与自动登录 session key（由 `eoz auth` / GUI 登录页管理） |
 
 ### 首次运行
@@ -21,8 +21,8 @@ eorzea 的全部配置落在 `~/.eorzea/`（Windows 上即 `C:\Users\<用户>\.e
 
 | 平台 | `config.toml` 内容 |
 |------|--------------------|
-| Linux / macOS | `game_path`、可选的 `area`、平铺的 Wine 设置（`startup_type`/`custom_path`/`prefix`/`esync`/`fsync`/`msync`/`gamemode`、`[dxvk]`、`[env]`）、`[dalamud]` |
-| Windows | `game_path`、可选的 `area`、`[dalamud]`；不写 Wine/DXVK/环境变量，`eoz config set startup_type` 等会报「未知配置键」 |
+| Linux / macOS | `game_path`、可选的 `area`、`[download]`、平铺的 Wine 设置（`startup_type`/`custom_path`/`prefix`/`esync`/`fsync`/`msync`/`gamemode`、`[dxvk]`、`[env]`）、`[dalamud]` |
+| Windows | `game_path`、可选的 `area`、`[download]`、`[dalamud]`；不写 Wine/DXVK/环境变量，`eoz config set startup_type` 等会报「未知配置键」 |
 
 在 Windows 上读取 Linux/macOS 写出的配置时，Wine 相关键会被忽略；再保存会把它们移除。`eoz config list` 只输出当前平台的字段。
 
@@ -42,6 +42,23 @@ eorzea 的全部配置落在 `~/.eorzea/`（Windows 上即 `C:\Users\<用户>\.e
 |------|------|------|------|
 | `game_path` | path | 无 | 游戏根目录（含 `boot/`、`game/`、`sdo/`）。CLI 的 `--game-path` 提供时覆盖此项 |
 | `area` | string | 无 | **旧版全局默认大区**（如 `"陆行鸟"`，`eoz areas` 查询；仍兼容旧数字 ID）。默认大区已改为按账号保存在 `auth.toml` 的 `accounts[].area`，此字段仅在账号未设置时作为回退，GUI 不再编辑。CLI 的 `--area` 仍可单次覆盖 |
+
+### `[download]`
+
+GUI 设置页的「补丁下载」与 CLI 共用这组设置，保存后从下次更新任务生效。
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `download.concurrency` | uint | `4` | 最大同时下载补丁数，至少为 1；CLI `--concurrency` 单次覆盖 |
+| `download.min_concurrency` | uint | `0` | 最少下载并发，不得超过最大值；CLI `--min-concurrency` 单次覆盖。0 保留预取窗口限制；非零允许突破窗口补任务，可能积压更多磁盘缓存。剩余补丁不足时不保证下限 |
+
+优先级：显式 CLI 参数 > `config.toml` > 内置默认值；只覆盖传入的字段，再校验最终组合。
+
+```toml
+[download]
+concurrency = 8
+min_concurrency = 4
+```
 
 ### Wine（顶层平铺）
 
@@ -105,7 +122,7 @@ load_method = "entrypoint"
 WINEDLLOVERRIDES = "msquic=,mscoree=n,b"
 ```
 
-Windows 上不需要也不接受 Wine 字段，配置只有游戏路径与 Dalamud（默认大区按账号保存）：
+Windows 上不需要也不接受 Wine 字段，配置包含游戏路径、补丁下载与 Dalamud（默认大区按账号保存）：
 
 ```toml
 game_path = "G:/FF14/最终幻想XIV"

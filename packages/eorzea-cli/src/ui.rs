@@ -366,6 +366,7 @@ pub struct DownloadView {
 struct FileBar {
     bar: ProgressBar,
     phase: PatchPhase,
+    ready: bool,
 }
 
 impl DownloadView {
@@ -377,7 +378,7 @@ impl DownloadView {
     }
 
     /// 根据库回调更新总进度和子进度。
-    pub fn update(&mut self, snapshot: &DownloadProgress) {
+    pub fn update(&mut self, snapshot: &DownloadProgress, ready: &[PatchProgress]) {
         self.overall.set_progress(snapshot.done, snapshot.total);
         let downloading = snapshot
             .active
@@ -394,7 +395,12 @@ impl DownloadView {
             return;
         }
 
-        let active: BTreeSet<usize> = snapshot.active.iter().map(|p| p.index).collect();
+        let active: BTreeSet<usize> = snapshot
+            .active
+            .iter()
+            .chain(ready)
+            .map(|p| p.index)
+            .collect();
         let stale: Vec<usize> = self
             .files
             .keys()
@@ -408,7 +414,14 @@ impl DownloadView {
             }
         }
 
-        for file in &snapshot.active {
+        let mut files: Vec<_> = snapshot
+            .active
+            .iter()
+            .map(|file| (file, false))
+            .chain(ready.iter().map(|file| (file, true)))
+            .collect();
+        files.sort_by_key(|(file, _)| file.index);
+        for (file, ready) in files {
             let anchor = self
                 .files
                 .range(..file.index)
@@ -420,18 +433,21 @@ impl DownloadView {
                 // set_message 会立即 draw 一次，未挂载时会直接在 stderr 留下
                 // 一行“孤儿”进度条，之后每轮 update 又会重复追加。
                 let bar = progress().insert_after(&anchor, ProgressBar::new(file.total));
-                bar.set_style(file_style(file.phase));
+                bar.set_style(download_file_style(file.phase, ready));
                 bar.set_message(file_label(file));
                 FileBar {
                     bar,
                     phase: file.phase,
+                    ready,
                 }
             });
-            if entry.phase != file.phase {
-                entry.bar.set_style(file_style(file.phase));
+            if entry.phase != file.phase || entry.ready != ready {
+                entry.bar.set_style(download_file_style(file.phase, ready));
                 entry.phase = file.phase;
+                entry.ready = ready;
             }
             entry.bar.set_length(file.total);
+            entry.bar.set_prefix(if ready { "✓" } else { "" });
             entry.bar.set_message(file_label(file));
             entry.bar.set_position(file.done);
         }
@@ -456,6 +472,15 @@ impl DownloadView {
     }
 }
 
+fn download_file_style(phase: PatchPhase, ready: bool) -> ProgressStyle {
+    if ready {
+        ProgressStyle::with_template("{msg:<26} {binary_total_bytes:>9} {prefix:.green} 等待应用")
+            .expect("valid template")
+    } else {
+        file_style(phase)
+    }
+}
+
 fn file_label(file: &PatchProgress) -> String {
     let resumed = if file.resumed_from > 0 { " ↻" } else { "" };
     format!("  {:>3} {}{resumed}", file.index + 1, file.version)
@@ -469,21 +494,30 @@ pub struct InstallView {
 
 impl InstallView {
     pub fn new(label: impl Into<String>) -> Self {
+        let overall = ByteBar::new(label);
+        overall.bar.set_style(ProgressStyle::with_template(
+            "{spinner:.cyan} {msg:<20} [{bar:26.cyan/blue}] {binary_bytes:>10}/{binary_total_bytes:>10}"
+        ).expect("valid template").progress_chars("=> "));
         Self {
-            overall: ByteBar::new(label),
+            overall,
             current: None,
         }
     }
 
-    pub fn update(&mut self, snapshot: &InstallProgress) {
-        self.overall.set_progress(snapshot.done, snapshot.total);
-        self.overall.bar.set_message(format!(
-            "应用补丁 {}/{}",
-            snapshot.completed, snapshot.total_patches
-        ));
-        self.overall.bar.set_style(ProgressStyle::with_template(
-            "{spinner:.cyan} {msg:<20} [{bar:26.cyan/blue}] {binary_bytes:>10}/{binary_total_bytes:>10}"
-        ).expect("valid template").progress_chars("=> "));
+    pub fn update(&mut self, snapshot: &InstallProgress, waiting_for_download: bool) {
+        // 安装总进度使用固定样式，不走 ByteBar 的下载速度/ETA 样式切换。
+        self.overall.bar.set_length(snapshot.total);
+        self.overall.bar.set_position(snapshot.done);
+        // set_message 会触发绘制，一轮只写最终文案，避免等待状态来回闪动。
+        let message = if waiting_for_download {
+            format!(
+                "应用 {}/{} · 等待队头下载",
+                snapshot.completed, snapshot.total_patches
+            )
+        } else {
+            format!("应用补丁 {}/{}", snapshot.completed, snapshot.total_patches)
+        };
+        self.overall.bar.set_message(message);
         if bars_hidden() {
             return;
         }
@@ -542,14 +576,9 @@ impl UpdateView {
     }
 
     pub fn update(&mut self, snapshot: &UpdateProgress) {
-        self.install.update(&snapshot.install);
-        self.download.update(&snapshot.download);
-        if snapshot.waiting_for_download {
-            self.install.overall.bar.set_message(format!(
-                "应用 {}/{} · 等待队头下载",
-                snapshot.install.completed, snapshot.install.total_patches
-            ));
-        }
+        self.install
+            .update(&snapshot.install, snapshot.waiting_for_download);
+        self.download.update(&snapshot.download, &snapshot.ready);
     }
 
     pub fn finish(self, msg: impl Display) {
@@ -652,12 +681,37 @@ mod tests {
                 current: None,
             },
             waiting_for_download: true,
+            ready: Vec::new(),
         });
         assert_eq!(view.download.overall.bar.position(), 80);
         assert_eq!(view.install.overall.bar.position(), 30);
         assert!(view.install.overall.bar.message().contains("等待队头"));
         view.download.clear();
         view.install.clear();
+    }
+
+    #[test]
+    fn test_install_view_waiting_and_applying_messages() {
+        let mut view = InstallView::new("应用补丁");
+        let snapshot = InstallProgress {
+            done: 30,
+            total: 100,
+            completed: 4,
+            total_patches: 190,
+            current: None,
+        };
+        for waiting in [true, true, false, false, true] {
+            view.update(&snapshot, waiting);
+            let expected = if waiting {
+                "应用 4/190 · 等待队头下载"
+            } else {
+                "应用补丁 4/190"
+            };
+            assert_eq!(view.overall.bar.message(), expected);
+            assert_eq!(view.overall.bar.position(), 30);
+            assert_eq!(view.overall.bar.length(), Some(100));
+        }
+        view.clear();
     }
 
     /// 模板必须能被 indicatif 解析：样式函数里的 `with_template(...).expect(...)`
@@ -670,6 +724,7 @@ mod tests {
             byte_unknown_style(),
             file_style(PatchPhase::Downloading),
             file_style(PatchPhase::Verifying),
+            download_file_style(PatchPhase::Verifying, true),
             install_file_style(InstallPhase::Applying),
             install_file_style(InstallPhase::Verifying),
             install_file_style(InstallPhase::Committing),

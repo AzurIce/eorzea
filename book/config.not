@@ -30,6 +30,23 @@ eoz config unset dxvk.hud
 大区解析顺序为：--area（名称）→ 账号的 area（名称）→ 这里的 area → 大区列表第一个。不同大区使用不同的补丁服务器，隐式选择会打印提示。
 
 
+== 补丁下载
+
+GUI 设置页的「补丁下载」与 CLI 共用 [download]，保存后从下次更新任务生效。
+
+| 字段 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `download.concurrency` | 正整数 | 4 | 最大同时下载补丁数；--concurrency 单次覆盖。 |
+| `download.min_concurrency` | 非负整数 | 0 | 最少下载并发，不得超过最大值；--min-concurrency 单次覆盖。0 保留预取窗口限制，非零允许突破窗口补任务，可能积压更多磁盘缓存；剩余补丁不足时不保证下限。 |
+
+优先级：显式 CLI 参数 > config.toml > 内置默认值。只覆盖传入的字段，再校验最终组合。
+
+```toml
+[download]
+concurrency = 8
+min_concurrency = 4
+```
+
 == Wine（仅 Linux / macOS）
 
 Wine 字段直接平铺在顶层，*没有 [wine] 表*。Windows 原生启动不使用这些字段，读取时忽略，保存时移除；Windows 的 CLI 也不接受这些配置键。

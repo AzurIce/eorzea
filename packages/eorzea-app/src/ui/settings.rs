@@ -1,7 +1,7 @@
 //! 设置页：游戏目录、Wine 与 Dalamud 配置，保存写回 `config.toml`。
 
 use dioxus::prelude::*;
-use eorzea::config::{self, AppConfig, SyncMode, WineStartupType};
+use eorzea::config::{self, AppConfig, DownloadSettings, SyncMode, WineStartupType};
 use eorzea::dalamud::model::{DalamudLoadMethod, DalamudSettings};
 
 use super::login::{ActionButton, GhostButton, Section, TextInput};
@@ -26,6 +26,8 @@ pub fn SettingsPage() -> Element {
 
     // 草稿状态（进入页面时从当前内存配置初始化）
     let mut game_path = use_signal(String::new);
+    let mut concurrency = use_signal(String::new);
+    let mut min_concurrency = use_signal(String::new);
     let mut startup_type = use_signal(|| WineStartupType::Auto);
     let mut custom_path = use_signal(String::new);
     let mut prefix = use_signal(String::new);
@@ -48,6 +50,8 @@ pub fn SettingsPage() -> Element {
     let reset_drafts = use_callback(move |_: ()| {
         let s = state.settings.read();
         game_path.set(path_to_string(&state.game_path.read()));
+        concurrency.set(state.download_cfg.read().concurrency.to_string());
+        min_concurrency.set(state.download_cfg.read().min_concurrency.to_string());
         startup_type.set(s.startup_type);
         custom_path.set(path_to_string(&s.custom_path));
         prefix.set(path_to_string(&s.prefix));
@@ -101,6 +105,13 @@ pub fn SettingsPage() -> Element {
     };
 
     let save = move |_: MouseEvent| {
+        let download = match parse_download_settings(&concurrency.read(), &min_concurrency.read()) {
+            Ok(settings) => settings,
+            Err(error) => {
+                state.status.set(error);
+                return;
+            }
+        };
         let mut s = state.settings.read().clone();
         s.startup_type = startup_type();
         s.custom_path = string_to_path(&custom_path.read());
@@ -125,6 +136,7 @@ pub fn SettingsPage() -> Element {
         let app = AppConfig {
             game_path: string_to_path(&game_path.read()),
             area: config::load_app_default().area,
+            download: download.clone(),
             #[cfg(not(target_os = "windows"))]
             settings: s.clone(),
             dalamud: d.clone(),
@@ -132,6 +144,7 @@ pub fn SettingsPage() -> Element {
         match config::save_app(&config::settings_path(), &app) {
             Ok(()) => {
                 state.game_path.set(app.game_path.clone());
+                state.download_cfg.set(download);
                 state.settings.set(s);
                 state.dalamud_cfg.set(d);
                 state.status.set("设置已保存".into());
@@ -182,6 +195,10 @@ pub fn SettingsPage() -> Element {
             .unwrap_or_else(|| DalamudSettings::default().delay_initialize_ms);
 
         draft_game_path != saved_game_path
+            || parse_download_settings(&concurrency.read(), &min_concurrency.read())
+                .as_ref()
+                .ok()
+                != Some(&*state.download_cfg.read())
             || startup_type() != saved.startup_type
             || string_to_path(&custom_path.read()) != saved.custom_path
             || string_to_path(&prefix.read()) != saved.prefix
@@ -206,6 +223,8 @@ pub fn SettingsPage() -> Element {
     // msync 只有 macOS 的 Wine 构建支持（运行时也是 `cfg(target_os = "macos")`
     // 才设置 WINEMSYNC），Linux 上不显示，避免给出无效开关。
     let show_msync_toggle = cfg!(target_os = "macos");
+    let download_error =
+        parse_download_settings(&concurrency.read(), &min_concurrency.read()).err();
 
     rsx! {
         div {
@@ -239,6 +258,22 @@ pub fn SettingsPage() -> Element {
                             "⚠ 未找到 {root.display()}/game/ffxiv_dx11.exe，启动前请确认路径"
                         }
                     }
+                }
+            }
+
+            Section { title: "补丁下载",
+                SettingsRow { label: "最大并发",
+                    TextInput { value: concurrency, placeholder: "4" }
+                }
+                SettingsRow { label: "最少并发",
+                    TextInput { value: min_concurrency, placeholder: "0" }
+                }
+                p {
+                    style: "margin: 0; font-size: 12px; color: {t.text_secondary};",
+                    "最少并发为 0 时限制预取窗口；非零时允许继续预取以补足并发，可能占用更多磁盘空间。最少值不能超过最大值；剩余补丁不足时无法补足并发。保存后从下次更新任务生效。"
+                }
+                if let Some(error) = &download_error {
+                    p { style: "margin: 0; font-size: 12px; color: {t.warning};", "{error}" }
                 }
             }
 
@@ -460,7 +495,7 @@ pub fn SettingsPage() -> Element {
             div {
                 style: "flex-shrink: 0; display: flex; flex-direction: row; gap: 8px; padding: 12px 28px; border-top: 1px solid {t.border}; background: {t.page_bg};",
                 GhostButton { label: "恢复", onclick: revert, disabled: !dirty }
-                ActionButton { label: "保存设置", onclick: save, disabled: !dirty }
+                ActionButton { label: "保存设置", onclick: save, disabled: !dirty || download_error.is_some() }
             }
         }
     }
@@ -554,11 +589,49 @@ fn string_to_path(s: &str) -> Option<std::path::PathBuf> {
     if s.is_empty() { None } else { Some(s.into()) }
 }
 
+fn parse_download_settings(
+    concurrency: &str,
+    min_concurrency: &str,
+) -> Result<DownloadSettings, String> {
+    let settings = DownloadSettings {
+        concurrency: concurrency
+            .trim()
+            .parse()
+            .map_err(|_| "最大并发需要正整数".to_string())?,
+        min_concurrency: min_concurrency
+            .trim()
+            .parse()
+            .map_err(|_| "最少并发需要非负整数".to_string())?,
+    };
+    settings.validate()?;
+    Ok(settings)
+}
+
 fn parse_u32(s: &str) -> Option<u32> {
     let s = s.trim();
     if s.is_empty() {
         Some(0)
     } else {
         s.parse().ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn download_settings_drafts_validate_before_save() {
+        assert_eq!(
+            parse_download_settings("4", "0").unwrap(),
+            DownloadSettings::default()
+        );
+        assert_eq!(
+            parse_download_settings(" 8 ", "4").unwrap().min_concurrency,
+            4
+        );
+        for (max, min) in [("0", "0"), ("2", "3"), ("", "0"), ("4", "-1"), ("4", "1.5")] {
+            assert!(parse_download_settings(max, min).is_err());
+        }
     }
 }

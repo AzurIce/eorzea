@@ -4,8 +4,8 @@ use crate::game_files::patch_manager::patch_cache_path;
 use sha1::{Digest, Sha1};
 use std::fs;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc, Mutex,
 };
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -212,13 +212,11 @@ async fn download_and_apply_overlap_with_bounded_lookahead() {
         assert!(!patch_cache_path(&cache, entry).exists());
     }
     // 预取窗口为正在应用的一份 + 两份预取，不能提前请求第四份。
-    assert!(
-        requests
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|&(n, committed)| n == 3 && committed)
-    );
+    assert!(requests
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|&(n, committed)| n == 3 && committed));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -240,9 +238,16 @@ async fn later_download_finishes_first_but_install_waits_for_head() {
             if p.download.completed == 1 && !release.load(Ordering::SeqCst) {
                 assert_eq!(p.install.completed, 0);
                 assert!(!root.join("game/result.bin").exists());
+                assert_eq!(p.ready.len(), 1);
+                assert_eq!(p.ready[0].index, 1);
+                assert_eq!(p.ready[0].done, entries[1].length);
                 saw_wait = p.waiting_for_download;
                 release.store(true, Ordering::SeqCst);
             }
+            if let Some(current) = &p.install.current {
+                assert!(p.ready.iter().all(|file| file.index != current.index));
+            }
+            assert!(p.ready.iter().all(|file| file.index >= p.install.completed));
         }),
     )
     .await
@@ -290,6 +295,56 @@ async fn resumes_original_queue_with_missing_version_and_partial_game_files() {
     assert!(!has_pending_update(root));
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn minimum_concurrency_downloads_beyond_lookahead_while_head_is_blocked() {
+    let scratch = Scratch::new();
+    let root = &scratch.0;
+    let bodies: Vec<_> = (0..5).map(|_| patch(b"data")).collect();
+    let release = Arc::new(AtomicBool::new(false));
+    let (url, _, server) = server(bodies.clone(), 0, release.clone()).await;
+    let entries: Vec<_> = bodies
+        .iter()
+        .enumerate()
+        .map(|(n, body)| entry(format!("{url}/{n}.patch"), n, body))
+        .collect();
+    let mut passed_window = false;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        manager().update_with_min_concurrency(&entries, &root.join("cache"), root, 2, 2, |p| {
+            assert!(
+                p.download
+                    .active
+                    .iter()
+                    .filter(
+                        |file| file.phase == super::super::patch_manager::PatchPhase::Downloading
+                    )
+                    .count()
+                    <= 2
+            );
+            if !release.load(Ordering::SeqCst) && p.ready.iter().any(|file| file.index >= 3) {
+                assert_eq!(p.install.completed, 0);
+                passed_window = true;
+                release.store(true, Ordering::SeqCst);
+            }
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    server.abort();
+    assert!(passed_window);
+}
+
+#[tokio::test]
+async fn minimum_concurrency_cannot_exceed_maximum() {
+    let scratch = Scratch::new();
+    assert!(manager()
+        .update_with_min_concurrency(&[], &scratch.0.join("cache"), &scratch.0, 2, 3, |_| {},)
+        .await
+        .is_err());
+    assert!(!has_pending_update(&scratch.0));
+}
+
 #[tokio::test]
 async fn truncated_patch_retains_queue_and_does_not_install_successor() {
     let scratch = Scratch::new();
@@ -305,12 +360,10 @@ async fn truncated_patch_retains_queue_and_does_not_install_successor() {
     persist(root, &entries, 0, &cache);
     fs::write(patch_cache_path(&cache, &entries[0]), bad).unwrap();
     fs::write(patch_cache_path(&cache, &entries[1]), good).unwrap();
-    assert!(
-        manager()
-            .update(&entries, &cache, root, 2, |_| {})
-            .await
-            .is_err()
-    );
+    assert!(manager()
+        .update(&entries, &cache, root, 2, |_| {})
+        .await
+        .is_err());
     assert!(has_pending_update(root));
     assert!(!root.join("game/ffxivgame.ver").exists());
     assert_eq!(fs::read(root.join("game/result.bin")).unwrap(), b"first");

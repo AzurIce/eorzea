@@ -112,6 +112,10 @@
 - [x] **dev profile SHA1 优化**：`[profile.dev.package.sha1] opt-level = 3`；否则 debug 版 SHA1 只有约十几 MiB/s，1.4 GiB 补丁的校验会占用几分钟 CPU。实测优化后约 269 MiB/s（2026-10-30）
 - [x] **下载超时与重试**：`reqwest::Client` 配 `connect_timeout=15s` / `read_timeout=30s`；单文件最多 5 次尝试，失败后退避并从当前文件长度续传。仍保留“任一文件最终失败则中止整批”的行为（2026-10-30）
 - [x] **边下边装**：共享 `GameFileManager::update` 按序领取下载任务、默认 4 路并发，预取窗口为当前补丁 + 并发数；独立后台 routine 仅消费已下载并校验通过的队头，提交且删除成功才推进。CLI/GUI 同时展示应用总进度/当前补丁和下载总进度/各并行任务，GUI 更新使用根状态与 `spawn_forever`，切换页面不中断。测试覆盖下载与应用重叠、乱序下载不乱序安装、有限预取。
+- [x] **CLI 应用进度防闪动**：每轮刷新只设置最终应用/等待文案，安装总进度样式仅初始化一次，避免等待队头下载时文案反复切换；测试覆盖连续等待及等待/应用状态切换。
+- [x] **CLI 预取队列可见性**：已下载并校验通过的补丁保留为「✓ 等待应用」，开始应用时才从下载列表移除；更新快照单独提供待应用列表，不计入活动下载或重复累计字节。
+- [x] **可选最少下载并发**：CLI `--min-concurrency` 默认 0，保留有界预取；非零时允许突破预取窗口以补足下载任务，但不超过 `--concurrency` 上限，可能积压更多缓存。测试覆盖慢队头不阻止后续下载及上下限校验。
+- [x] **共享下载并发配置**：`config.toml` 的 `[download]` 保存最大/最少并发，CLI 显式参数单次覆盖且支持 `eoz config` 读写；GUI 设置页提供草稿编辑、校验、恢复与保存，主页更新使用已保存配置。默认最大 4、最少 0。
 - [x] **单补丁中断恢复与提交**：`<游戏目录>/.eorzea/update.json` 保存完整有序清单、缓存目录和消费游标，不记录 chunk 断点；恢复优先于服务端版本检查，当前补丁从头重放。按游戏数据同步 → 原子提交 `.ver` → 删除补丁 → 持久化队头顺序推进，删除失败不安装后继；队列完成后更新 `.bck` 并清理清单。更新目录使用文件锁，未完成时拒绝启动游戏。测试覆盖缺失 `.ver`、部分游戏文件、删除后游标未推进、清理失败重试及互斥。详见 [`docs/notes/patch-interruption-recovery.md`](docs/notes/patch-interruption-recovery.md)。
 - [x] **ZiPatch 删除与句柄失效**：删除文件/目录树前清理相关缓存句柄，对齐 C# `CloseStream`；删除及 RemoveAll 枚举/删除失败均返回错误，NotFound 可重试。回归测试覆盖删除后重建和 RemoveAll 后重放。
 - [x] **ZiPatch 完成与落盘校验**：显式要求读到 `EOF_`，文件使用 `sync_all()`，Unix 上同步变更目录；失败禁止推进 `.ver`。缺结束标记的补丁即使 SHA1 匹配也不能完成安装。
@@ -151,6 +155,8 @@
 ---
 
 ## P2-5 Dalamud 插件框架集成（新）
+
+- [ ] **归档路径跨平台校验**：Linux 下 `dalamud::archive::tests::test_safe_relative_path_rejects_escape` 对 `C:\Windows\evil.dll` 的拒绝断言失败；需独立于宿主路径语义识别 Windows 盘符与反斜杠路径。
 
 - [x] **调查报告**：`docs/notes/dalamud_integration.md`（加载机制、XIVLauncher 组件、Linux Wine 内注入、分阶段路线）
 - [x] **阶段 0 骨架**：`src/dalamud/`（model/updater/runner）— release 元数据获取（`VersionInfo` API）、版本门控（`SupportedGameVer == 游戏版本`）、本机安装检测、Injector argv 构造、Wine 路径转换（`winepath --windows`）、Injector JSON 解析；`eoz dalamud status/launch`；`config.toml [dalamud]` section（flatten 兼容旧配置）

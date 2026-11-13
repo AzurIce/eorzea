@@ -173,6 +173,50 @@ impl Default for WineSettings {
     }
 }
 
+/// CLI 与 GUI 共用的补丁下载设置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DownloadSettings {
+    pub concurrency: usize,
+    /// 0 保留预取窗口限制；非零允许突破窗口，可能积压更多缓存。
+    pub min_concurrency: usize,
+}
+
+impl Default for DownloadSettings {
+    fn default() -> Self {
+        Self {
+            concurrency: 4,
+            min_concurrency: 0,
+        }
+    }
+}
+
+impl DownloadSettings {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.concurrency == 0 {
+            return Err("最大下载并发必须至少为 1".into());
+        }
+        if self.min_concurrency > self.concurrency {
+            return Err("最少下载并发不能超过最大下载并发".into());
+        }
+        Ok(())
+    }
+
+    /// 命令行仅覆盖显式传入的字段，再对最终组合进行校验。
+    pub fn with_overrides(
+        &self,
+        concurrency: Option<usize>,
+        min_concurrency: Option<usize>,
+    ) -> Result<Self, String> {
+        let settings = Self {
+            concurrency: concurrency.unwrap_or(self.concurrency),
+            min_concurrency: min_concurrency.unwrap_or(self.min_concurrency),
+        };
+        settings.validate()?;
+        Ok(settings)
+    }
+}
+
 /// 整个 `config.toml` 的结构。
 ///
 /// 布局刻意保持扁平：
@@ -181,6 +225,7 @@ impl Default for WineSettings {
 ///   Windows 原生启动不需要 Wine，该字段**不参与编译**，配置里也不会出现
 ///   `startup_type`/`[dxvk]`/`[env]` 等键（读取旧文件时这些键被忽略）。
 /// - `[dalamud]`：Dalamud 设置 section
+/// - `[download]`：CLI 与 GUI 共用的下载并发设置
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -188,6 +233,7 @@ pub struct AppConfig {
     pub game_path: Option<PathBuf>,
     /// 旧版全局默认大区（如 `陆行鸟`，也兼容旧数字 ID），CLI 未传 `--area` 时使用。
     pub area: Option<String>,
+    pub download: DownloadSettings,
     #[cfg(not(target_os = "windows"))]
     #[serde(default, flatten)]
     pub settings: WineSettings,
@@ -211,6 +257,10 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# eorzea 配置（GUI 与 eoz CLI 共�
 # 仅当账号未设置 area 时使用此值。
 # area = "陆行鸟"
 
+# [download]
+# concurrency = 4
+# min_concurrency = 0 # 非零允许突破预取窗口，可能积压更多缓存
+
 # 其余字段（Wine、DXVK、Dalamud、环境变量）及默认值见 docs/config.md。
 # Wine 相关设置包含 startup_type/custom_path/prefix/esync/fsync/msync/gamemode、
 # [dxvk] 与 [env]；Windows 原生启动会忽略它们。
@@ -230,6 +280,10 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# eorzea 配置（GUI 与 eoz CLI 共�
 # 旧版全局默认大区（仅作为回退）。默认大区现在按账号保存在 auth.toml；
 # 仅当账号未设置 area 时使用此值。
 # area = "陆行鸟"
+
+# [download]
+# concurrency = 4
+# min_concurrency = 0 # 非零允许突破预取窗口，可能积压更多缓存
 
 # 其余字段（[dalamud] 等）及默认值见 docs/config.md。
 # 在 GUI 或 `eoz config set` 保存后本文件会被重写，以上注释不会保留。
@@ -533,6 +587,44 @@ mod tests {
         // 注释掉的 game_path 不能被解析成 Some("")，否则首次启动会误判为已配置
         assert!(app.game_path.is_none());
         assert!(app.area.is_none());
+    }
+
+    #[test]
+    fn test_download_settings_defaults_and_roundtrip() {
+        let legacy: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(legacy.download, DownloadSettings::default());
+        let app: AppConfig =
+            toml::from_str("[download]\nconcurrency = 8\nmin_concurrency = 4\n").unwrap();
+        assert_eq!(app.download.concurrency, 8);
+        assert_eq!(app.download.min_concurrency, 4);
+        let text = toml::to_string(&app).unwrap();
+        assert_eq!(toml::from_str::<AppConfig>(&text).unwrap(), app);
+        let partial: AppConfig = toml::from_str("[download]\nconcurrency = 8\n").unwrap();
+        assert_eq!(partial.download.min_concurrency, 0);
+    }
+
+    #[test]
+    fn test_download_settings_overrides_and_validation() {
+        let settings = DownloadSettings {
+            concurrency: 8,
+            min_concurrency: 4,
+        };
+        assert_eq!(settings.with_overrides(None, None).unwrap(), settings);
+        assert_eq!(
+            settings
+                .with_overrides(Some(6), None)
+                .unwrap()
+                .min_concurrency,
+            4
+        );
+        assert_eq!(
+            settings.with_overrides(None, Some(0)).unwrap().concurrency,
+            8
+        );
+        assert!(settings.with_overrides(Some(2), None).is_err());
+        assert!(settings.with_overrides(Some(0), Some(0)).is_err());
+        assert!(settings.with_overrides(None, Some(9)).is_err());
+        assert!(settings.with_overrides(Some(2), Some(2)).is_ok());
     }
 
     #[test]

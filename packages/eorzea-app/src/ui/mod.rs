@@ -20,7 +20,7 @@ use std::sync::Arc;
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use eorzea::auth::{self, AuthConfig};
-use eorzea::config::{self, WineSettings};
+use eorzea::config::{self, DownloadSettings, WineSettings};
 use eorzea::dalamud::model::DalamudSettings;
 use eorzea::launcher::{LaunchToken, Launcher};
 use eorzea_auth::SdoArea;
@@ -45,6 +45,7 @@ pub struct AppState {
     pub game_path: Signal<Option<PathBuf>>,
     /// `[dalamud]` section 的内存镜像（设置页保存后写盘）。
     pub dalamud_cfg: Signal<DalamudSettings>,
+    pub download_cfg: Signal<DownloadSettings>,
     /// 大区列表（按 area_order 排序）。
     pub areas: Signal<Vec<SdoArea>>,
     /// 主页选中的账号（snda_id）。
@@ -134,6 +135,7 @@ pub fn app() -> Element {
         settings: use_signal(WineSettings::default),
         game_path: use_signal(|| initial_config.game_path.clone()),
         dalamud_cfg: use_signal(|| initial_config.dalamud.clone()),
+        download_cfg: use_signal(|| initial_config.download.clone()),
         areas: use_signal(Vec::new),
         selected_account: use_signal(|| None),
         selected_area: use_signal(|| None),
