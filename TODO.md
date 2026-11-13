@@ -74,6 +74,7 @@
 - [x] **`XL.DcTraveler` 参数**：当 `dc_travel_port > 0` 时添加
 - [x] **端到端验证**：`sdo_login` 示例完成 QR 扫码 → `sso_login` → ticket 获取 → 启动参数构造
 - [x] **`sdologinentry64.dll` 替换**：`EnsureLoginEntry()` — 自动从 ottercorp GitHub 下载修改版 DLL，缓存到 `~/.eorzea/tools/`，复制到 `{gamePath}/sdo/sdologinentry64.dll`
+  - [ ] **空目录安装的原版登录 DLL 预检与来源**：空目录更新只部署 shim，缺少原版 `.sdo.dll` 时实测游戏报 `Can not load`。已确认官方 `ff.autopatch.sdo.com/v3launcher/` 索引及 ZIP 来源；需验证部署规则，实现原版校验、启动预检及 `verify`。整套 SDO 组件和 SDK 是否必需尚未验证；补齐它们未解决本次卡住，不应据此扩大安装依赖。上游同样未补齐原版，CN 跳过 boot 更新。详见 [`docs/notes/sdo-installation.md`](docs/notes/sdo-installation.md)。
   - **已修复（2026-08-06）**：`is_ottercorp_dll()` 原先按 UTF-8 搜索 `"ottercorp"`，但 PE version info 中该字符串是 UTF-16LE 存储，检测恒为 false → 每次启动都把当前 DLL 备份覆盖 `.sdo.dll`，第二次启动即永久覆盖原版备份，修改版 shim 转发到自身导致游戏内 5003「帐号认证发生了错误」。现已同时匹配 ASCII/UTF-16LE 两种编码，且已有 `.sdo.dll` 备份时不再覆盖
 
 ### P2-2 参数加密 (`ArgumentBuilder.cs` → `BuildEncrypted`)
@@ -135,6 +136,7 @@
 - [x] **每次启动指定不同 wine**：`Launcher::with_wine_settings`（持久）+ `Launcher::launch_with_wine`（单次覆盖）
 - [x] **CLI `--wine` 覆盖传递**：`eoz launch` 将 `launcher.wine_settings()` 传入共享 `LaunchRequest`，不再在创建游戏进程时重新加载并覆盖本次选定的 Wine 配置。
 - [x] **Wine 非 ASCII 游戏路径预检**：Linux/macOS 启动前拒绝包含非 ASCII 字符的完整游戏路径并返回明确错误，避免游戏内报误导性的 5003「帐号认证发生了错误」
+- [ ] **首次开场动画的媒体解码故障提示**：本机 Wine 构建缺少 `winegstreamer.dll`，关闭 Dalamud 仍在标题界面开始游戏后卡住，日志报 `wmadmod.dll` 加载失败。仅将游戏 `FFXIV.cfg` 中 `CutsceneMovieOpening` 从 `0` 改为 `1` 后用户确认解决；需提供媒体能力提示或明确的跳过动画选项，不能将该现象误报为登录故障。详见 [`docs/notes/sdo-installation.md`](docs/notes/sdo-installation.md)。
 - [ ] **DXVK 变体选择**：当前固定 dxvk-async 1.10.1（CN 镜像）；上游已切换 dxvk-gplasync，未实现
 - [ ] **同步设置的平台能力统一**：GUI 已按平台隐藏不支持的开关（esync/fsync、gamemode 仅 Linux 显示，msync 仅 macOS 显示；配置字段仍跨平台保留），esync/fsync 在模型层合并为互斥的 `SyncMode` 枚举（配置文件仍写 `esync`/`fsync` 两个 bool，旧配置同时为 true 时按 fsync 读入，GUI 用「关 / esync / fsync」三档滑块表示）；剩余不一致：GUI 在 macOS 隐藏 esync（上游 Linux/macOS 都传 WINEESYNC，仍依赖所选 Wine 构建支持），CLI 在 Linux/macOS 均接受 esync/fsync/msync/gamemode，运行时 fsync 未限制 Linux。应统一能力规则（fsync/gamemode 仅 Linux、msync 仅 macOS、esync 依 Wine 构建），导入其他平台配置时保留且提示忽略，显式修改不支持的项时拒绝或明确告警，并覆盖按平台测试。
 - [ ] **现代 Wine 的 NTSYNC 识别**：Wine 10.16 开发版/11.0 稳定版已集成 NTSYNC，Linux 主线 6.14 起提供驱动，但实际可用还依赖 Wine 构建、内核配置/模块、/dev/ntsync 权限等。当前只有 esync/fsync/msync 三个布尔字段，不足以表达“Wine 默认选择”与“强制传统 wineserver”；三个字段全关不能据此推断 NTSYNC 关闭。需区分用户请求、环境能力和实际后端，不依据 Wine 或内核版本号单独承诺可用。
