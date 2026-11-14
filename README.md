@@ -12,7 +12,7 @@
 
 ## 下载
 
-前往 [Releases](https://github.com/AzurIce/eorzea/releases)，按程序和平台选择独立附件：
+前往 [Releases](https://github.com/icexiv/eorzea/releases)，按程序和平台选择独立附件：
 
 - **`eorzea-app`**：图形界面（GUI），普通用户通常选择这个。
 - **`eoz`**：命令行工具（CLI），在终端中使用，不需要同时下载 GUI。
@@ -21,7 +21,7 @@
 
 提供 Linux x86_64、Windows x86_64 和 macOS arm64 构建。macOS 尚未经过真机验证。
 
-最新开发构建见 [Development build](https://github.com/AzurIce/eorzea/releases/tag/dev-build)，可能不稳定。
+最新开发构建见 [Development build](https://github.com/icexiv/eorzea/releases/tag/dev-build)，可能不稳定。
 
 ## 快速开始
 
