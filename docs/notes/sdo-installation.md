@@ -45,6 +45,8 @@
 
 对照启动关闭 Dalamud、设置 `WINEDEBUG=+loaddll` 后仍卡住，日志确认 shim 与原版 `.sdo.dll` 均成功加载。末尾错误是 `wmadmod.dll` 依赖的 `winegstreamer.dll` 缺失；实际 Wine 构建中未找到该组件，构建输入也没有 GStreamer。正常安装与新安装的游戏 EXE 和版本文件 SHA256 相同，但游戏目录下 `My Games/FINAL FANTASY XIV - A Realm Reborn/FFXIV.cfg` 的 `CutsceneMovieOpening` 分别为 `1` 和 `0`。仅将新安装这一项从 `0` 改为 `1` 后，用户确认卡住解决。这支持首次开场动画播放触发媒体解码故障，而非登录网络卡住；该修改是绕过动画，不是修复 Wine 解码能力。
 
+实际媒体修复已由用户确认：启用 Wine 构建的 GStreamer 支持，并用该新 Wine 执行 `wineboot --update` 同步已有 prefix。仅切换构建不足以修复旧 prefix 中缺失的组件；无需通过复制整套 SDO 文件或永久跳过动画解决。完整操作与验证边界见 [`wine-media.md`](wine-media.md)。
+
 原版 DLL 的启动前存在性检查有实际弹窗依据；SDK 的最小依赖集合、官方组件的必要部署范围以及是否需要完整 SDO 登录器，仍未验证。后续应在隔离的最小安装中逐项验证，避免将整目录补齐当作已证实的必要条件。
 
 ## 与 XIVLauncher.Core 的对比
